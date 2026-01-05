@@ -1,12 +1,11 @@
 # CAT: Coral Annotation Tool
-<a href="" target="_blank"><img src="docs/logo.png" align="right" alt="logo" width="400"/></a>
+<a href="" target="_blank"><img src="https://github.com/MichaelAkridge-NOAA/cat/blob/49a76e932abd4d51d64069b02341638479811e28/docs/logo.png" align="right" alt="logo" width="400"/></a>
   **C**oral **A**nnotation **T**ool - File-based  Structure from Motion (SfM) Orthomosaic coral reef annotation and visualization tool to support coral reef research.
 ### About
 
 **CAT** is a lightweight, file-based annotation system designed specifically for marine scientists and coral reef researchers working with Structure from Motion (SfM) orthomosaic imagery. Built with modern web technologies and Cloud Optimized GeoTIFF (COG) support, CAT provides a streamlined workflow for annotating, analyzing, and managing coral reef datasets without the complexity of databases or heavy dependencies.
 
 Perfect for field research environments where simplicity, speed, and reliability are essential.
-
 
 ### Features
 
@@ -36,14 +35,13 @@ Perfect for field research environments where simplicity, speed, and reliability
 - **One-Time Setup** - Automatic COG creation on first project load
 - **Compression Options** - LZW, DEFLATE, or JPEG compression
 - **Validation** - Built-in COG format validation
----
+
 ## Interface
 <img src="docs/example_0.png"/>
 <img src="docs/example_01.png"/>
 <img src="docs/example_02.png"/>
----
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -75,26 +73,6 @@ cat
 ```
 
 The application will be available at: **http://localhost:8000**
-
-### CLI Tools
-
-CAT includes additional command-line tools:
-
-**Convert single GeoTIFF to COG:**
-```bash
-cat-convert input.tif output_cog.tif
-```
-
-**Batch convert multiple files:**
-```bash
-cat-batch-convert input_folder/ output_folder/
-```
-
-**Start server with custom settings:**
-```bash
-cat --host 0.0.0.0 --port 8080 --reload
-```
-
 ---
 
 ## Usage
