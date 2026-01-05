@@ -6,7 +6,6 @@ from starlette.middleware.cors import CORSMiddleware
 from pathlib import Path
 from typing import List, Optional, Dict
 from datetime import datetime
-import yaml
 import os
 import tempfile
 import shutil
@@ -34,78 +33,62 @@ if SUPPRESS_TILEMATRIX_WARNINGS:
         module='morecantile.models'
     )
 
-# Determine base directory (for installed package vs development)
-def get_base_dir():
-    """Get the base directory for package resources (web/static files)"""
-    # Always use the package directory where this file is located
-    # This is where web/, docs/, scripts/ folders are bundled
-    package_dir = Path(__file__).parent
-    
-    # Verify web folder exists here (sanity check)
-    if (package_dir / "web").exists():
-        return package_dir
-    
-    # Fallback: check if we're in a development setup with cat/ subdirectory
-    # This shouldn't happen in normal use
-    parent_cat = package_dir.parent / "cat"
-    if (parent_cat / "web").exists():
-        return parent_cat
-    
-    # Last resort: return package directory anyway
-    return package_dir
+# =============================================================================
+# HARDCODED CONFIGURATION - No config files needed!
+# =============================================================================
 
-def get_user_data_dir():
-    """Get the user's data directory (~/.cat/)"""
-    user_home = Path.home()
-    cat_dir = user_home / ".cat"
-    cat_dir.mkdir(exist_ok=True)
-    return cat_dir
-
-# Setup logging first
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BASE_DIR = get_base_dir()
-USER_DATA_DIR = get_user_data_dir()
+# Package directory - where this file lives (contains web/, docs/, etc.)
+BASE_DIR = Path(__file__).parent
 
-# Load configuration
-# Try user's config first (~/.cat/config.yaml), then fall back to package default
-user_config_file = USER_DATA_DIR / "config.yaml"
-package_config_file = BASE_DIR / "config.yaml"
+# User data directory - where COG files and projects are stored
+USER_DATA_DIR = Path.home() / ".cat"
+USER_DATA_DIR.mkdir(exist_ok=True)
 
-config = None
-if user_config_file.exists():
-    with open(user_config_file, 'r') as f:
-        config = yaml.safe_load(f)
-    logger.info(f"Loaded user config from: {user_config_file}")
-elif package_config_file.exists():
-    with open(package_config_file, 'r') as f:
-        config = yaml.safe_load(f)
-    logger.info(f"Loaded package config from: {package_config_file}")
-    # Copy to user directory for future customization
-    shutil.copy(package_config_file, user_config_file)
-    logger.info(f"Created user config at: {user_config_file}")
+# Data directory for COG files
+DATA_DIR = USER_DATA_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
 
-if config is None:
-    # Default configuration if config.yaml doesn't exist
-    config = {
-        'server': {'host': '0.0.0.0', 'port': 8000, 'reload': True},
-        'data': {'directory': str(USER_DATA_DIR / 'data'), 'pattern': '*cog*.tif', 'include_extensions': ['.tif', '.tiff']},
-        'cors': {'enabled': True, 'origins': ['*'], 'allow_credentials': True, 'allow_methods': ['*'], 'allow_headers': ['*']},
-        'viewer': {'title': 'CAT: Coral Annotation Tool', 'default_opacity': 1.0, 'max_zoom': 2000},
-        'titiler': {'tile_size': 256, 'max_threads': 10}
+# Hardcoded configuration
+CONFIG = {
+    'server': {
+        'host': '0.0.0.0',
+        'port': 8000,
+        'reload': False
+    },
+    'data': {
+        'directory': str(DATA_DIR),
+        'pattern': '*cog*.tif',
+        'include_extensions': ['.tif', '.tiff']
+    },
+    'cors': {
+        'enabled': True,
+        'origins': ['*'],
+        'allow_credentials': True,
+        'allow_methods': ['*'],
+        'allow_headers': ['*']
+    },
+    'viewer': {
+        'title': 'CAT: Coral Annotation Tool',
+        'default_opacity': 1.0,
+        'max_zoom': 2000,
+        'show_scale': True,
+        'background_color': '#2c2c2c'
+    },
+    'titiler': {
+        'tile_size': 256,
+        'max_threads': 10
     }
-    # Save default config to user directory
-    with open(user_config_file, 'w') as f:
-        yaml.dump(config, f)
-    logger.info(f"Created default config at: {user_config_file}")
+}
 
-# Ensure data directory path is absolute and uses USER_DATA_DIR if relative
-data_dir_config = config['data']['directory']
-if not Path(data_dir_config).is_absolute():
-    config['data']['directory'] = str(USER_DATA_DIR / data_dir_config)
+logger.info(f"Package directory: {BASE_DIR}")
+logger.info(f"User data directory: {USER_DATA_DIR}")
+logger.info(f"Data directory: {DATA_DIR}")
 
-app = FastAPI(title=config['viewer']['title'])
+app = FastAPI(title=CONFIG['viewer']['title'])
 
 # Include coral species routes
 app.include_router(coral_router)
@@ -115,13 +98,13 @@ app.include_router(file_projects_router)
 print("✅ File-based project API enabled at /api/file-projects/*")
 
 # Add CORS middleware if enabled
-if config['cors']['enabled']:
+if CONFIG['cors']['enabled']:
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=config['cors']['origins'],
-        allow_credentials=config['cors']['allow_credentials'],
-        allow_methods=config['cors']['allow_methods'],
-        allow_headers=config['cors']['allow_headers'],
+        allow_origins=CONFIG['cors']['origins'],
+        allow_credentials=CONFIG['cors']['allow_credentials'],
+        allow_methods=CONFIG['cors']['allow_methods'],
+        allow_headers=CONFIG['cors']['allow_headers'],
     )
 
 # Middleware to prepend data directory to TiTiler URL parameters
@@ -154,7 +137,7 @@ async def prepend_data_path_middleware(request: Request, call_next):
             # Only prepend data directory if it's not absolute and not a URL
             if not is_absolute and not is_url and not has_data_prefix:
                 # Prepend data directory
-                data_dir = config['data']['directory']
+                data_dir = CONFIG['data']['directory']
                 new_url = f"{data_dir}/{url_param}"
                 
                 # Rebuild query parameters with updated url
@@ -183,7 +166,7 @@ app.include_router(cog.router, tags=["Cloud Optimized GeoTIFF"])
 
 # Mount static files (for any CSS, JS, images, etc.)
 # This allows serving files from the data directory
-data_directory = config['data']['directory']
+data_directory = CONFIG['data']['directory']
 # Create data directory if it doesn't exist
 Path(data_directory).mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=data_directory), name="static")
@@ -191,13 +174,13 @@ app.mount("/static", StaticFiles(directory=data_directory), name="static")
 # API endpoint to list available COG files in the data directory
 @app.get("/api/cog-files")
 def list_cog_files():
-    data_dir = Path(config['data']['directory'])
+    data_dir = Path(CONFIG['data']['directory'])
     if not data_dir.exists():
         return {"files": []}
     
     # Find all files matching the configured extensions
     cog_files = []
-    extensions = config['data']['include_extensions']
+    extensions = CONFIG['data']['include_extensions']
     pattern_keyword = "cog"  # Look for 'cog' in filename
     
     for ext in extensions:
@@ -213,8 +196,8 @@ def list_cog_files():
 def get_config():
     """Return viewer configuration for client"""
     return {
-        "viewer": config['viewer'],
-        "data_directory": config['data']['directory']
+        "viewer": CONFIG['viewer'],
+        "data_directory": CONFIG['data']['directory']
     }
 
 # Debug endpoint to check file existence
@@ -231,8 +214,8 @@ def check_file_exists(path: str):
         "exists": file_path.exists(),
         "is_file": file_path.is_file() if file_path.exists() else False,
         "cwd": os.getcwd(),
-        "data_dir_exists": Path(config['data']['directory']).exists(),
-        "data_dir_contents": [str(f.name) for f in Path(config['data']['directory']).glob('*')] if Path(config['data']['directory']).exists() else []
+        "data_dir_exists": Path(CONFIG['data']['directory']).exists(),
+        "data_dir_contents": [str(f.name) for f in Path(CONFIG['data']['directory']).glob('*')] if Path(CONFIG['data']['directory']).exists() else []
     }
 
 # Serve the landing page at root
@@ -346,7 +329,7 @@ async def convert_to_cog(
             output_name = f"{stem}_cog.tif"
         
         # Ensure output goes to data directory
-        output_dir = Path(config['data']['directory'])
+        output_dir = Path(CONFIG['data']['directory'])
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / output_name
         
@@ -416,9 +399,9 @@ async def convert_to_cog(
 if __name__ == "__main__":
     import uvicorn
     
-    host = config['server'].get('host', '0.0.0.0')
-    port = config['server'].get('port', 8000)
-    reload = config['server'].get('reload', True)
+    host = CONFIG['server'].get('host', '0.0.0.0')
+    port = CONFIG['server'].get('port', 8000)
+    reload = CONFIG['server'].get('reload', False)
     
     print(f"\n� Starting CAT: Coral Annotation Tool")
     print(f"📍 Server: http://{host if host != '0.0.0.0' else 'localhost'}:{port}")
@@ -429,7 +412,7 @@ if __name__ == "__main__":
     print(f"\n{'='*60}\n")
     
     uvicorn.run(
-        "main:app",
+        "cat.server:app",
         host=host,
         port=port,
         reload=reload,

@@ -12,9 +12,6 @@ recursive-include cat/docs *.png *.jpg *.md
 # Include data reference files from package
 recursive-include cat/data *.csv
 
-# Include config in package
-include cat/config.yaml
-
 # Include scripts in package
 recursive-include cat/scripts *.py
 
@@ -27,3 +24,4 @@ global-exclude *.py[co]
 global-exclude .DS_Store
 global-exclude *.swp
 global-exclude .gitignore
+global-exclude config.yaml
