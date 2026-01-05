@@ -1,0 +1,24 @@
+# Include documentation
+include README.md
+include LICENSE.md
+include requirements.txt
+include config.yaml
+
+# Include web files
+recursive-include web *.html *.css *.js
+
+# Include documentation and images
+recursive-include docs *.png *.jpg *.md
+
+# Include data reference files
+recursive-include data/reference *.csv
+
+# Include scripts
+recursive-include scripts *.py *.sh *.bat
+
+# Exclude unnecessary files
+global-exclude __pycache__
+global-exclude *.py[co]
+global-exclude .DS_Store
+global-exclude *.swp
+global-exclude .gitignore

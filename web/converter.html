@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CAT: COG Converter</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1.0">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f5f5f5;
+    }
+    
+    .navbar {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 15px 30px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    
+    .navbar-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .navbar h1 {
+      font-size: 24px;
+      margin: 0;
+    }
+    
+    .nav-links a {
+      color: white;
+      text-decoration: none;
+      margin-left: 20px;
+      opacity: 0.9;
+      transition: opacity 0.3s;
+    }
+    
+    .nav-links a:hover {
+      opacity: 1;
+    }
+    
+    .container {
+      max-width: 1000px;
+      margin: 40px auto;
+      padding: 0 20px;
+    }
+    
+    .converter-card {
+      background: white;
+      border-radius: 12px;
+      padding: 40px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      margin-bottom: 30px;
+    }
+    
+    .converter-card h2 {
+      margin-top: 0;
+      color: #333;
+      margin-bottom: 10px;
+    }
+    
+    .converter-card p {
+      color: #666;
+      margin-bottom: 25px;
+    }
+    
+    .form-group {
+      margin-bottom: 25px;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+      color: #333;
+    }
+    
+    .form-group input[type="file"],
+    .form-group select,
+    .form-group input[type="text"] {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 14px;
+      transition: border-color 0.3s;
+    }
+    
+    .form-group input[type="file"]:focus,
+    .form-group select:focus,
+    .form-group input[type="text"]:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    
+    .btn {
+      padding: 14px 30px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.3s;
+      width: 100%;
+    }
+    
+    .btn:hover:not(:disabled) {
+      opacity: 0.9;
+    }
+    
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .status-box {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 6px;
+      display: none;
+      white-space: pre-line;
+      line-height: 1.6;
+    }
+    
+    .status-box.info {
+      background: #e3f2fd;
+      color: #1565c0;
+      border: 1px solid #90caf9;
+    }
+    
+    .status-box.success {
+      background: #e8f5e9;
+      color: #2e7d32;
+      border: 1px solid #81c784;
+    }
+    
+    .status-box.error {
+      background: #ffebee;
+      color: #c62828;
+      border: 1px solid #ef5350;
+    }
+    
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #e0e0e0;
+      border-radius: 4px;
+      margin-top: 10px;
+      overflow: hidden;
+      display: none;
+    }
+    
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+      width: 0%;
+      transition: width 0.3s;
+    }
+    
+    .file-info {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 6px;
+      margin-top: 15px;
+      display: none;
+    }
+    
+    .file-info h4 {
+      margin-top: 0;
+      margin-bottom: 10px;
+      color: #333;
+    }
+    
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+    }
+    
+    .info-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px;
+      background: white;
+      border-radius: 4px;
+    }
+    
+    .info-label {
+      font-weight: 600;
+      color: #666;
+    }
+    
+    .help-text {
+      font-size: 13px;
+      color: #999;
+      margin-top: 5px;
+    }
+    
+    .tab-container {
+      margin-bottom: 25px;
+    }
+    
+    .tab-buttons {
+      display: flex;
+      border-bottom: 2px solid #e0e0e0;
+      margin-bottom: 25px;
+      gap: 0;
+    }
+    
+    .tab-button {
+      flex: 1;
+      padding: 15px;
+      background: #f5f5f5;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 600;
+      color: #666;
+      transition: all 0.3s;
+      border-bottom: 3px solid transparent;
+    }
+    
+    .tab-button:hover {
+      background: #e8e8e8;
+    }
+    
+    .tab-button.active {
+      background: white;
+      color: #667eea;
+      border-bottom: 3px solid #667eea;
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    .preset-badge {
+      display: inline-block;
+      background: #e3f2fd;
+      color: #1565c0;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-left: 8px;
+      font-weight: normal;
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-content">
+      <h1>📷 COG Converter</h1>
+      <div class="nav-links">
+        <a href="/">Home</a>
+        <a href="/viewer">Viewer</a>
+        <a href="/docs">API Docs</a>
+      </div>
+    </div>
+  </nav>
+  
+  <div class="container">
+    <div class="converter-card">
+      <h2>⚡ Convert GeoTIFF to Cloud Optimized GeoTIFF</h2>
+      <p>Choose your data type below for optimized conversion settings.</p>
+      
+      <div class="tab-container">
+        <div class="tab-buttons">
+          <button type="button" class="tab-button active" onclick="switchTab('ortho')">🖼️ Orthomosaic (RGB)</button>
+          <button type="button" class="tab-button" onclick="switchTab('dem')">🗻 DEM (Elevation)</button>
+        </div>
+        
+        <!-- Orthomosaic Tab -->
+        <div id="orthoTab" class="tab-content active">
+          <form id="orthoForm" enctype="multipart/form-data">
+            <div class="form-group">
+              <label for="orthoFileInput">Select Orthomosaic File <span class="preset-badge">RGB Optimized</span></label>
+              <input type="file" id="orthoFileInput" name="file" accept=".tif,.tiff" required>
+              <p class="help-text">Multi-band RGB orthomosaic imagery</p>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="orthoResampling">Resampling Method</label>
+                <select id="orthoResampling" name="resampling">
+                  <option value="bilinear" selected>Bilinear (Recommended)</option>
+                  <option value="cubic">Cubic (Higher Quality)</option>
+                  <option value="lanczos">Lanczos (Sharpest)</option>
+                  <option value="nearest">Nearest (Fastest)</option>
+                  <option value="average">Average</option>
+                </select>
+                <p class="help-text">Bilinear or cubic work best for aerial imagery</p>
+              </div>
+              
+              <div class="form-group">
+                <label for="orthoCompression">Compression</label>
+                <select id="orthoCompression" name="compression">
+                  <option value="jpeg" selected>JPEG (Best for RGB)</option>
+                  <option value="lzw">LZW (Lossless)</option>
+                  <option value="zstd">ZSTD (Modern)</option>
+                </select>
+                <p class="help-text">JPEG provides excellent compression for RGB photos</p>
+              </div>
+            </div>
+            
+            <div class="form-group">
+              <label for="orthoOutputName">Output Filename (optional)</label>
+              <input type="text" id="orthoOutputName" name="outputName" placeholder="Will auto-generate with _cog suffix">
+              <p class="help-text">Leave blank to auto-generate filename</p>
+            </div>
+            
+            <button type="submit" class="btn" id="orthoConvertBtn">🚀 Convert Orthomosaic to COG</button>
+          </form>
+        </div>
+        
+        <!-- DEM Tab -->
+        <div id="demTab" class="tab-content">
+          <div style="background: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin-bottom: 20px; border-radius: 4px;">
+            <strong>💡 DEM Conversion Tips:</strong>
+            <ul style="margin: 10px 0 0 20px; font-size: 14px;">
+              <li>Use <strong>LZW compression</strong> (lossless) to preserve elevation accuracy</li>
+              <li>Enable <strong>auto-detect NoData</strong> to avoid conversion errors</li>
+              <li>For bathymetric DEMs (underwater), nodata is often -32767</li>
+              <li>Bilinear resampling creates smooth elevation surfaces</li>
+            </ul>
+          </div>
+          
+          <form id="demForm" enctype="multipart/form-data">
+            <div class="form-group">
+              <label for="demFileInput">Select DEM File <span class="preset-badge">Elevation Optimized</span></label>
+              <input type="file" id="demFileInput" name="file" accept=".tif,.tiff" required>
+              <p class="help-text">Single-band elevation data (DEM/DSM/DTM/Bathymetry)</p>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="demResampling">Resampling Method</label>
+                <select id="demResampling" name="resampling">
+                  <option value="bilinear" selected>Bilinear (Smooth)</option>
+                  <option value="cubic">Cubic (Smoother)</option>
+                  <option value="nearest">Nearest (Preserve Values)</option>
+                  <option value="average">Average</option>
+                </select>
+                <p class="help-text">Bilinear smooths elevation nicely for visualization</p>
+              </div>
+              
+              <div class="form-group">
+                <label for="demCompression">Compression</label>
+                <select id="demCompression" name="compression">
+                  <option value="lzw" selected>LZW (Lossless - Best for DEMs)</option>
+                  <option value="zstd">ZSTD (Modern Lossless)</option>
+                </select>
+                <p class="help-text">Always use lossless compression to preserve elevation accuracy</p>
+              </div>
+            </div>
+            
+            <div class="form-group">
+              <label for="demNodata">NoData Value <span style="color: #e74c3c;">*Important!</span></label>
+              <input type="number" id="demNodata" name="nodata" placeholder="e.g., -9999, -32767" step="any">
+              <p class="help-text">⚠️ <strong>Must match your source file's nodata value!</strong> Check with: <code>gdalinfo yourfile.tif</code><br>
+              Common values: -9999, -32767, -32768, 0. For bathymetric DEMs, often -32767.</p>
+            </div>
+            
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="demAutoNodata" checked onchange="toggleAutoNodata()">
+                Auto-detect NoData from source file (recommended)
+              </label>
+              <p class="help-text">✅ Let the converter read the nodata value from your source file automatically</p>
+            </div>
+            
+            <div class="form-group">
+              <label for="demOutputName">Output Filename (optional)</label>
+              <input type="text" id="demOutputName" name="outputName" placeholder="Will auto-generate with _cog suffix">
+              <p class="help-text">Leave blank to auto-generate filename</p>
+            </div>
+            
+            <button type="submit" class="btn" id="demConvertBtn">🗻 Convert DEM to COG</button>
+          </form>
+        </div>
+      </div>
+      
+      <div id="statusBox" class="status-box"></div>
+      <div class="progress-bar" id="progressBar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      
+      <div id="fileInfo" class="file-info">
+        <h4>File Information</h4>
+        <div class="info-grid" id="infoGrid"></div>
+      </div>
+    </div>
+    
+    <div class="converter-card">
+      <h2>📦 Batch Conversion</h2>
+      <p>For converting multiple files, use the command-line batch converter:</p>
+      <pre style="background: #2c2c2c; color: #fff; padding: 15px; border-radius: 6px; overflow-x: auto;">python make_cog_batch.py --src-dir "input" --dst-dir "data"</pre>
+    </div>
+  </div>
+  
+  <script>
+    let currentTab = 'ortho';
+    
+    const statusBox = document.getElementById('statusBox');
+    const progressBar = document.getElementById('progressBar');
+    const progressFill = document.getElementById('progressFill');
+    const fileInfo = document.getElementById('fileInfo');
+    
+    // Switch between tabs
+    function switchTab(tab) {
+      currentTab = tab;
+      
+      // Update tab buttons
+      document.querySelectorAll('.tab-button').forEach(btn => {
+        btn.classList.remove('active');
+      });
+      event.target.classList.add('active');
+      
+      // Update tab content
+      document.getElementById('orthoTab').classList.remove('active');
+      document.getElementById('demTab').classList.remove('active');
+      
+      if (tab === 'ortho') {
+        document.getElementById('orthoTab').classList.add('active');
+      } else {
+        document.getElementById('demTab').classList.add('active');
+      }
+      
+      // Clear status and file info
+      hideStatus();
+      fileInfo.style.display = 'none';
+    }
+    
+    // Show file info when file is selected (ortho)
+    document.getElementById('orthoFileInput').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (file) {
+        showFileInfo(file);
+      }
+    });
+    
+    // Show file info when file is selected (dem)
+    document.getElementById('demFileInput').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (file) {
+        showFileInfo(file);
+      }
+    });
+    
+    function showFileInfo(file) {
+      const infoGrid = document.getElementById('infoGrid');
+      const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+      
+      infoGrid.innerHTML = `
+        <div class="info-item">
+          <span class="info-label">Filename:</span>
+          <span>${file.name}</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">Size:</span>
+          <span>${sizeMB} MB</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">Type:</span>
+          <span>${file.type || 'image/tiff'}</span>
+        </div>
+      `;
+      
+      fileInfo.style.display = 'block';
+    }
+    
+    function showStatus(message, type) {
+      statusBox.textContent = message;
+      statusBox.className = 'status-box ' + type;
+      statusBox.style.display = 'block';
+    }
+    
+    function hideStatus() {
+      statusBox.style.display = 'none';
+    }
+    
+    function showProgress(percent) {
+      progressBar.style.display = 'block';
+      progressFill.style.width = percent + '%';
+    }
+    
+    function hideProgress() {
+      progressBar.style.display = 'none';
+      progressFill.style.width = '0%';
+    }
+    
+    // Toggle auto-detect nodata
+    function toggleAutoNodata() {
+      const checkbox = document.getElementById('demAutoNodata');
+      const input = document.getElementById('demNodata');
+      
+      if (checkbox.checked) {
+        input.disabled = true;
+        input.placeholder = 'Auto-detect from source file';
+        input.value = '';
+      } else {
+        input.disabled = false;
+        input.placeholder = 'e.g., -9999, -32767';
+      }
+    }
+    
+    // Initialize auto-nodata state
+    toggleAutoNodata();
+    
+    // Handle orthomosaic form submission
+    document.getElementById('orthoForm').addEventListener('submit', async function(e) {
+      await handleFormSubmit(e, 'ortho');
+    });
+    
+    // Handle DEM form submission
+    document.getElementById('demForm').addEventListener('submit', async function(e) {
+      await handleFormSubmit(e, 'dem');
+    });
+    
+    // Unified form submission handler
+    async function handleFormSubmit(e, type) {
+      e.preventDefault();
+      
+      const isOrtho = type === 'ortho';
+      const fileInput = document.getElementById(isOrtho ? 'orthoFileInput' : 'demFileInput');
+      const convertBtn = document.getElementById(isOrtho ? 'orthoConvertBtn' : 'demConvertBtn');
+      
+      const file = fileInput.files[0];
+      if (!file) {
+        showStatus('Please select a file', 'error');
+        return;
+      }
+      
+      // Disable button and show progress
+      convertBtn.disabled = true;
+      hideStatus();
+      showProgress(10);
+      showStatus('Uploading file...', 'info');
+      
+      // Prepare form data
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('resampling', document.getElementById(isOrtho ? 'orthoResampling' : 'demResampling').value);
+      formData.append('compression', document.getElementById(isOrtho ? 'orthoCompression' : 'demCompression').value);
+      
+      const outputName = document.getElementById(isOrtho ? 'orthoOutputName' : 'demOutputName').value;
+      if (outputName) {
+        formData.append('output_name', outputName);
+      }
+      
+      // Add nodata for DEMs
+      if (!isOrtho) {
+        const autoNodata = document.getElementById('demAutoNodata').checked;
+        if (!autoNodata) {
+          const nodata = document.getElementById('demNodata').value;
+          if (nodata) {
+            formData.append('nodata', nodata);
+          }
+        }
+        // If auto is checked, don't send nodata - let server read from source
+      }
+      
+      try {
+        showProgress(30);
+        const dataType = isOrtho ? 'orthomosaic' : 'DEM';
+        showStatus(`Converting ${dataType} to COG format...`, 'info');
+        
+        const response = await fetch('/api/convert', {
+          method: 'POST',
+          body: formData
+        });
+        
+        showProgress(80);
+        
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.detail || 'Conversion failed');
+        }
+        
+        const result = await response.json();
+        
+        showProgress(100);
+        
+        // Build success message
+        let successMsg = `Success! Converted ${dataType} to: ${result.output_file} (${result.size_mb} MB)`;
+        if (result.reprojected_to_wgs84) {
+          successMsg += '\n>> Automatically reprojected to WGS84 (EPSG:4326)';
+        }
+        
+        showStatus(successMsg, 'success');
+        
+        // Reset form after 3 seconds
+        setTimeout(() => {
+          e.target.reset();
+          fileInfo.style.display = 'none';
+          hideProgress();
+          if (!isOrtho) {
+            // Restore default nodata value for DEM
+            document.getElementById('demNodata').value = '-9999';
+          }
+        }, 3000);
+        
+      } catch (error) {
+        showStatus(`✗ Error: ${error.message}`, 'error');
+        hideProgress();
+      } finally {
+        convertBtn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>

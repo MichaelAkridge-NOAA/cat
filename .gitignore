@@ -1,0 +1,118 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project Data Files
+data/*.tif
+data/*.tiff
+data/*_cog.tif
+data/*.json
+!data/reference/
+!data/.gitkeep
+
+# User Projects
+*.json
+!example*.json
+
+# Logs
+*.log
+logs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Environment
+.env
+.env.local
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Machine Learning / Model files
+models/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+wandb/
+mlruns/
+
+# Annotations and outputs
+annotations/
+outputs/
+results/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Package building
+*.whl
+*.tar.gz
+
+# Large data files
+*.hdf5
+*.h5
+*.parquet
+
+# Secrets and credentials
+secrets.yaml
+credentials.json
+*.pem
+*.key

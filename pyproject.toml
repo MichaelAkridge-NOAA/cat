@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coral-annotation-tool"
+version = "1.0.0"
+description = "CAT: Coral Annotation Tool. A file-based(JSON) Structure from Motion (SfM) orthomosaic annotation tool for coral reef research"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+keywords = ["coral", "annotation", "geotiff", "cog", "orthomosaic", "marine-biology", "gis"]
+authors = [
+  {name = "Michael Akridge"}
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: GIS",
+  "Topic :: Scientific/Engineering :: Visualization",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+  "fastapi>=0.100.0",
+  "uvicorn[standard]>=0.23.0",
+  "titiler.core>=0.15.0",
+  "titiler.extensions>=0.15.0",
+  "rasterio>=1.3.0",
+  "rio-cogeo>=5.0.0",
+  "pyyaml>=6.0",
+  "python-multipart>=0.0.6",
+  "aiofiles>=23.0.0",
+  "pydantic>=2.0.0",
+  "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0.0",
+  "pytest-asyncio>=0.21.0",
+  "black>=23.0.0",
+  "flake8>=6.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/MichaelAkridge-NOAA/cat"
+Documentation = "https://github.com/MichaelAkridge-NOAA/cat#readme"
+Repository = "https://github.com/MichaelAkridge-NOAA/cat"
+"Bug Tracker" = "https://github.com/MichaelAkridge-NOAA/cat/issues"
+
+[project.scripts]
+cat = "cat.cli:main"
+cat-server = "cat.cli:main"
+cat-convert = "cat.cli:convert_cog"
+cat-batch-convert = "cat.cli:batch_convert"
+
+[tool.setuptools]
+packages = ["cat", "cat.api"]
+
+[tool.setuptools.package-data]
+cat = [
+  "web/*.html",
+  "docs/*.png",
+  "data/reference/*.csv",
+  "config.yaml",
+]
