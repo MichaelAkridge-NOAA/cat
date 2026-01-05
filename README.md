@@ -1,5 +1,5 @@
 # CAT: Coral Annotation Tool
-<a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="https://github.com/MichaelAkridge-NOAA/cat/blob/49a76e932abd4d51d64069b02341638479811e28/docs/logo.png" align="right" alt="logo" width="400"/></a>
+<a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="./docs/logo.png" align="right" alt="logo" width="400"/></a>
   **C**oral **A**nnotation **T**ool - File-based  Structure from Motion (SfM) Orthomosaic coral reef annotation and visualization tool to support coral reef research.
 ### About
 
@@ -12,7 +12,6 @@ Perfect for field research environments where simplicity, speed, and reliability
 ### **Mapping & Visualization**
 - **Fast Streaming** - Dynamic tile generation for instant viewing (ala google maps but for orthomoasics)
 - **High Zoom Levels** - Zoom up to 2000x for pixel-level inspection
-- **Interactive Interface** - Leaflet.js-based responsive mapping
 - **Multi-Layer Support** - Work with multiple orthomosaics simultaneously
 - **Shapefile Overlay** - Import and visualize existing shapefile layers
 
@@ -37,9 +36,9 @@ Perfect for field research environments where simplicity, speed, and reliability
 - **Validation** - Built-in COG format validation
 
 ## Interface
-<img src="docs/example_0.png"/>
-<img src="docs/example_01.png"/>
-<img src="docs/example_02.png"/>
+<img src="./docs/example_0.png"/>
+<img src="./docs/example_01.png"/>
+<img src="./docs/example_02.png"/>
 
 ## Quick Start
 
