@@ -8,30 +8,30 @@
 Perfect for field research environments where simplicity, speed, and reliability are essential.
 
 
-### ✨ Features
+### Features
 
-### 🗺️ **Mapping & Visualization**
+### **Mapping & Visualization**
 - **Fast Streaming** - Dynamic tile generation for instant viewing (ala google maps but for orthomoasics)
 - **High Zoom Levels** - Zoom up to 2000x for pixel-level inspection
 - **Interactive Interface** - Leaflet.js-based responsive mapping
 - **Multi-Layer Support** - Work with multiple orthomosaics simultaneously
 - **Shapefile Overlay** - Import and visualize existing shapefile layers
 
-### 🪸 **Annotation Tools**
+### **Annotation Tools**
 - **Vector Annotations** - Draw polygons, lines, and points with custom attributes
 - **Species Database** - Built-in coral species reference (1000+ species)
 - **Rich Metadata** - Capture depth, health, morphology, and custom attributes
 - **Real-time Editing** - Modify annotations on-the-fly with visual feedback
 - **Annotation Timer** - Track time spent on each annotation session
 
-### 📁 **Project Management**
+### **Project Management**
 - **File-Based Storage** - No database required, pure JSON format
 - **Drag & Drop Interface** - Easy project creation with multiple TIF files
 - **Auto-Discovery** - Automatically detects COG files in data directory
 - **GeoJSON Export** - Export annotations in standard GeoJSON format
 - **Project Templates** - Reusable project structures for consistent workflows
 
-### ⚡ **COG Processing**
+### **COG Processing**
 - **Batch Conversion** - Convert multiple GeoTIFFs to COG format simultaneously
 - **One-Time Setup** - Automatic COG creation on first project load
 - **Compression Options** - LZW, DEFLATE, or JPEG compression
@@ -102,7 +102,7 @@ cat --host 0.0.0.0 --port 8080 --reload
 
 ---
 
-## 📚 Usage Guide
+## Usage
 
 ### Creating Your First Project
 
@@ -176,7 +176,7 @@ python scripts/make_cog_batch.py input_folder/ output_folder/
 
 ---
 
-## 📊 Annotation Information & Data Format
+## Annotation Information & Data Format
 
 Annotations are stored in GeoJSON format within project JSON files:
 - [Data Dictionary](https://www.fisheries.noaa.gov/inport/item/63239)
@@ -208,7 +208,7 @@ Annotations are stored in GeoJSON format within project JSON files:
 
 ---
 
-## 🐚 Coral Species Database
+## Coral Species Database
 
 CAT includes a comprehensive coral species reference database with:
 - **1000+** coral species
