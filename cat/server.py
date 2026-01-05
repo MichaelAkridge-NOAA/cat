@@ -34,8 +34,27 @@ if SUPPRESS_TILEMATRIX_WARNINGS:
         module='morecantile.models'
     )
 
+# Determine base directory (for installed package vs development)
+def get_base_dir():
+    """Get the base directory for web/config files"""
+    # Try current working directory first (development mode)
+    cwd_config = Path("config.yaml")
+    if cwd_config.exists():
+        return Path.cwd()
+    
+    # Try package directory (installed mode)
+    package_dir = Path(__file__).parent.parent
+    package_config = package_dir / "config.yaml"
+    if package_config.exists():
+        return package_dir
+    
+    # Default to current working directory
+    return Path.cwd()
+
+BASE_DIR = get_base_dir()
+
 # Load configuration
-config_file = Path("config.yaml")
+config_file = BASE_DIR / "config.yaml"
 if config_file.exists():
     with open(config_file, 'r') as f:
         config = yaml.safe_load(f)
@@ -186,7 +205,7 @@ def check_file_exists(path: str):
 # Serve the landing page at root
 @app.get("/", response_class=HTMLResponse)
 def read_index():
-    index_file = Path("web/index.html")
+    index_file = BASE_DIR / "web" / "index.html"
     if index_file.exists():
         return index_file.read_text(encoding="utf-8")
     return "<h1>Welcome to CAT: Coral Annotation Tool</h1>"
@@ -194,28 +213,28 @@ def read_index():
 # Serve the logos from docs folder
 @app.get("/logo.png")
 def read_logo():
-    logo_file = Path("docs/logo.png")
+    logo_file = BASE_DIR / "docs" / "logo.png"
     if logo_file.exists():
         return FileResponse(logo_file, media_type="image/png")
     raise HTTPException(status_code=404, detail="Logo not found")
 
 @app.get("/logo2.png")
 def read_logo2():
-    logo_file = Path("docs/logo2.png")
+    logo_file = BASE_DIR / "docs" / "logo2.png"
     if logo_file.exists():
         return FileResponse(logo_file, media_type="image/png")
     raise HTTPException(status_code=404, detail="Logo2 not found")
 
 @app.get("/logo_banner.png")
 def read_logo_banner():
-    logo_file = Path("docs/logo_banner.png")
+    logo_file = BASE_DIR / "docs" / "logo_banner.png"
     if logo_file.exists():
         return FileResponse(logo_file, media_type="image/png")
     raise HTTPException(status_code=404, detail="Logo banner not found")
 
 @app.get("/logo_wide.png")
 def read_logo_wide():
-    logo_file = Path("docs/logo_wide.png")
+    logo_file = BASE_DIR / "docs" / "logo_wide.png"
     if logo_file.exists():
         return FileResponse(logo_file, media_type="image/png")
     raise HTTPException(status_code=404, detail="Logo wide not found")
@@ -223,7 +242,7 @@ def read_logo_wide():
 # Serve the viewer page
 @app.get("/viewer", response_class=HTMLResponse)
 def read_viewer():
-    viewer_file = Path("web/viewer.html")
+    viewer_file = BASE_DIR / "web" / "viewer.html"
     if viewer_file.exists():
         return viewer_file.read_text(encoding="utf-8")
     return "<h1>Viewer not found</h1>"
@@ -231,7 +250,7 @@ def read_viewer():
 # Serve the converter page
 @app.get("/converter", response_class=HTMLResponse)
 def read_converter():
-    converter_file = Path("web/converter.html")
+    converter_file = BASE_DIR / "web" / "converter.html"
     if converter_file.exists():
         return converter_file.read_text(encoding="utf-8")
     return "<h1>Converter not found</h1>"
@@ -239,7 +258,7 @@ def read_converter():
 # Serve the file-based annotation page
 @app.get("/annotate", response_class=HTMLResponse)
 def read_file_annotation():
-    file_annotation_file = Path("web/annotation_file_mode.html")
+    file_annotation_file = BASE_DIR / "web" / "annotation_file_mode.html"
     if file_annotation_file.exists():
         return file_annotation_file.read_text(encoding="utf-8")
     return "<h1>File-Based Annotation not found</h1>"
@@ -247,7 +266,7 @@ def read_file_annotation():
 # Serve the file-based annotation page
 @app.get("/annotation_file_mode.html", response_class=HTMLResponse)
 def read_file_annotation_alt():
-    file_annotation_file = Path("web/annotation_file_mode.html")
+    file_annotation_file = BASE_DIR / "web" / "annotation_file_mode.html"
     if file_annotation_file.exists():
         return file_annotation_file.read_text(encoding="utf-8")
     return "<h1>File-Based Annotation not found</h1>"
@@ -255,7 +274,7 @@ def read_file_annotation_alt():
 # Serve the project creator page
 @app.get("/project_creator.html", response_class=HTMLResponse)
 def read_project_creator():
-    creator_file = Path("web/project_creator.html")
+    creator_file = BASE_DIR / "web" / "project_creator.html"
     if creator_file.exists():
         return creator_file.read_text(encoding="utf-8")
     return "<h1>Project Creator not found</h1>"

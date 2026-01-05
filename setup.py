@@ -48,13 +48,14 @@ setup(
     },
     include_package_data=True,
     package_data={
-        "cat": [
+        "": [
             "web/*.html",
             "web/*.css",
             "web/*.js",
             "docs/*.png",
             "data/reference/*.csv",
             "config.yaml",
+            "scripts/*.py",
         ],
     },
     zip_safe=False,

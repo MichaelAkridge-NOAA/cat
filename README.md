@@ -54,7 +54,7 @@ Perfect for field research environments where simplicity, speed, and reliability
 **Option 1: Install from PyPI (Recommended)**
 
 ```bash
-pip install coral-annotation-tool
+pip install placeholder
 ```
 
 **Option 2: Install from source**
