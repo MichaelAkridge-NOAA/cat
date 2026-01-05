@@ -54,7 +54,7 @@ Perfect for field research environments where simplicity, speed, and reliability
 **Option 1: Install from PyPI (Recommended)**
 
 ```bash
-pip install placeholder
+pip install coral-annotation-tool
 ```
 
 **Option 2: Install from source**
@@ -71,12 +71,6 @@ After installation, simply run:
 
 ```bash
 cat
-```
-
-Or use the explicit server command:
-
-```bash
-cat-server
 ```
 
 The application will be available at: **http://localhost:8000**

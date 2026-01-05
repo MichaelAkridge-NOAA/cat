@@ -41,8 +41,8 @@ def create_cog_from_tif(tif_path: str, cog_path: str) -> dict:
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
         
-        # Use the make_cog.py script
-        script_path = Path(__file__).parent.parent.parent / "scripts" / "make_cog.py"
+        # Use the make_cog.py script from the package
+        script_path = Path(__file__).parent.parent / "scripts" / "make_cog.py"
         
         cmd = [
             "python",

@@ -3,6 +3,7 @@ API endpoints for coral species lookup and autocomplete
 """
 import csv
 import os
+from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Dict
 
@@ -18,9 +19,10 @@ def load_species_list() -> List[Dict]:
     if _species_cache is not None:
         return _species_cache
     
-    csv_path = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'reference', 'list_of_coral.csv')
+    # Get path to the reference data in the package
+    csv_path = Path(__file__).parent.parent / 'data' / 'reference' / 'list_of_coral.csv'
     
-    if not os.path.exists(csv_path):
+    if not csv_path.exists():
         print(f"⚠️ Species CSV not found at: {csv_path}")
         return []
     

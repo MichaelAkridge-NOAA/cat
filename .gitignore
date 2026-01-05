@@ -50,6 +50,9 @@ data/*.json
 !data/reference/
 !data/.gitkeep
 
+# User data directory (created at ~/.cat/ when installed)
+.cat/
+
 # User Projects
 *.json
 !example*.json

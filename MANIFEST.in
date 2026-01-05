@@ -2,18 +2,23 @@
 include README.md
 include LICENSE.md
 include requirements.txt
-include config.yaml
 
-# Include web files
-recursive-include web *.html *.css *.js
+# Include web files from package
+recursive-include cat/web *.html *.css *.js
 
-# Include documentation and images
-recursive-include docs *.png *.jpg *.md
+# Include documentation and images from package
+recursive-include cat/docs *.png *.jpg *.md
 
-# Include data reference files
-recursive-include data/reference *.csv
+# Include data reference files from package
+recursive-include cat/data *.csv
 
-# Include scripts
+# Include config in package
+include cat/config.yaml
+
+# Include scripts in package
+recursive-include cat/scripts *.py
+
+# Include development scripts at root (optional, for contributors)
 recursive-include scripts *.py *.sh *.bat
 
 # Exclude unnecessary files

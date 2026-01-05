@@ -36,37 +36,74 @@ if SUPPRESS_TILEMATRIX_WARNINGS:
 
 # Determine base directory (for installed package vs development)
 def get_base_dir():
-    """Get the base directory for web/config files"""
-    # Try current working directory first (development mode)
-    cwd_config = Path("config.yaml")
-    if cwd_config.exists():
-        return Path.cwd()
+    """Get the base directory for package resources (web/static files)"""
+    # Always use the package directory where this file is located
+    # This is where web/, docs/, scripts/ folders are bundled
+    package_dir = Path(__file__).parent
     
-    # Try package directory (installed mode)
-    package_dir = Path(__file__).parent.parent
-    package_config = package_dir / "config.yaml"
-    if package_config.exists():
+    # Verify web folder exists here (sanity check)
+    if (package_dir / "web").exists():
         return package_dir
     
-    # Default to current working directory
-    return Path.cwd()
+    # Fallback: check if we're in a development setup with cat/ subdirectory
+    # This shouldn't happen in normal use
+    parent_cat = package_dir.parent / "cat"
+    if (parent_cat / "web").exists():
+        return parent_cat
+    
+    # Last resort: return package directory anyway
+    return package_dir
+
+def get_user_data_dir():
+    """Get the user's data directory (~/.cat/)"""
+    user_home = Path.home()
+    cat_dir = user_home / ".cat"
+    cat_dir.mkdir(exist_ok=True)
+    return cat_dir
+
+# Setup logging first
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 BASE_DIR = get_base_dir()
+USER_DATA_DIR = get_user_data_dir()
 
 # Load configuration
-config_file = BASE_DIR / "config.yaml"
-if config_file.exists():
-    with open(config_file, 'r') as f:
+# Try user's config first (~/.cat/config.yaml), then fall back to package default
+user_config_file = USER_DATA_DIR / "config.yaml"
+package_config_file = BASE_DIR / "config.yaml"
+
+config = None
+if user_config_file.exists():
+    with open(user_config_file, 'r') as f:
         config = yaml.safe_load(f)
-else:
+    logger.info(f"Loaded user config from: {user_config_file}")
+elif package_config_file.exists():
+    with open(package_config_file, 'r') as f:
+        config = yaml.safe_load(f)
+    logger.info(f"Loaded package config from: {package_config_file}")
+    # Copy to user directory for future customization
+    shutil.copy(package_config_file, user_config_file)
+    logger.info(f"Created user config at: {user_config_file}")
+
+if config is None:
     # Default configuration if config.yaml doesn't exist
     config = {
         'server': {'host': '0.0.0.0', 'port': 8000, 'reload': True},
-        'data': {'directory': 'data', 'pattern': '*cog*.tif', 'include_extensions': ['.tif', '.tiff']},
+        'data': {'directory': str(USER_DATA_DIR / 'data'), 'pattern': '*cog*.tif', 'include_extensions': ['.tif', '.tiff']},
         'cors': {'enabled': True, 'origins': ['*'], 'allow_credentials': True, 'allow_methods': ['*'], 'allow_headers': ['*']},
-        'viewer': {'title': 'Orthomosaic Viewer', 'default_opacity': 1.0, 'max_zoom': 2000},
+        'viewer': {'title': 'CAT: Coral Annotation Tool', 'default_opacity': 1.0, 'max_zoom': 2000},
         'titiler': {'tile_size': 256, 'max_threads': 10}
     }
+    # Save default config to user directory
+    with open(user_config_file, 'w') as f:
+        yaml.dump(config, f)
+    logger.info(f"Created default config at: {user_config_file}")
+
+# Ensure data directory path is absolute and uses USER_DATA_DIR if relative
+data_dir_config = config['data']['directory']
+if not Path(data_dir_config).is_absolute():
+    config['data']['directory'] = str(USER_DATA_DIR / data_dir_config)
 
 app = FastAPI(title=config['viewer']['title'])
 
@@ -76,10 +113,6 @@ app.include_router(coral_router)
 # Include file-based project routes
 app.include_router(file_projects_router)
 print("✅ File-based project API enabled at /api/file-projects/*")
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Add CORS middleware if enabled
 if config['cors']['enabled']:
@@ -317,9 +350,12 @@ async def convert_to_cog(
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / output_name
         
+        # Get the path to the script in the package
+        script_path = Path(__file__).parent / 'scripts' / 'make_cog.py'
+        
         # Build conversion command
         cmd = [
-            'python', 'scripts/make_cog.py',
+            'python', str(script_path),
             '--src', str(input_path),
             '--dst', str(output_path),
             '--resampling', resampling

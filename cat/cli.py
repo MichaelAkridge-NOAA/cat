@@ -83,7 +83,7 @@ def convert_cog():
     args = parser.parse_args()
     
     # Import here to avoid loading heavy dependencies if not needed
-    from scripts.make_cog import convert_to_cog
+    from cat.scripts.make_cog import convert_to_cog
     
     print(f"Converting {args.input} to COG format...")
     success = convert_to_cog(args.input, args.output, compression=args.compression)
@@ -113,7 +113,7 @@ def batch_convert():
     args = parser.parse_args()
     
     # Import here to avoid loading heavy dependencies if not needed
-    from scripts.make_cog_batch import batch_convert_to_cog
+    from cat.scripts.make_cog_batch import batch_convert_to_cog
     
     print(f"Batch converting files from {args.input_dir}...")
     success = batch_convert_to_cog(
