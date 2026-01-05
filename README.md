@@ -31,7 +31,7 @@ Perfect for field research environments where simplicity, speed, and reliability
 - **GeoJSON Export** - Export annotations in standard GeoJSON format
 - **Project Templates** - Reusable project structures for consistent workflows
 
-### **COG Processing**
+### **Cloud Optomized GeoTiff (COG) Processing**
 - **Batch Conversion** - Convert multiple GeoTIFFs to COG format simultaneously
 - **One-Time Setup** - Automatic COG creation on first project load
 - **Compression Options** - LZW, DEFLATE, or JPEG compression
@@ -52,6 +52,7 @@ Perfect for field research environments where simplicity, speed, and reliability
 ### Installation
 
 **Option 1: Install from PyPI (Recommended)**
+- Link: https://pypi.org/project/coral-annotation-tool
 
 ```bash
 pip install coral-annotation-tool
