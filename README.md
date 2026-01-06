@@ -197,7 +197,7 @@ Located in: `data/reference/list_of_coral.csv`
 ---
 
 ## Roadmap
-<a href="./docs/example_ai_00.png" target="_blank"><img src="./docs/example_ai_0.png" align="right" alt="logo" /></a>
+<a href="./docs/example_ai_0.png" target="_blank"><img src="./docs/example_ai_0.png" align="right" alt="logo" /></a>
 ### 🚧 In Progress
 - **AI-Assisted Annotation** - Automated and Semi-automated coral detection, segmentation and classification features (YOLO,SAM3)
 - **Google Cloud Storage (GCS) Integration** - Native support for `gs://` bucket paths
