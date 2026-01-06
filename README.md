@@ -202,7 +202,7 @@ Located in: `data/reference/list_of_coral.csv`
 - **AI-Assisted Annotation** - Automated and Semi-automated coral detection, segmentation and classification features
 - **Google Cloud Storage (GCS) Integration** - Native support for `gs://` bucket paths
 - **Cloud Workstation Support** - Optimized deployment for Google Cloud Workstations
-- **Database Backend** - Optional PostgreSQL/PostGIS backend for large projects
+- **Database Backend** - Optional Oracle/SQLlite/PostgreSQL/GIS backend for large projects
 - **Enhanced COG Processing** - Improved batch conversion with progress tracking
 - **Multi-user Support** - Shared annotation sessions with user tracking
 
