@@ -122,10 +122,10 @@ The application will be available at: **http://localhost:8000**
 
 5. **Export Results**
    - Download updated project JSON
-   - Export GeoJSON for GIS analysis
+   - Export GeoJSON and/or shapefile for GIS analysis in ArcGIs/QGIS
 
 ### Converting TIF to COG
-
+This happens automatically when creating a project, but there is also an additional batch converter included. 
 **Via Web Interface:**
 1. Navigate to http://localhost:8000/converter
 2. Drag & drop GeoTIFF files
