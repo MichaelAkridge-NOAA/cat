@@ -1,6 +1,9 @@
 # CAT: Coral Annotation Tool
 <a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="https://github.com/MichaelAkridge-NOAA/cat/raw/main/docs/logo.png" align="right" alt="logo" width="400"/></a>
   **C**oral **A**nnotation **T**ool - File-based , Structure from Motion (SfM) Orthomosaic coral reef annotation and visualization tool to support coral reef research.
+
+> ⚠️ **Note: Under Active Development**: CAT is under active development. Features are being added regularly and some functionality may change. See the [Roadmap](#roadmap) section for planned improvements.
+
 ### About
 
 **CAT** is a lightweight, file-based annotation system designed specifically for marine scientists and coral reef researchers working with Structure from Motion (SfM) orthomosaic imagery. Built with modern web technologies and Cloud Optimized GeoTIFF (COG) support, CAT provides a streamlined workflow for annotating, analyzing, and managing coral reef datasets without the complexity of databases or heavy dependencies.
@@ -190,6 +193,35 @@ CAT includes a comprehensive coral species reference database with:
 - NOAA coral identification standards
 
 Located in: `data/reference/list_of_coral.csv`
+
+---
+
+## Roadmap
+
+### 🚧 In Progress
+- **AI-Assisted Annotation** - Automated and Semi-automated coral detection, segmentation and classification features
+- **Google Cloud Storage (GCS) Integration** - Native support for `gs://` bucket paths
+- **Cloud Workstation Support** - Optimized deployment for Google Cloud Workstations
+- **Database Backend** - Optional PostgreSQL/PostGIS backend for large projects
+- **Enhanced COG Processing** - Improved batch conversion with progress tracking
+- **Multi-user Support** - Shared annotation sessions with user tracking
+
+### 📋 Planned Features
+
+#### Cloud & Collaboration 
+- **Other Cloud Storage Integrations** - Support for AWS S3, Azure Blob Storage
+- **Real-time Sync** - Live collaboration and annotation syncing
+
+#### Analysis & Visualization
+- **Statistics Dashboard** - Project-level analytics and reporting
+- **Time-series Analysis** - Multi-temporal change detection
+- **Export Formats** - Additional formats (KML, GeoPackage, CSV)
+
+#### Advanced Features 
+- **3D Support** - Integration with 3D reef models and point clouds
+
+### 💡 Feature Requests
+Have an idea? [Open an issue](https://github.com/MichaelAkridge-NOAA/cat/issues) with the `feature-request` label!
 
 ----------
 #### Disclaimer
