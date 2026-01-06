@@ -205,6 +205,12 @@ Located in: `data/reference/list_of_coral.csv`
 - **Database Backend** - Optional Oracle/SQLlite/PostgreSQL/GIS backend for large projects
 - **Multi-user Support** - Shared annotation sessions with user tracking
 
+<a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="./docs/example_ai_00.png" align="right" alt="logo" height="400"/></a>
+
+<a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="./docs/example_ai_01.png"  alt="logo" width="500"/></a>
+
+<a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="./docs/example_ai_02.png"  alt="logo" width="500"/></a>
+
 ### 📋 Planned Features
 
 #### Cloud & Collaboration 
