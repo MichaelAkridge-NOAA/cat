@@ -43,8 +43,8 @@ Perfect for field research environments where simplicity, speed, and reliability
 ## Quick Start
 
 ### Prerequisites
-
 - Python 3.9 or higher
+- Local Installation. * Networked, database and cloud version in the works. 
 
 ### Installation
 
