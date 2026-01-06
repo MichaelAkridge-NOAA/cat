@@ -1,5 +1,5 @@
 # CAT: Coral Annotation Tool
-<a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="./docs/logo.png" align="right" alt="logo" width="400"/></a>
+<a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="https://github.com/MichaelAkridge-NOAA/cat/raw/main/docs/logo.png" align="right" alt="logo" width="400"/></a>
   **C**oral **A**nnotation **T**ool - File-based  Structure from Motion (SfM) Orthomosaic coral reef annotation and visualization tool to support coral reef research.
 ### About
 
