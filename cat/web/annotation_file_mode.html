@@ -4423,7 +4423,7 @@
     
     // Species label management
     let annotationLabels = new Map(); // Store label markers by annotation ID
-    let labelsVisible = false;
+    let labelsVisible = true; // Default to true to match checkbox initial state
     
     function toggleAnnotationLabels(enabled) {
       labelsVisible = enabled;
@@ -5583,6 +5583,10 @@
       } else {
         showStatus('Draw created! Fill out the form and click Save.', 'info');
       }
+      
+      // Re-enable drawing tool to allow continuous drawing workflow
+      // This allows the user to draw another shape immediately after completing one
+      reEnableDrawingTool();
       
       // Calculate shape length for the form
       if (type === 'polyline') {
