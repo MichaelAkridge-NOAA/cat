@@ -1059,12 +1059,12 @@
           <input type="range" class="opacity-slider" id="annotationsOpacity" min="0" max="100" value="80" oninput="setAnnotationsOpacity(this.value)">
         </div>
         <div class="opacity-control" style="margin-top: 8px;">
-          <label>Line Width: <span id="lineWidthValue">3</span>px</label>
-          <input type="range" class="opacity-slider" id="lineWidth" min="1" max="10" value="3" oninput="setLineWidth(this.value)">
+          <label>Line Width: <span id="lineWidthValue">7</span>px</label>
+          <input type="range" class="opacity-slider" id="lineWidth" min="1" max="10" value="7" oninput="setLineWidth(this.value)">
         </div>
         <div class="opacity-control" style="margin-top: 8px;">
           <label style="display: flex; align-items: center; gap: 8px;">
-            <input type="checkbox" id="toggleLabels" onchange="toggleAnnotationLabels(this.checked)" style="width: auto; margin: 0;">
+            <input type="checkbox" id="toggleLabels" onchange="toggleAnnotationLabels(this.checked)" style="width: auto; margin: 0;" checked>
             <span>Show Species Labels</span>
           </label>
         </div>
@@ -1226,6 +1226,7 @@
         </div>
       </div>
       
+      <!-- Fragment field commented out - not used anymore
       <div class="form-group">
         <div class="form-section">
           <label>Fragment</label>
@@ -1235,6 +1236,7 @@
           </select>
         </div>
       </div>
+      -->
       
       <div class="form-group">
         <div class="form-section">
