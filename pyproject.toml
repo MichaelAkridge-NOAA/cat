@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coral-annotation-tool"
-version = "1.0.8"
+version = "1.0.9"
 description = "CAT: Coral Annotation Tool. A file-based(JSON) Structure from Motion (SfM) orthomosaic annotation tool for coral reef research"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -36,6 +36,9 @@ dependencies = [
   "aiofiles>=23.0.0",
   "pydantic>=2.0.0",
   "numpy>=1.24.0",
+  "geopandas>=0.14",
+  "pyogrio>=0.7",
+  "rtree>=1.0",
 ]
 
 [project.optional-dependencies]
