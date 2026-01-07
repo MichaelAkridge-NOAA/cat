@@ -39,11 +39,16 @@ jobs:
           git config --global user.name "GitHub Action"
       
       - name: Bump version (patch)
-        run: bumpversion patch
-      
-      - name: Commit and push changes
         run: |
-          git push --follow-tags
+          bumpversion --config-file bumpversion.cfg patch
+          git push origin main --follow-tags
+      
+      - name: Verify version was updated
+        run: |
+          echo "Version in setup.py:"
+          grep "version=" setup.py
+          echo "Version in pyproject.toml:"
+          grep "version =" pyproject.toml
       
       - name: Build package
         run: |
