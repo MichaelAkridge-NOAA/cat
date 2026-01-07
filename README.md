@@ -234,5 +234,4 @@ This repository is a scientific product and is not official communication of the
 This repository's code is available under the terms specified in [LICENSE.md](./LICENSE.md).
 
 ## Acknowledgments
-
 This project uses [TiTiler](https://github.com/developmentseed/titiler) by Development Seed for dynamic tile generation. TiTiler is licensed under the [MIT License](https://github.com/developmentseed/titiler/blob/main/LICENSE).
