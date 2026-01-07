@@ -15,7 +15,7 @@ with open('requirements.txt', 'r', encoding='utf-8') as f:
 
 setup(
     name="coral-annotation-tool",
-    version="1.0.8",
+    version="1.0.9",
     author="NOAA",
     author_email="",
     description="File-based Structure from Motion (SfM) orthomosaic annotation tool for coral reef research",
