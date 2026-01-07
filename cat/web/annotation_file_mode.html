@@ -3218,6 +3218,9 @@
     const drawnItems = new L.FeatureGroup();
     map.addLayer(drawnItems);
     
+    // Track the last used drawing tool for auto-re-enable after save
+    let lastDrawingTool = null;
+    
     // Add drawing controls - positioned in top-right for easy access
     const drawControl = new L.Control.Draw({
       position: 'topright',  // Changed from 'topleft' to 'topright' for better placement
@@ -3256,6 +3259,15 @@
       }
     });
     map.addControl(drawControl);
+    
+    // Listen for when drawing tools are activated
+    map.on('draw:drawstart', function(e) {
+      // Store the type of tool being used
+      if (e.layerType) {
+        lastDrawingTool = e.layerType;
+        console.log('🖊️ Drawing tool started:', lastDrawingTool);
+      }
+    });
     
     // ========================================
     // SAM3 Magic Wand Tool Integration
@@ -5490,6 +5502,13 @@
           } else {
             showStatus('SAM3 box segmentation failed', 'warning');
             showLoading(false);
+            
+            // Remove any previous unsaved annotation
+            if (currentAnnotation && currentAnnotation.layer && !currentAnnotation.layer.annotationData) {
+              console.log('🧹 Removing previous unsaved annotation (SAM3 failed)');
+              drawnItems.removeLayer(currentAnnotation.layer);
+            }
+            
             // Keep the rectangle and continue normally
             drawnItems.addLayer(layer);
             currentAnnotation = {
@@ -5502,6 +5521,13 @@
           console.error('SAM3 box error:', error);
           showStatus(`SAM3 error: ${error.message}`, 'error');
           showLoading(false);
+          
+          // Remove any previous unsaved annotation
+          if (currentAnnotation && currentAnnotation.layer && !currentAnnotation.layer.annotationData) {
+            console.log('🧹 Removing previous unsaved annotation (SAM3 error)');
+            drawnItems.removeLayer(currentAnnotation.layer);
+          }
+          
           // Keep the rectangle and continue normally
           drawnItems.addLayer(layer);
           currentAnnotation = {
@@ -5512,13 +5538,21 @@
         }
       } else {
         // Normal drawing (no SAM3)
+        
+        // IMPORTANT: Remove any previous unsaved annotation to prevent "ghost" shapes
+        if (currentAnnotation && currentAnnotation.layer && !currentAnnotation.layer.annotationData) {
+          console.log('🧹 Removing previous unsaved annotation');
+          drawnItems.removeLayer(currentAnnotation.layer);
+        }
+        
         drawnItems.addLayer(layer);
         
         // Store the current drawing with full precision geometry
         currentAnnotation = {
           type: type,
           layer: layer,
-          geometry: getFullPrecisionGeometry(layer)
+          geometry: getFullPrecisionGeometry(layer),
+          replacedUnsaved: (currentAnnotation && currentAnnotation.layer && !currentAnnotation.layer.annotationData)
         };
       }
       
@@ -5543,8 +5577,12 @@
         layerType: layer.constructor.name
       });
       
-      // Highlight the form
-      showStatus('Draw created! Fill out the form and click Save.', 'info');
+      // Show appropriate status message
+      if (currentAnnotation.replacedUnsaved) {
+        showStatus('⚠️ Previous unsaved annotation was replaced! Fill out the form and click Save.', 'warning');
+      } else {
+        showStatus('Draw created! Fill out the form and click Save.', 'info');
+      }
       
       // Calculate shape length for the form
       if (type === 'polyline') {
@@ -6028,6 +6066,41 @@
       }
     }
     
+    // Function to re-enable the last used drawing tool
+    function reEnableDrawingTool() {
+      if (!lastDrawingTool) {
+        console.log('No previous drawing tool to re-enable');
+        return;
+      }
+      
+      console.log('🔄 Re-enabling drawing tool:', lastDrawingTool);
+      
+      // Use a small delay to ensure the previous drawing is fully processed
+      setTimeout(() => {
+        // Get the appropriate draw handler based on tool type
+        let drawHandler;
+        switch(lastDrawingTool) {
+          case 'polyline':
+            drawHandler = new L.Draw.Polyline(map, drawControl.options.draw.polyline);
+            break;
+          case 'polygon':
+            drawHandler = new L.Draw.Polygon(map, drawControl.options.draw.polygon);
+            break;
+          case 'rectangle':
+            drawHandler = new L.Draw.Rectangle(map, drawControl.options.draw.rectangle);
+            break;
+          default:
+            console.log('Unknown tool type:', lastDrawingTool);
+            return;
+        }
+        
+        // Enable the drawing handler
+        drawHandler.enable();
+        console.log('✅ Drawing tool re-enabled:', lastDrawingTool);
+        
+      }, 150); // Small delay to ensure smooth transition
+    }
+    
     // Save annotation (File Mode - no database)
     async function saveAnnotation() {
       if (!currentAnnotation) {
@@ -6160,6 +6233,9 @@
         
         showStatus(`✅ Annotation saved! Total: ${annotations.length} (${formatTime(annotationTimeSeconds)})`, 'success');
         console.log('💾 Annotation saved to local array:', annotationData);
+        
+        // Re-enable the drawing tool to keep workflow going
+        reEnableDrawingTool();
         
       } catch (error) {
         console.error('Error saving annotation:', error);
