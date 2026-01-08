@@ -3348,13 +3348,15 @@
         lastDrawingTool = e.layerType;
         console.log('🖊️ Drawing tool started:', lastDrawingTool);
         
-        // Add visual feedback for active tool
+        // Add visual feedback for active tool (with delay to ensure toolbar is ready)
         const buttonClassMap = {
           'polyline': '.leaflet-draw-draw-polyline',
           'polygon': '.leaflet-draw-draw-polygon',
           'rectangle': '.leaflet-draw-draw-rectangle'
         };
-        updateDrawingToolVisualFeedback(buttonClassMap[e.layerType]);
+        setTimeout(() => {
+          updateDrawingToolVisualFeedback(buttonClassMap[e.layerType]);
+        }, 50);
       }
     });
     
@@ -3363,13 +3365,17 @@
       console.log('🛑 Drawing tool stopped');
       // Remove visual feedback when drawing stops
       updateDrawingToolVisualFeedback(null);
+      // Clear last drawing tool when stopped
+      lastDrawingTool = null;
     });
     
-    // Also listen for draw:canceled event
+    // Also listen for draw:canceled event (triggered by ESC key or clicking cancel)
     map.on('draw:canceled', function(e) {
-      console.log('❌ Drawing tool cancelled');
+      console.log('❌ Drawing tool cancelled (ESC or Cancel button)');
       // Remove visual feedback when drawing is cancelled
       updateDrawingToolVisualFeedback(null);
+      // Clear last drawing tool when cancelled
+      lastDrawingTool = null;
     });
     
     // Monitor toolbar button clicks to detect deactivation
@@ -3393,13 +3399,32 @@
                 console.log('🔘 Drawing tool button deactivated');
                 updateDrawingToolVisualFeedback(null);
                 lastDrawingTool = null;
+              } else if (!wasEnabled && isEnabled) {
+                // Button was just activated - add visual feedback
+                console.log('🔘 Drawing tool button activated');
+                const buttonClass = button.classList.contains('leaflet-draw-draw-polyline') ? '.leaflet-draw-draw-polyline' :
+                                   button.classList.contains('leaflet-draw-draw-polygon') ? '.leaflet-draw-draw-polygon' :
+                                   button.classList.contains('leaflet-draw-draw-rectangle') ? '.leaflet-draw-draw-rectangle' : null;
+                if (buttonClass) {
+                  updateDrawingToolVisualFeedback(buttonClass);
+                }
               }
-            }, 10);
+            }, 50);
           }
         });
         console.log('✅ Added toolbar button click monitor');
       }
     }, 500); // Delay to ensure toolbar is rendered
+    
+    // Add global ESC key handler to ensure drawing tools can be cancelled
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && lastDrawingTool) {
+        console.log('⌨️ ESC pressed - cancelling drawing tool');
+        // The draw:canceled event should fire automatically, but ensure cleanup
+        updateDrawingToolVisualFeedback(null);
+        lastDrawingTool = null;
+      }
+    });
     
     // ========================================
     // SAM3 Magic Wand Tool Integration
