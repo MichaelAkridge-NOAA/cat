@@ -408,6 +408,35 @@
       background: #c82333;
     }
     
+    /* Editable cells */
+    .annotation-table td.editable {
+      cursor: cell;
+      position: relative;
+    }
+    .annotation-table td.editable:hover {
+      background: #fff3cd;
+      outline: 1px dashed #ffc107;
+    }
+    .annotation-table td.editing {
+      padding: 2px;
+      background: #fff;
+    }
+    .annotation-table td.editing input,
+    .annotation-table td.editing select {
+      width: 100%;
+      padding: 4px 6px;
+      border: 2px solid #667eea;
+      border-radius: 3px;
+      font-size: 11px;
+      font-family: inherit;
+      box-sizing: border-box;
+    }
+    .annotation-table td.editing input:focus,
+    .annotation-table td.editing select:focus {
+      outline: none;
+      border-color: #06b6d4;
+    }
+    
     /* Helper text */
     .helper-text {
       font-size: 11px;
@@ -2450,15 +2479,15 @@
         row.innerHTML = `
           <td><strong>${colonyId}</strong></td>
           <td>${ann.geometry.type || 'Polygon'}</td>
-          <td>${ann.spcode || ann.species_code || ann.SPCODE || ann.SPECIES_CODE || '-'}</td>
-          <td>${ann.analyst || '-'}</td>
-          <td>${ann.site || '-'}</td>
-          <td>${ann.obs_year || '-'}</td>
-          <td>${ann.mission_id || '-'}</td>
-          <td>${ann.segment || '-'}</td>
-          <td>${ann.transect || '-'}</td>
-          <td>${ann.morph_code || '-'}</td>
-          <td>${ann.old_dead !== undefined ? ann.old_dead + '%' : '-'}</td>
+          <td class="editable" data-field="spcode" data-index="${index}">${ann.spcode || ann.species_code || ann.SPCODE || ann.SPECIES_CODE || '-'}</td>
+          <td class="editable" data-field="analyst" data-index="${index}">${ann.analyst || '-'}</td>
+          <td class="editable" data-field="site" data-index="${index}">${ann.site || '-'}</td>
+          <td class="editable" data-field="obs_year" data-index="${index}">${ann.obs_year || '-'}</td>
+          <td class="editable" data-field="mission_id" data-index="${index}">${ann.mission_id || '-'}</td>
+          <td class="editable" data-field="segment" data-index="${index}">${ann.segment || '-'}</td>
+          <td class="editable" data-field="transect" data-index="${index}">${ann.transect || '-'}</td>
+          <td class="editable" data-field="morph_code" data-index="${index}">${ann.morph_code || '-'}</td>
+          <td class="editable" data-field="old_dead" data-index="${index}">${ann.old_dead !== undefined ? ann.old_dead + '%' : '-'}</td>
           <td>
             <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); openEditModal(${index})" title="Edit Fields">✏️</button>
             <button class="btn btn-sm btn-success" onclick="event.stopPropagation(); enableGeometryEdit(${index})" title="Edit Geometry">📐</button>
@@ -2468,12 +2497,20 @@
         
         // Add click handler AFTER innerHTML (so it doesn't get wiped out)
         row.onclick = (e) => {
-          if (!e.target.closest('button')) {
+          if (!e.target.closest('button') && !e.target.classList.contains('editable')) {
             document.querySelectorAll('.annotation-table tbody tr').forEach(r => r.classList.remove('selected'));
             row.classList.add('selected');
             selectAnnotationForEdit(index);
           }
         };
+        
+        // Add double-click handlers to editable cells
+        row.querySelectorAll('.editable').forEach(cell => {
+          cell.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            makeTableCellEditable(cell);
+          });
+        });
         
         tbody.appendChild(row);
       });
@@ -2536,6 +2573,164 @@
       }
       
       console.log('✅ Zoomed to annotation', index);
+    }
+    
+    // Make table cell editable inline
+    function makeTableCellEditable(cell) {
+      // Don't allow editing if already editing
+      if (cell.classList.contains('editing')) return;
+      
+      const field = cell.dataset.field;
+      const index = parseInt(cell.dataset.index);
+      const annotation = annotations[index];
+      
+      if (!annotation) return;
+      
+      // Get current value (remove % sign if present)
+      let currentValue = annotation[field];
+      if (currentValue === undefined || currentValue === null) {
+        currentValue = '';
+      } else if (field === 'old_dead') {
+        currentValue = currentValue.toString().replace('%', '');
+      } else {
+        currentValue = currentValue.toString();
+      }
+      
+      // Store original value and text
+      const originalValue = currentValue;
+      const originalText = cell.textContent;
+      
+      // Mark as editing
+      cell.classList.add('editing');
+      
+      // Create input element based on field type
+      let inputElement;
+      
+      if (field === 'segment') {
+        // Dropdown for segment
+        inputElement = document.createElement('select');
+        inputElement.innerHTML = `
+          <option value="">-</option>
+          <option value="0">0</option>
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="15">15</option>
+        `;
+        inputElement.value = currentValue;
+      } else if (field === 'transect') {
+        // Dropdown for transect
+        inputElement = document.createElement('select');
+        inputElement.innerHTML = `
+          <option value="">-</option>
+          <option value="A">A</option>
+          <option value="B">B</option>
+        `;
+        inputElement.value = currentValue;
+      } else if (field === 'obs_year') {
+        // Number input for year
+        inputElement = document.createElement('input');
+        inputElement.type = 'number';
+        inputElement.min = '2000';
+        inputElement.max = '2100';
+        inputElement.value = currentValue;
+      } else if (field === 'old_dead') {
+        // Number input for percentage
+        inputElement = document.createElement('input');
+        inputElement.type = 'number';
+        inputElement.min = '0';
+        inputElement.max = '100';
+        inputElement.value = currentValue;
+      } else {
+        // Text input for other fields
+        inputElement = document.createElement('input');
+        inputElement.type = 'text';
+        inputElement.value = currentValue;
+        
+        // Set max length for specific fields
+        if (field === 'analyst' || field === 'spcode' || field === 'morph_code') {
+          inputElement.maxLength = 10;
+        }
+      }
+      
+      // Clear cell and add input
+      cell.innerHTML = '';
+      cell.appendChild(inputElement);
+      
+      // Focus and select the input
+      inputElement.focus();
+      if (inputElement.select) {
+        inputElement.select();
+      }
+      
+      // Save function
+      const saveEdit = () => {
+        let newValue = inputElement.value.trim();
+        
+        // Convert empty string to appropriate default
+        if (newValue === '' || newValue === '-') {
+          newValue = '';
+        }
+        
+        // Convert to number for numeric fields
+        if (field === 'obs_year' || field === 'old_dead') {
+          const num = parseFloat(newValue);
+          newValue = isNaN(num) ? '' : num;
+        } else if (field === 'segment') {
+          const num = parseFloat(newValue);
+          newValue = isNaN(num) ? '' : num;
+        }
+        
+        // Update annotation
+        if (newValue === '') {
+          delete annotation[field];
+        } else {
+          annotation[field] = newValue;
+        }
+        
+        // Remove editing class
+        cell.classList.remove('editing');
+        
+        // Update cell display
+        if (field === 'old_dead' && newValue !== '') {
+          cell.textContent = newValue + '%';
+        } else if (newValue === '') {
+          cell.textContent = '-';
+        } else {
+          cell.textContent = newValue;
+        }
+        
+        // Save to project
+        saveProject();
+        
+        console.log(`✅ Updated ${field} for annotation ${index} to: ${newValue}`);
+      };
+      
+      // Cancel function
+      const cancelEdit = () => {
+        cell.classList.remove('editing');
+        cell.textContent = originalText;
+      };
+      
+      // Event handlers
+      inputElement.addEventListener('blur', saveEdit);
+      
+      inputElement.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          saveEdit();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelEdit();
+        } else if (e.key === 'Tab') {
+          // Allow default tab behavior which will trigger blur and save
+          return;
+        }
+      });
+      
+      // Stop propagation to prevent row click
+      inputElement.addEventListener('click', (e) => {
+        e.stopPropagation();
+      });
     }
     
     // Open edit modal with annotation data
