@@ -2955,13 +2955,25 @@
       if (ann) {
         ann.geometry = currentEditingLayer.toGeoJSON().geometry;
         
-        // Reset style
+        // Reset style to original (preserve 7px line weight)
         if (currentEditingLayer.setStyle) {
           currentEditingLayer.setStyle({
             color: '#3388ff',
-            weight: 3,
-            fillOpacity: 0.2
+            weight: 7,  // Preserve original 7px line weight
+            opacity: 0.8,
+            fillOpacity: 0.3
           });
+        }
+        
+        // Update the label position to match new geometry
+        const layerId = currentEditingLayer._leaflet_id;
+        if (layerId) {
+          // Remove old label
+          removeAnnotationLabel(layerId);
+          // Add new label at updated position
+          setTimeout(() => {
+            addAnnotationLabel(currentEditingLayer);
+          }, 100);
         }
         
         console.log('✅ Geometry updated for annotation', index);
@@ -3043,17 +3055,19 @@
       const ann = annotations[index];
       if (!ann) return;
       
-      // Remove label from map if it exists
-      if (ann.annotationId) {
-        removeAnnotationLabel(ann.annotationId);
-      }
-      
-      // Find and remove layer from map
+      // Find and remove layer from map (and get its ID for label removal)
+      let layerId = null;
       drawnItems.eachLayer(layer => {
         if (layer.annotationData === ann) {
+          layerId = layer._leaflet_id; // Store the layer ID before removing
           drawnItems.removeLayer(layer);
         }
       });
+      
+      // Remove label from map if it exists (using the layer ID)
+      if (layerId) {
+        removeAnnotationLabel(layerId);
+      }
       
       // Remove from annotations array
       annotations.splice(index, 1);
@@ -3365,8 +3379,8 @@
       console.log('🛑 Drawing tool stopped');
       // Remove visual feedback when drawing stops
       updateDrawingToolVisualFeedback(null);
-      // Clear last drawing tool when stopped
-      lastDrawingTool = null;
+      // DON'T clear lastDrawingTool here - keep it so we can re-enable after save
+      // Only clear it when explicitly cancelled by user
     });
     
     // Also listen for draw:canceled event (triggered by ESC key or clicking cancel)
@@ -3374,7 +3388,7 @@
       console.log('❌ Drawing tool cancelled (ESC or Cancel button)');
       // Remove visual feedback when drawing is cancelled
       updateDrawingToolVisualFeedback(null);
-      // Clear last drawing tool when cancelled
+      // Clear last drawing tool when cancelled by user
       lastDrawingTool = null;
     });
     
@@ -6448,9 +6462,6 @@
         setTimeout(() => {
           reEnableDrawingTool();
         }, 150); // Small delay to ensure form focus is set first
-        
-        // Re-enable the drawing tool to keep workflow going
-        reEnableDrawingTool();
         
       } catch (error) {
         console.error('Error saving annotation:', error);
