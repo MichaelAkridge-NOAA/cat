@@ -28,7 +28,6 @@ Perfect for field research environments where simplicity, speed, and reliability
 ### **Project Management**
 - **File-Based Storage** - No database required, pure JSON format
 - **Drag & Drop Interface** - Easy project creation with multiple TIF files
-- **Auto-Discovery** - Automatically detects COG files in data directory
 - **GeoJSON Export** - Export annotations in standard GeoJSON format
 - **Project Templates** - Reusable project structures for consistent workflows
 
@@ -47,7 +46,7 @@ Perfect for field research environments where simplicity, speed, and reliability
 
 ### Prerequisites
 - Python 3.9 or higher
-- Local Installation. * Networked, database and cloud version in the works. 
+- Local Installation & usage only. (*Note: database and cloud version in development.)
 
 ### Installation
 
@@ -58,35 +57,32 @@ Perfect for field research environments where simplicity, speed, and reliability
 pip install coral-annotation-tool
 ```
 
-**Option 2: Install from source (Local Development)**
-
 ```bash
-git clone https://github.com/MichaelAkridge-NOAA/cat
-cd cat
-pip install -e .
+# Or Install with desktop shortcut support (one-time)
+pip install coral-annotation-tool[shortcuts]
+# Create shortcuts
+cat-create-shortcuts
 ```
 
 ### Running the Application
-
+<a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="./docs/desktop_shortcut.png" align="right" alt="logo" /></a>
 After installation, simply run:
-
+- Double click on Desktop icon
+- Start Menu (Windows) or Applications (Mac/Linux)
+- Command line: `cat`
 ```bash
 cat
 ```
 
 The application will be available at: **http://localhost:8000**
 
-**Optional: Create Desktop Shortcuts**
 
-For easier access, create desktop and start menu shortcuts:
+**Option 2: Install from source (Local Development)**
 
-**If installed from PyPI:**
 ```bash
-# Install shortcut support (one-time)
-pip install coral-annotation-tool[shortcuts]
-
-# Create shortcuts
-cat-create-shortcuts
+git clone https://github.com/MichaelAkridge-NOAA/cat
+cd cat
+pip install -e .
 ```
 
 **If installed locally (from source):**
@@ -106,12 +102,6 @@ cat-create-shortcuts
 ```bash
 cat-remove-shortcuts
 ```
-
-After creating shortcuts, you can launch CAT from:
-- Desktop icon
-- Start Menu (Windows) or Applications (Mac/Linux)
-- Command line: `cat`
-
 ---
 
 ## Usage
