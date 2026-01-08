@@ -3306,6 +3306,42 @@
       updateDrawingToolVisualFeedback(null);
     });
     
+    // Also listen for draw:canceled event
+    map.on('draw:canceled', function(e) {
+      console.log('❌ Drawing tool cancelled');
+      // Remove visual feedback when drawing is cancelled
+      updateDrawingToolVisualFeedback(null);
+    });
+    
+    // Monitor toolbar button clicks to detect deactivation
+    // Leaflet Draw adds/removes 'leaflet-draw-toolbar-button-enabled' class
+    setTimeout(() => {
+      const toolbar = document.querySelector('.leaflet-draw-toolbar-top');
+      if (toolbar) {
+        // Use event delegation to catch all button clicks
+        toolbar.addEventListener('click', function(e) {
+          const button = e.target.closest('a');
+          if (button) {
+            // Check if button is being deactivated (has enabled class before click)
+            const wasEnabled = button.classList.contains('leaflet-draw-toolbar-button-enabled');
+            
+            // Use setTimeout to check state after Leaflet processes the click
+            setTimeout(() => {
+              const isEnabled = button.classList.contains('leaflet-draw-toolbar-button-enabled');
+              
+              if (wasEnabled && !isEnabled) {
+                // Button was just deactivated
+                console.log('🔘 Drawing tool button deactivated');
+                updateDrawingToolVisualFeedback(null);
+                lastDrawingTool = null;
+              }
+            }, 10);
+          }
+        });
+        console.log('✅ Added toolbar button click monitor');
+      }
+    }, 500); // Delay to ensure toolbar is rendered
+    
     // ========================================
     // SAM3 Magic Wand Tool Integration
     // ========================================
@@ -6183,6 +6219,16 @@
       // Get time spent on this annotation
       const annotationTimeSeconds = getAnnotationTime();
       
+      // Helper function to safely get field value
+      const getFieldValue = (id) => {
+        const element = document.getElementById(id);
+        if (!element) {
+          console.warn(`Field '${id}' not found in form`);
+          return null;
+        }
+        return element.value;
+      };
+      
       // Build annotation data (lowercase for file mode, matching expected format)
       const annotationData = {
         geometry: geometry,
@@ -6191,33 +6237,33 @@
         obs_year: parseInt(obs_year),
         mission_id: mission_id,
         site: site,
-        transect: document.getElementById('transect').value || null,
-        segment: parseInt(document.getElementById('segment').value) || null,
-        seglength: parseFloat(document.getElementById('seglength').value) || null,
-        segwidth: parseFloat(document.getElementById('segwidth').value) || null,
-        no_colony: parseInt(document.getElementById('no_colony').value) || 0,
-        spcode: document.getElementById('spcode').value || null,
-        juvenile: parseInt(document.getElementById('juvenile').value) || 0,
-        remnant: parseInt(document.getElementById('remnant').value) || 0,
-        fragment: parseInt(document.getElementById('fragment').value) || 0,
-        morph_code: document.getElementById('morph_code').value || null,
-        ex_bound: parseInt(document.getElementById('ex_bound').value) || 0,
-        old_dead: parseInt(document.getElementById('olddead').value) || null,
-        rdcause1: document.getElementById('rdcause1').value || null,
-        rd_1: parseInt(document.getElementById('rd_1').value) || null,
-        rdcause2: document.getElementById('rdcause2').value || null,
-        rd_2: parseInt(document.getElementById('rd_2').value) || null,
-        rdcause3: document.getElementById('rdcause3').value || null,
-        rd_3: parseInt(document.getElementById('rd_3').value) || null,
-        con_1: document.getElementById('con_1').value || null,
-        extent_1: parseInt(document.getElementById('extent_1').value) || null,
-        sev_1: parseInt(document.getElementById('sev_1').value) || null,
-        con_2: document.getElementById('con_2').value || null,
-        extent_2: parseInt(document.getElementById('extent_2').value) || null,
-        sev_2: parseInt(document.getElementById('sev_2').value) || null,
-        con_3: document.getElementById('con_3').value || null,
-        extent_3: parseInt(document.getElementById('extent_3').value) || null,
-        sev_3: parseInt(document.getElementById('sev_3').value) || null,
+        transect: getFieldValue('transect') || null,
+        segment: parseInt(getFieldValue('segment')) || null,
+        seglength: parseFloat(getFieldValue('seglength')) || null,
+        segwidth: parseFloat(getFieldValue('segwidth')) || null,
+        no_colony: parseInt(getFieldValue('no_colony')) || 0,
+        spcode: getFieldValue('spcode') || null,
+        juvenile: parseInt(getFieldValue('juvenile')) || 0,
+        remnant: parseInt(getFieldValue('remnant')) || 0,
+        fragment: parseInt(getFieldValue('fragment')) || 0,
+        morph_code: getFieldValue('morph_code') || null,
+        ex_bound: parseInt(getFieldValue('ex_bound')) || 0,
+        old_dead: parseInt(getFieldValue('olddead')) || null,
+        rdcause1: getFieldValue('rdcause1') || null,
+        rd_1: parseInt(getFieldValue('rd_1')) || null,
+        rdcause2: getFieldValue('rdcause2') || null,
+        rd_2: parseInt(getFieldValue('rd_2')) || null,
+        rdcause3: getFieldValue('rdcause3') || null,
+        rd_3: parseInt(getFieldValue('rd_3')) || null,
+        con_1: getFieldValue('con_1') || null,
+        extent_1: parseInt(getFieldValue('extent_1')) || null,
+        sev_1: parseInt(getFieldValue('sev_1')) || null,
+        con_2: getFieldValue('con_2') || null,
+        extent_2: parseInt(getFieldValue('extent_2')) || null,
+        sev_2: parseInt(getFieldValue('sev_2')) || null,
+        con_3: getFieldValue('con_3') || null,
+        extent_3: parseInt(getFieldValue('extent_3')) || null,
+        sev_3: parseInt(getFieldValue('sev_3')) || null,
         created_at: new Date().toISOString(),
         annotation_time_seconds: annotationTimeSeconds // Time spent on this annotation
       };
@@ -6238,36 +6284,45 @@
           addLabelToAnnotation(layer);
         }
         
+        // Helper function to safely clear a field
+        const clearField = (id, defaultValue = '') => {
+          const element = document.getElementById(id);
+          if (element) {
+            element.value = defaultValue;
+          }
+        };
+        
         // Clear form - preserve key fields (match database mode behavior)
         // Preserve: analyst, obs_year, mission_id, site
         // Clear: spcode and all other annotation-specific fields
-        document.getElementById('transect').value = '';
-        document.getElementById('segment').value = '';
-        document.getElementById('seglength').value = '';
-        document.getElementById('segwidth').value = '';
-        document.getElementById('no_colony').value = '0';
-        document.getElementById('spcode').value = ''; // Clear species field
-        document.getElementById('juvenile').value = '0';
-        document.getElementById('remnant').value = '0';
-        document.getElementById('fragment').value = '0';
-        document.getElementById('morph_code').value = '';
-        document.getElementById('ex_bound').value = '0';
-        document.getElementById('olddead').value = '';
-        document.getElementById('rdcause1').value = '';
-        document.getElementById('rd_1').value = '';
-        document.getElementById('rdcause2').value = '';
-        document.getElementById('rd_2').value = '';
-        document.getElementById('rdcause3').value = '';
-        document.getElementById('rd_3').value = '';
-        document.getElementById('con_1').value = '';
-        document.getElementById('extent_1').value = '';
-        document.getElementById('sev_1').value = '';
-        document.getElementById('con_2').value = '';
-        document.getElementById('extent_2').value = '';
-        document.getElementById('sev_2').value = '';
-        document.getElementById('con_3').value = '';
-        document.getElementById('extent_3').value = '';
-        document.getElementById('sev_3').value = '';
+        clearField('transect');
+        clearField('segment');
+        clearField('seglength');
+        clearField('segwidth');
+        clearField('no_colony', '0');
+        clearField('spcode'); // Clear species field
+        clearField('juvenile', '0');
+        clearField('remnant', '0');
+        clearField('fragment', '0');
+        clearField('morph_code');
+        clearField('ex_bound', '0');
+        clearField('olddead');
+        clearField('rdcause1');
+        clearField('rd_1');
+        clearField('rdcause2');
+        clearField('rd_2');
+        clearField('rdcause3');
+        clearField('rd_3');
+        clearField('con_1');
+        clearField('extent_1');
+        clearField('sev_1');
+        clearField('con_2');
+        clearField('extent_2');
+        clearField('sev_2');
+        clearField('con_3');
+        clearField('extent_3');
+        clearField('sev_3');
+
         
         currentAnnotation = null;
         
