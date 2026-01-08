@@ -734,6 +734,13 @@
       box-shadow: 0 2px 10px rgba(0,0,0,0.2) !important;
     }
     
+    /* Visual feedback for active drawing tool */
+    .leaflet-draw-toolbar a.drawing-tool-active {
+      background: #667eea !important;
+      color: white !important;
+      box-shadow: inset 0 0 8px rgba(0,0,0,0.3) !important;
+    }
+    
     /* Add labels to drawing tools for clarity */
     .leaflet-draw-draw-polyline::after,
     .leaflet-draw-draw-polygon::after,
@@ -3221,6 +3228,21 @@
     // Track the last used drawing tool for auto-re-enable after save
     let lastDrawingTool = null;
     
+    // Update visual feedback for active drawing tool
+    function updateDrawingToolVisualFeedback(activeButtonClass) {
+      // Remove active class from all drawing buttons
+      const allButtons = document.querySelectorAll('.leaflet-draw-draw-polyline, .leaflet-draw-draw-polygon, .leaflet-draw-draw-rectangle');
+      allButtons.forEach(btn => btn.classList.remove('drawing-tool-active'));
+      
+      // Add active class to the current tool
+      if (activeButtonClass) {
+        const activeButton = document.querySelector(activeButtonClass);
+        if (activeButton) {
+          activeButton.classList.add('drawing-tool-active');
+        }
+      }
+    }
+    
     // Add drawing controls - positioned in top-right for easy access
     const drawControl = new L.Control.Draw({
       position: 'topright',  // Changed from 'topleft' to 'topright' for better placement
@@ -3266,7 +3288,22 @@
       if (e.layerType) {
         lastDrawingTool = e.layerType;
         console.log('🖊️ Drawing tool started:', lastDrawingTool);
+        
+        // Add visual feedback for active tool
+        const buttonClassMap = {
+          'polyline': '.leaflet-draw-draw-polyline',
+          'polygon': '.leaflet-draw-draw-polygon',
+          'rectangle': '.leaflet-draw-draw-rectangle'
+        };
+        updateDrawingToolVisualFeedback(buttonClassMap[e.layerType]);
       }
+    });
+    
+    // Listen for when drawing is stopped or cancelled
+    map.on('draw:drawstop', function(e) {
+      console.log('🛑 Drawing tool stopped');
+      // Remove visual feedback when drawing stops
+      updateDrawingToolVisualFeedback(null);
     });
     
     // ========================================
@@ -5584,10 +5621,6 @@
         showStatus('Draw created! Fill out the form and click Save.', 'info');
       }
       
-      // Re-enable drawing tool to allow continuous drawing workflow
-      // This allows the user to draw another shape immediately after completing one
-      reEnableDrawingTool();
-      
       // Calculate shape length for the form
       if (type === 'polyline') {
         const coords = layer.getLatLngs();
@@ -5610,7 +5643,15 @@
         setTimeout(() => {
           speciesField.focus();
           console.log('✅ Auto-focused on species field');
+          
+          // Re-enable drawing tool AFTER focusing on species field
+          // This allows the user to draw another shape immediately after completing one
+          // while maintaining focus on the form for quick data entry
+          reEnableDrawingTool();
         }, 100); // Small delay to ensure form is ready
+      } else {
+        // If species field not found, still re-enable the tool
+        reEnableDrawingTool();
       }
     });
     
@@ -6080,18 +6121,24 @@
       console.log('🔄 Re-enabling drawing tool:', lastDrawingTool);
       
       // Use a small delay to ensure the previous drawing is fully processed
+      // and doesn't interfere with focus management
       setTimeout(() => {
         // Get the appropriate draw handler based on tool type
         let drawHandler;
+        let buttonClass;
+        
         switch(lastDrawingTool) {
           case 'polyline':
             drawHandler = new L.Draw.Polyline(map, drawControl.options.draw.polyline);
+            buttonClass = '.leaflet-draw-draw-polyline';
             break;
           case 'polygon':
             drawHandler = new L.Draw.Polygon(map, drawControl.options.draw.polygon);
+            buttonClass = '.leaflet-draw-draw-polygon';
             break;
           case 'rectangle':
             drawHandler = new L.Draw.Rectangle(map, drawControl.options.draw.rectangle);
+            buttonClass = '.leaflet-draw-draw-rectangle';
             break;
           default:
             console.log('Unknown tool type:', lastDrawingTool);
@@ -6100,6 +6147,10 @@
         
         // Enable the drawing handler
         drawHandler.enable();
+        
+        // Add visual feedback - highlight the active button
+        updateDrawingToolVisualFeedback(buttonClass);
+        
         console.log('✅ Drawing tool re-enabled:', lastDrawingTool);
         
       }, 150); // Small delay to ensure smooth transition
