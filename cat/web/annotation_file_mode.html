@@ -2606,10 +2606,6 @@
             <label style="font-weight: bold; display: block; margin-bottom: 5px;">Remnant</label>
             <input type="number" id="edit_remnant" value="${annotation.remnant || 0}" min="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
           </div>
-          <div class="modal-form-field">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">Fragment</label>
-            <input type="number" id="edit_fragment" value="${annotation.fragment || 0}" min="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
-          </div>
         </div>
       `;
       
@@ -2804,7 +2800,6 @@
       annotation.old_dead = document.getElementById('edit_old_dead').value;
       annotation.juvenile = parseInt(document.getElementById('edit_juvenile').value) || 0;
       annotation.remnant = parseInt(document.getElementById('edit_remnant').value) || 0;
-      annotation.fragment = parseInt(document.getElementById('edit_fragment').value) || 0;
       
       // Update the layer's annotationData
       drawnItems.eachLayer(layer => {
