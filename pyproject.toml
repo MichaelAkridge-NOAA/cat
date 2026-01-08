@@ -73,5 +73,6 @@ packages = ["cat", "cat.api"]
 cat = [
   "web/*.html",
   "docs/*.png",
+  "docs/*.ico",
   "data/reference/*.csv",
 ]

@@ -16,7 +16,7 @@ def create_shortcuts():
         python_exe = sys.executable
         
         # Create shortcut to launch CAT
-        shortcut_name = "CAT: Coral Annotation Tool"
+        shortcut_name = "CAT_Coral_Annotation_Tool"
         
         # Determine icon path (if you have one)
         icon_path = None
@@ -123,7 +123,7 @@ def remove_shortcuts():
     try:
         import pyshortcuts
         
-        shortcut_name = "CAT: Coral Annotation Tool"
+        shortcut_name = "CAT_Coral_Annotation_Tool"
         # pyshortcuts sanitizes the name differently in different contexts
         # It can be any of these variations
         sanitized_names = [

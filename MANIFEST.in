@@ -7,7 +7,7 @@ include requirements.txt
 recursive-include cat/web *.html *.css *.js
 
 # Include documentation and images from package
-recursive-include cat/docs *.png *.jpg *.md
+recursive-include cat/docs *.png *.jpg *.ico *.md
 
 # Include data reference files from package
 recursive-include cat/data *.csv
