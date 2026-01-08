@@ -736,9 +736,37 @@
     
     /* Visual feedback for active drawing tool */
     .leaflet-draw-toolbar a.drawing-tool-active {
-      background: #667eea !important;
+      background-color: #667eea !important;
       color: white !important;
       box-shadow: inset 0 0 8px rgba(0,0,0,0.3) !important;
+    }
+    
+    /* Make the icon white when button is active (Leaflet uses background images) */
+    .leaflet-draw-toolbar a.drawing-tool-active {
+      filter: brightness(0) invert(1) !important;
+      /* First brightness(0) makes it black, then invert(1) makes it white */
+    }
+    
+    /* Override to keep background color while changing icon */
+    .leaflet-draw-draw-polyline.drawing-tool-active,
+    .leaflet-draw-draw-polygon.drawing-tool-active,
+    .leaflet-draw-draw-rectangle.drawing-tool-active {
+      background-color: #667eea !important;
+      position: relative;
+    }
+    
+    /* Use a pseudo-element for the colored background to avoid filter affecting it */
+    .leaflet-draw-draw-polyline.drawing-tool-active::before,
+    .leaflet-draw-draw-polygon.drawing-tool-active::before,
+    .leaflet-draw-draw-rectangle.drawing-tool-active::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #667eea;
+      z-index: -1;
     }
     
     /* Add labels to drawing tools for clarity */
@@ -3282,6 +3310,37 @@
     });
     map.addControl(drawControl);
     
+    // Override Leaflet Draw's readableDistance function to show 3 decimal places for sub-meter measurements
+    // This affects the tooltip display during drawing
+    if (L.GeometryUtil && L.GeometryUtil.readableDistance) {
+      L.GeometryUtil.readableDistance = function(distance, isMetric, useFeet, isNauticalMile, precision) {
+        var distanceStr;
+        
+        if (isMetric) {
+          // Metric system
+          if (distance > 1000) {
+            // Show kilometers with 2 decimals for distances > 1km
+            distanceStr = (distance / 1000).toFixed(2) + ' km';
+          } else {
+            // Show meters with 3 decimals for sub-kilometer distances
+            // This ensures 0.001m to 999.999m are displayed properly
+            distanceStr = distance.toFixed(3) + ' m';
+          }
+        } else {
+          // Imperial system
+          distance *= 1.09361;
+          if (distance > 1760) {
+            distanceStr = (distance / 1760).toFixed(2) + ' miles';
+          } else {
+            distanceStr = distance.toFixed(3) + ' yd';
+          }
+        }
+        
+        return distanceStr;
+      };
+      console.log('✅ Overrode Leaflet Draw readableDistance for 3 decimal precision');
+    }
+    
     // Listen for when drawing tools are activated
     map.on('draw:drawstart', function(e) {
       // Store the type of tool being used
@@ -5664,13 +5723,13 @@
         for (let i = 0; i < coords.length - 1; i++) {
           length += coords[i].distanceTo(coords[i + 1]);
         }
-        document.getElementById('seglength').value = (length).toFixed(2);
+        document.getElementById('seglength').value = (length).toFixed(3);
       } else if (type === 'rectangle' || type === 'polygon') {
         const bounds = layer.getBounds();
         const width = bounds.getNorthEast().distanceTo(bounds.getNorthWest());
         const height = bounds.getNorthEast().distanceTo(bounds.getSouthEast());
-        document.getElementById('seglength').value = Math.max(width, height).toFixed(2);
-        document.getElementById('segwidth').value = Math.min(width, height).toFixed(2);
+        document.getElementById('seglength').value = Math.max(width, height).toFixed(3);
+        document.getElementById('segwidth').value = Math.min(width, height).toFixed(3);
       }
       
       // Auto-focus on species field for quick data entry
@@ -6156,9 +6215,12 @@
       
       console.log('🔄 Re-enabling drawing tool:', lastDrawingTool);
       
-      // Use a small delay to ensure the previous drawing is fully processed
-      // and doesn't interfere with focus management
+      // Use a longer delay to ensure focus has been set on species field first
+      // The species field focus happens at 100ms, so we wait 250ms to avoid stealing focus
       setTimeout(() => {
+        // Store the currently focused element
+        const activeElement = document.activeElement;
+        
         // Get the appropriate draw handler based on tool type
         let drawHandler;
         let buttonClass;
@@ -6189,7 +6251,16 @@
         
         console.log('✅ Drawing tool re-enabled:', lastDrawingTool);
         
-      }, 150); // Small delay to ensure smooth transition
+        // Restore focus to the species field if it was focused
+        if (activeElement && activeElement.id === 'spcode') {
+          // Use a tiny delay to ensure the drawing handler is fully enabled
+          setTimeout(() => {
+            activeElement.focus();
+            console.log('🔍 Focus restored to species field');
+          }, 10);
+        }
+        
+      }, 250); // Longer delay to ensure species field gets focus first
     }
     
     // Save annotation (File Mode - no database)
@@ -6278,6 +6349,13 @@
         
         // Update table
         updateAnnotationTable();
+        
+        // Add click handler for editing (same as loaded annotations)
+        layer.off('click'); // Remove any existing handlers
+        layer.on('click', function(e) {
+          L.DomEvent.stopPropagation(e);
+          showAnnotationPopup(layer, e.latlng);
+        });
         
         // Add label if labels are enabled
         if (labelsVisible) {
