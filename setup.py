@@ -44,7 +44,12 @@ setup(
             "cat-server=cat.cli:main",
             "cat-convert=cat.cli:convert_cog",
             "cat-batch-convert=cat.cli:batch_convert",
+            "cat-create-shortcuts=cat.shortcuts:main_create",
+            "cat-remove-shortcuts=cat.shortcuts:main_remove",
         ],
+    },
+    extras_require={
+        "shortcuts": ["pyshortcuts>=1.9.0"],
     },
     include_package_data=True,
     package_data={

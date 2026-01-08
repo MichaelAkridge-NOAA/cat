@@ -58,7 +58,7 @@ Perfect for field research environments where simplicity, speed, and reliability
 pip install coral-annotation-tool
 ```
 
-**Option 2: Install from source**
+**Option 2: Install from source (Local Development)**
 
 ```bash
 git clone https://github.com/MichaelAkridge-NOAA/cat
@@ -75,6 +75,43 @@ cat
 ```
 
 The application will be available at: **http://localhost:8000**
+
+**Optional: Create Desktop Shortcuts**
+
+For easier access, create desktop and start menu shortcuts:
+
+**If installed from PyPI:**
+```bash
+# Install shortcut support (one-time)
+pip install coral-annotation-tool[shortcuts]
+
+# Create shortcuts
+cat-create-shortcuts
+```
+
+**If installed locally (from source):**
+```bash
+# Install with shortcut support
+pip install -e .[shortcuts]
+
+# Create shortcuts
+cat-create-shortcuts
+
+# Or use the helper scripts in the repo:
+# Windows: Double-click create_shortcuts.bat
+# Mac/Linux: ./create_shortcuts.sh
+```
+
+**Remove shortcuts (if needed):**
+```bash
+cat-remove-shortcuts
+```
+
+After creating shortcuts, you can launch CAT from:
+- Desktop icon
+- Start Menu (Windows) or Applications (Mac/Linux)
+- Command line: `cat`
+
 ---
 
 ## Usage

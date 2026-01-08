@@ -7,6 +7,15 @@ __version__ = "1.0.0"
 __author__ = "Michael Akridge"
 __description__ = "CAT: Coral Annotation Tool for SfM orthomosaic imagery coral reef annotation and visualization."
 
-from cat.server import app
+# Lazy import to avoid triggering server initialization on package import
+def _get_app():
+    from cat.server import app
+    return app
 
-__all__ = ["app", "__version__"]
+# For backwards compatibility
+def __getattr__(name):
+    if name == "app":
+        return _get_app()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
+__all__ = ["__version__"]

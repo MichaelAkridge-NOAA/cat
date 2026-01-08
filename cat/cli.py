@@ -5,6 +5,20 @@ import sys
 import argparse
 from pathlib import Path
 import uvicorn
+import webbrowser
+import threading
+import time
+
+
+def open_browser(url, delay=1.5):
+    """Open browser after a delay to ensure server is ready"""
+    def _open():
+        time.sleep(delay)
+        print(f"\n🌐 Opening browser: {url}")
+        webbrowser.open(url)
+    
+    thread = threading.Thread(target=_open, daemon=True)
+    thread.start()
 
 
 def main():
@@ -33,6 +47,11 @@ def main():
         default="data",
         help="Data directory path (default: data)"
     )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Don't automatically open browser"
+    )
     
     args = parser.parse_args()
     
@@ -54,8 +73,15 @@ def main():
     print(f"🌐 Web Interface: http://localhost:{args.port}")
     print(f"📚 API Documentation: http://localhost:{args.port}/docs")
     print()
+    print("💡 Tip: Create desktop shortcuts with: cat-create-shortcuts")
+    print()
     print("Press Ctrl+C to stop the server")
     print()
+    
+    # Open browser automatically unless disabled
+    if not args.no_browser:
+        url = f"http://localhost:{args.port}"
+        open_browser(url, delay=1.5)
     
     # Start server
     uvicorn.run(

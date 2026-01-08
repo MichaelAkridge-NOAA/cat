@@ -48,6 +48,9 @@ dev = [
   "black>=23.0.0",
   "flake8>=6.0.0",
 ]
+shortcuts = [
+  "pyshortcuts>=1.9.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/MichaelAkridge-NOAA/cat"
@@ -60,6 +63,8 @@ cat = "cat.cli:main"
 cat-server = "cat.cli:main"
 cat-convert = "cat.cli:convert_cog"
 cat-batch-convert = "cat.cli:batch_convert"
+cat-create-shortcuts = "cat.shortcuts:main_create"
+cat-remove-shortcuts = "cat.shortcuts:main_remove"
 
 [tool.setuptools]
 packages = ["cat", "cat.api"]
