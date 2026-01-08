@@ -2356,7 +2356,7 @@
         const layer = L.geoJSON(ann.geometry, {
           style: {
             color: '#3388ff',
-            weight: 2,
+            weight: 7,  // Use 7px line weight for consistency
             opacity: 0.8,
             fillOpacity: 0.3
           }
@@ -3278,7 +3278,7 @@
         polyline: {
           shapeOptions: {
             color: '#f357a1',
-            weight: 3
+            weight: 7  // Match default annotation line weight
           },
           maxPoints: 2,  // Only allow straight line (2 points)
           showLength: true,  // Show length measurement
@@ -3288,14 +3288,14 @@
           allowIntersection: false,
           shapeOptions: {
             color: '#667eea',
-            weight: 2,
+            weight: 7,  // Match default annotation line weight
             fillOpacity: 0.3
           }
         },
         rectangle: {
           shapeOptions: {
             color: '#f59e0b',
-            weight: 2,
+            weight: 7,  // Match default annotation line weight
             fillOpacity: 0.3
           }
         },
@@ -5764,14 +5764,9 @@
           speciesField.focus();
           console.log('✅ Auto-focused on species field');
           
-          // Re-enable drawing tool AFTER focusing on species field
-          // This allows the user to draw another shape immediately after completing one
-          // while maintaining focus on the form for quick data entry
-          reEnableDrawingTool();
+          // Don't re-enable drawing tool here - wait until after Save button is clicked
+          // This prevents interference with form focus and user input
         }, 100); // Small delay to ensure form is ready
-      } else {
-        // If species field not found, still re-enable the tool
-        reEnableDrawingTool();
       }
     });
     
@@ -6446,6 +6441,13 @@
         
         showStatus(`✅ Annotation saved! Total: ${annotations.length} (${formatTime(annotationTimeSeconds)})`, 'success');
         console.log('💾 Annotation saved to local array:', annotationData);
+        
+        // Re-enable the drawing tool AFTER save to keep workflow going
+        // This is better than re-enabling immediately after drawing, as it allows
+        // the user to fill out the form without the drawing tool interfering with clicks
+        setTimeout(() => {
+          reEnableDrawingTool();
+        }, 150); // Small delay to ensure form focus is set first
         
         // Re-enable the drawing tool to keep workflow going
         reEnableDrawingTool();
