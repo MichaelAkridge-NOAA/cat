@@ -124,8 +124,13 @@ def remove_shortcuts():
         import pyshortcuts
         
         shortcut_name = "CAT: Coral Annotation Tool"
-        # pyshortcuts sanitizes the name - colons and some chars become underscores
-        sanitized_name = "CAT_-_Coral_Annotation_Tool"
+        # pyshortcuts sanitizes the name differently in different contexts
+        # It can be any of these variations
+        sanitized_names = [
+            "CAT_-_Coral_Annotation_Tool",  # With dash-underscore-dash
+            "CAT_Coral_Annotation_Tool",     # Without the middle separators
+            "CAT__Coral_Annotation_Tool",    # Double underscore
+        ]
         
         print("🔧 Removing shortcuts...")
         
@@ -139,13 +144,18 @@ def remove_shortcuts():
             except AttributeError:
                 startmenu_path = Path.home() / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs"
             
-            # Check for both original and sanitized names
+            # Check for original name and all sanitized variations
             shortcuts = [
                 desktop_path / f"{shortcut_name}.lnk",
-                desktop_path / f"{sanitized_name}.lnk",
                 startmenu_path / f"{shortcut_name}.lnk",
-                startmenu_path / f"{sanitized_name}.lnk"
             ]
+            
+            # Add all sanitized variations
+            for sanitized_name in sanitized_names:
+                shortcuts.extend([
+                    desktop_path / f"{sanitized_name}.lnk",
+                    startmenu_path / f"{sanitized_name}.lnk"
+                ])
             
             # Also remove the batch launcher
             batch_file = Path.home() / ".cat" / "launch_cat.bat"
@@ -156,10 +166,15 @@ def remove_shortcuts():
         elif sys.platform == "darwin":
             shortcuts = [
                 desktop_path / f"{shortcut_name}.app",
-                desktop_path / f"{sanitized_name}.app",
                 Path.home() / "Applications" / f"{shortcut_name}.app",
-                Path.home() / "Applications" / f"{sanitized_name}.app"
             ]
+            
+            # Add all sanitized variations
+            for sanitized_name in sanitized_names:
+                shortcuts.extend([
+                    desktop_path / f"{sanitized_name}.app",
+                    Path.home() / "Applications" / f"{sanitized_name}.app"
+                ])
             
             # Also remove the shell script launcher
             script_file = Path.home() / ".cat" / "launch_cat.sh"
@@ -170,10 +185,15 @@ def remove_shortcuts():
         else:  # Linux
             shortcuts = [
                 desktop_path / f"{shortcut_name}.desktop",
-                desktop_path / f"{sanitized_name}.desktop",
-                Path.home() / ".local" / "share" / "applications" / f"{shortcut_name}.desktop",
-                Path.home() / ".local" / "share" / "applications" / f"{sanitized_name}.desktop"
+                Path.home() / ".local" / "share" / "applications" / f"{shortcut_name}.desktop"
             ]
+            
+            # Add all sanitized variations
+            for sanitized_name in sanitized_names:
+                shortcuts.extend([
+                    desktop_path / f"{sanitized_name}.desktop",
+                    Path.home() / ".local" / "share" / "applications" / f"{sanitized_name}.desktop"
+                ])
             
             # Also remove the shell script launcher
             script_file = Path.home() / ".cat" / "launch_cat.sh"
