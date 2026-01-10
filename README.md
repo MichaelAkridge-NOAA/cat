@@ -1,8 +1,7 @@
 # CAT: Coral Annotation Tool
 <a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="https://github.com/MichaelAkridge-NOAA/cat/raw/main/docs/logo.png" align="right" alt="logo" width="400"/></a>
   **C**oral **A**nnotation **T**ool - File-based , Structure from Motion (SfM) Orthomosaic coral reef annotation and visualization tool to support coral reef research.
-
-> ⚠️ **Note: Under Active Development**: CAT is under active development. Features are being added regularly and some functionality may change. See the [Roadmap](#roadmap) section for planned improvements.
+### Try the Lite Version Demo: https://michaelakridge-noaa.github.io/cat-web-lite/
 
 ### About
 
@@ -11,7 +10,7 @@
 Perfect for field research environments where simplicity, speed, and reliability are essential.
 
 ### Features
-
+> ⚠️ **Note: Under Active Development**: CAT is under active development. Features are being added regularly and some functionality may change. See the [Roadmap](#roadmap) section for planned improvements.
 ### **Mapping & Visualization**
 - **Fast Streaming** - Dynamic tile generation for instant viewing (ala google maps but for orthomoasics)
 - **High Zoom Levels** - Zoom up to 2000x for pixel-level inspection
