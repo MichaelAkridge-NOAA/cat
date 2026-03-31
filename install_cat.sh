@@ -20,6 +20,7 @@ echo ""
 # Detect the actual user (not root even when using sudo)
 ACTUAL_USER="${SUDO_USER:-$USER}"
 ACTUAL_HOME=$(eval echo ~$ACTUAL_USER)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Detected user: $ACTUAL_USER"
 echo "Home directory: $ACTUAL_HOME"
@@ -32,11 +33,32 @@ CAT_DATA_DIR="$ACTUAL_HOME/cat_data"
 CAT_EXPORTS_DIR="$CAT_DATA_DIR/exports"
 CAT_REPO_URL="https://github.com/MichaelAkridge-NOAA/cat.git"
 
+copy_cat_source() {
+    local src_dir="$1"
+    local dst_dir="$2"
+
+    sudo -u "$ACTUAL_USER" mkdir -p "$dst_dir"
+
+    if command -v rsync >/dev/null 2>&1; then
+        sudo -u "$ACTUAL_USER" rsync -a --delete \
+            --exclude='.git' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='venv' \
+            "$src_dir/" "$dst_dir/"
+    else
+        sudo -u "$ACTUAL_USER" bash -c "cd \"$src_dir\" && tar --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' -cf - . | (cd \"$dst_dir\" && tar -xf -)"
+    fi
+}
+
 # =============================================================================
 # Step 1: Update system and install prerequisites
 # =============================================================================
 echo "[Step 1/10] Updating system and installing prerequisites..."
-sudo apt-get update
+if ! sudo apt-get update; then
+    echo "  ⚠️  apt-get update failed (often due to third-party repositories)."
+    echo "     Continuing with package installation using current package indexes..."
+fi
 sudo apt-get install -y \
     apt-transport-https \
     ca-certificates \
@@ -84,38 +106,60 @@ echo "[Step 3/10] Creating directory structure..."
 sudo -u "$ACTUAL_USER" mkdir -p "$CAT_INSTALL_DIR"
 sudo -u "$ACTUAL_USER" mkdir -p "$CAT_EXPORTS_DIR"
 sudo -u "$ACTUAL_USER" mkdir -p "$CAT_DATA_DIR/reference"
-sudo -u "$ACTUAL_USER" mkdir -p "$CAT_INSTALL_DIR/oracle-data"
 echo "  ✓ Directories created:"
 echo "    - Install: $CAT_INSTALL_DIR"
 echo "    - Data: $CAT_DATA_DIR"
 echo "    - Exports: $CAT_EXPORTS_DIR"
-echo "    - Oracle: $CAT_INSTALL_DIR/oracle-data (bind mount)"
 
 # =============================================================================
 # Step 4: Clone CAT repository from cat_db branch
 # =============================================================================
 echo "[Step 4/10] Cloning CAT application from $CAT_BRANCH branch..."
 
-if [ ! -d "$CAT_INSTALL_DIR/.git" ]; then
-    echo "  Cloning CAT repository (branch: $CAT_BRANCH)..."
-    sudo -u "$ACTUAL_USER" git clone -b "$CAT_BRANCH" "$CAT_REPO_URL" "$CAT_INSTALL_DIR" || {
-        echo "  ERROR: Failed to clone repository"
-        echo "  Trying fallback: copy from current directory..."
-        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        if [ "$SCRIPT_DIR" != "$CAT_INSTALL_DIR" ]; then
-            sudo -u "$ACTUAL_USER" rsync -av --exclude='.git' --exclude='__pycache__' \
-                --exclude='*.pyc' --exclude='venv' --exclude='data/*' \
-                --exclude='oracle-data' \
-                "$SCRIPT_DIR/" "$CAT_INSTALL_DIR/"
-        fi
+if [ "$SCRIPT_DIR" = "$CAT_INSTALL_DIR" ] && [ -f "$CAT_INSTALL_DIR/docker-compose.cat.yml" ]; then
+    echo "  Install directory is already the CAT source directory"
+elif [ -f "$SCRIPT_DIR/docker-compose.cat.yml" ]; then
+    echo "  Using local CAT source from: $SCRIPT_DIR"
+    copy_cat_source "$SCRIPT_DIR" "$CAT_INSTALL_DIR" || {
+        echo "  ERROR: Failed to copy CAT files from local source"
+        exit 1
     }
-else
+elif [ -d "$CAT_INSTALL_DIR/.git" ]; then
     echo "  Repository already exists, pulling latest from $CAT_BRANCH..."
     cd "$CAT_INSTALL_DIR"
     sudo -u "$ACTUAL_USER" git fetch origin
     sudo -u "$ACTUAL_USER" git checkout "$CAT_BRANCH"
     sudo -u "$ACTUAL_USER" git pull origin "$CAT_BRANCH"
+elif [ -d "$CAT_INSTALL_DIR" ] && [ -n "$(ls -A "$CAT_INSTALL_DIR" 2>/dev/null)" ]; then
+    echo "  Install directory is not empty; cloning to a temporary directory first..."
+    TMP_CLONE_DIR="$(mktemp -d)"
+    sudo -u "$ACTUAL_USER" git clone -b "$CAT_BRANCH" "$CAT_REPO_URL" "$TMP_CLONE_DIR/cat" || {
+        echo "  ERROR: Failed to clone repository"
+        rm -rf "$TMP_CLONE_DIR"
+        exit 1
+    }
+    copy_cat_source "$TMP_CLONE_DIR/cat" "$CAT_INSTALL_DIR" || {
+        echo "  ERROR: Failed to copy cloned CAT files"
+        rm -rf "$TMP_CLONE_DIR"
+        exit 1
+    }
+    rm -rf "$TMP_CLONE_DIR"
+else
+    echo "  Cloning CAT repository (branch: $CAT_BRANCH)..."
+    sudo -u "$ACTUAL_USER" git clone -b "$CAT_BRANCH" "$CAT_REPO_URL" "$CAT_INSTALL_DIR" || {
+        echo "  ERROR: Failed to clone repository"
+        exit 1
+    }
 fi
+
+sudo -u "$ACTUAL_USER" mkdir -p "$CAT_INSTALL_DIR/oracle-data"
+
+if [ ! -f "$CAT_INSTALL_DIR/docker-compose.cat.yml" ]; then
+    echo "  ERROR: docker-compose.cat.yml not found in $CAT_INSTALL_DIR"
+    echo "         Verify the source branch and rerun the installer."
+    exit 1
+fi
+
 echo "  ✓ CAT files ready"
 
 # =============================================================================
@@ -132,7 +176,7 @@ if [ ! -f .env ]; then
         echo "      Location: $CAT_INSTALL_DIR/.env"
     else
         echo "  Creating .env file..."
-        sudo -u "$ACTUAL_USER" cat > .env << 'ENVFILE'
+        sudo -u "$ACTUAL_USER" tee .env > /dev/null << 'ENVFILE'
 # Oracle Database (root password)
 ORACLE_PASSWORD=ChangeMe123
 
