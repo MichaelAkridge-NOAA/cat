@@ -592,6 +592,9 @@ done
 # Check service status
 if [ "$APP_READY" = true ]; then
     echo "  ✓ CAT services started successfully"
+    echo "  Triggering site reference data seed..."
+    curl -sf -X POST "http://localhost:${CAT_HOST_PORT:-8000}/api/sites/seed" \
+        -o /dev/null && echo "  ✓ Site data seeded" || echo "  ⚠️  Seed endpoint not reachable yet (will auto-seed on next restart)"
 else
     echo "  ⚠️  CAT health endpoint not reachable yet. Check with: $CAT_INSTALL_DIR/cat-status.sh"
 fi

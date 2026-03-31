@@ -103,108 +103,16 @@ except Exception as e:
 # =============================================================================
 ingest_reference_data() {
     echo "[3/3] Loading reference data..."
-    
+
     python -c "
-import os
-import csv
-from pathlib import Path
-
-from cat.db.oracle import fetch_all, execute_many
-
-REFERENCE_DIR = Path('/app/cat/data/reference')
-
-def count_rows(table_name):
-    try:
-        result = fetch_all(f'SELECT COUNT(*) as cnt FROM {table_name}')
-        return result[0]['cnt'] if result else 0
-    except Exception:
-        return 0
-
-def ingest_sites():
-    '''Ingest site_list.csv into cat_sites'''
-    csv_path = REFERENCE_DIR / 'site_list.csv'
-    if not csv_path.exists():
-        print('  - site_list.csv not found, skipping')
-        return
-    
-    existing = count_rows('cat_sites')
-    if existing > 0:
-        print(f'  - cat_sites: {existing} rows (already populated)')
-        return
-    
-    with open(csv_path, 'r', encoding='utf-8-sig') as f:
-        reader = csv.DictReader(f)
-        rows = []
-        for row in reader:
-            rows.append({
-                'site_name': row.get('SITE', row.get('site', row.get('site_name', ''))),
-                'depth_bin': row.get('DEPTH_BIN', row.get('depth_bin', '')),
-                'region': row.get('REGION', row.get('region', '')),
-                'cog_uri': row.get('COG_URI', row.get('cog_uri', ''))
-            })
-        
-        if rows:
-            sql = '''
-                INSERT INTO cat_sites (site_name, depth_bin, region, cog_uri)
-                VALUES (:site_name, :depth_bin, :region, :cog_uri)
-            '''
-            execute_many(sql, rows)
-            print(f'  - cat_sites: {len(rows)} rows ingested')
-
-def ingest_site_visits():
-    '''Ingest site_visit_info.csv into cat_site_visits'''
-    csv_path = REFERENCE_DIR / 'site_visit_info.csv'
-    if not csv_path.exists():
-        print('  - site_visit_info.csv not found, skipping')
-        return
-    
-    existing = count_rows('cat_site_visits')
-    if existing > 0:
-        print(f'  - cat_site_visits: {existing} rows (already populated)')
-        return
-    
-    with open(csv_path, 'r', encoding='utf-8-sig') as f:
-        # Skip the first row (sub-category headers)
-        next(f)
-        reader = csv.DictReader(f)
-        rows = []
-        for row in reader:
-            # Get site name - column is 'Site' (capital S)
-            site_name = row.get('Site', row.get('site', '')).strip()
-            # Skip rows with empty site name
-            if not site_name:
-                continue
-            rows.append({
-                'site_name': site_name,
-                'survey_date': row.get('Survey Date', row.get('survey_date', '')),
-                'cruise_leg': row.get('Cruise Leg', row.get('cruise_leg', '')),
-                'photographer': row.get('Photographer', row.get('photographer', '')),
-                'team': row.get('Team', row.get('team', '')),
-                'region': row.get('Region', row.get('region', '')),
-                'island': row.get('Island', row.get('island', '')),
-                'sector': row.get('Sector', row.get('sector', '')),
-                'latitude': float(row.get('Lat (N)', 0) or 0) if row.get('Lat (N)') else None,
-                'longitude': float(row.get('Long (E)', 0) or 0) if row.get('Long (E)') else None,
-                'survey_type': row.get('Survey Type', row.get('survey_type', '')),
-                'notes': row.get('Notes', row.get('notes', ''))
-            })
-        
-        if rows:
-            sql = '''
-                INSERT INTO cat_site_visits 
-                (site_name, survey_date, cruise_leg, photographer, team, 
-                 region, island, sector, latitude, longitude, survey_type, notes)
-                VALUES 
-                (:site_name, :survey_date, :cruise_leg, :photographer, :team,
-                 :region, :island, :sector, :latitude, :longitude, :survey_type, :notes)
-            '''
-            execute_many(sql, rows)
-            print(f'  - cat_site_visits: {len(rows)} rows ingested')
-
+from cat.db.sites import seed_sites_from_csv, count_db_sites
 try:
-    ingest_sites()
-    ingest_site_visits()
-    print('  ✓ Reference data ready')
+    existing = count_db_sites()
+    result = seed_sites_from_csv()
+    if existing == 0:
+        print(f'  ✓ Reference data seeded: {result[\"sites_seeded\"]} sites, {result[\"visits_seeded\"]} visits')
+    else:
+        print(f'  ✓ Reference data refreshed (upsert): {result[\"sites_seeded\"]} sites, {result[\"visits_seeded\"]} visits')
 except Exception as e:
     print(f'  ⚠ Reference data ingestion warning: {e}')
 "

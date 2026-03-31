@@ -251,15 +251,12 @@ async def lifespan(app: FastAPI):
                 logger.info("Oracle schema bootstrap complete. tables=%s", ",".join(tables))
                 try:
                     from cat.db.sites import count_db_sites, seed_sites_from_csv
-                    if count_db_sites() == 0:
-                        seed_result = seed_sites_from_csv()
-                        logger.info(
-                            "Site reference data auto-seeded: %d sites, %d visits.",
-                            seed_result["sites_seeded"],
-                            seed_result["visits_seeded"],
-                        )
-                    else:
-                        logger.info("Site reference data already present in DB, skipping auto-seed.")
+                    seed_result = seed_sites_from_csv()
+                    logger.info(
+                        "Site reference data seeded (upsert): %d sites, %d visits.",
+                        seed_result["sites_seeded"],
+                        seed_result["visits_seeded"],
+                    )
                 except Exception as seed_exc:
                     logger.warning("Site auto-seed failed (non-fatal): %s", seed_exc)
         except Exception as exc:
