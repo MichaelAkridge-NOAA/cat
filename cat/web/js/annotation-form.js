@@ -373,18 +373,17 @@ async function saveAnnotation() {
   // Build annotation data
   const annotationData = buildAnnotationData(geometry, currentAnnotation.type, annotationTimeSeconds);
   
+  // Set initial sync status; capture layer ref before any async operations (Fix 1b, 1e)
+  annotationData._syncStatus = 'pending';
+  const savedLayer = layer;
+
   try {
     // Attach data to layer
     layer.annotationData = annotationData;
     
-    // Change layer style from drawing color to saved annotation color
+    // Change layer style from drawing color to saved annotation color (orange if incomplete)
     if (layer.setStyle) {
-      layer.setStyle({
-        color: '#3388ff',  // Standard blue for saved annotations
-        weight: 7,
-        opacity: 0.8,
-        fillOpacity: 0.3
-      });
+      layer.setStyle(getAnnotationLayerStyle(annotationData));
     }
     
     // Add to project
@@ -426,12 +425,22 @@ async function saveAnnotation() {
     if (typeof isOracleProjectMode === 'function' && isOracleProjectMode() && typeof syncAnnotationToDb === 'function') {
       try {
         const synced = await syncAnnotationToDb(annotationData);
+        synced._syncStatus = 'synced';
         applySyncedAnnotation(savedIndex, synced);
-        layer.annotationData = synced;
+        savedLayer.annotationData = synced; // direct layer ref — reliable even after rapid annotation (Fix 1b)
+        // Push to undo stack after successful DB sync (5d)
+        if (typeof undoPushAdd === 'function') undoPushAdd(synced, savedLayer);
       } catch (dbError) {
         console.error('DB annotation create failed:', dbError);
+        annotationData._syncStatus = 'error';
+        savedLayer.annotationData = annotationData;
         showStatus(`⚠️ Saved locally, DB sync failed: ${dbError.message}`, 'error');
+        // Still push to undo stack for local-only add (5d)
+        if (typeof undoPushAdd === 'function') undoPushAdd(annotationData, savedLayer);
       }
+    } else {
+      // Non-Oracle mode: push immediately
+      if (typeof undoPushAdd === 'function') undoPushAdd(annotationData, savedLayer);
     }
     
     // Show success
@@ -569,6 +578,24 @@ function clearAnnotationForm() {
 }
 
 /**
+ * Returns true if the annotation has the minimum required fields filled in.
+ * Primary requirement: spcode must be set and non-trivial.
+ */
+function isAnnotationComplete(ann) {
+  const sp = ann?.spcode;
+  return sp && sp !== '-' && sp.trim() !== '';
+}
+
+/**
+ * Return the Leaflet style for a layer based on annotation completeness.
+ */
+function getAnnotationLayerStyle(ann) {
+  return isAnnotationComplete(ann)
+    ? { color: '#3388ff', weight: 7, opacity: 0.8, fillOpacity: 0.3 }
+    : { color: '#e67e22', weight: 7, opacity: 0.9, fillOpacity: 0.25, dashArray: '6 4' };
+}
+
+/**
  * Update annotation table display
  */
 function updateAnnotationTable() {
@@ -583,9 +610,39 @@ function updateAnnotationTable() {
   if (countSpan) {
     countSpan.textContent = projectAnnotations.length;
   }
+
+  // Update incomplete count badge
+  const incompleteCount = projectAnnotations.filter(a => !isAnnotationComplete(a)).length;
+  let incompleteBadge = document.getElementById('incompleteCountBadge');
+  if (!incompleteBadge) {
+    const filterDiv = document.getElementById('annotationTableFilter')?.parentElement;
+    if (filterDiv) {
+      incompleteBadge = document.createElement('span');
+      incompleteBadge.id = 'incompleteCountBadge';
+      incompleteBadge.style.cssText = 'font-size:11px;margin-left:8px;padding:2px 6px;border-radius:10px;display:none;';
+      filterDiv.appendChild(incompleteBadge);
+    }
+  }
+  if (incompleteBadge) {
+    if (incompleteCount > 0) {
+      incompleteBadge.textContent = `⚠️ ${incompleteCount} missing species`;
+      incompleteBadge.style.display = 'inline';
+      incompleteBadge.style.background = 'rgba(230,126,34,0.15)';
+      incompleteBadge.style.color = '#c0392b';
+    } else if (projectAnnotations.length > 0) {
+      incompleteBadge.textContent = '✅ All complete';
+      incompleteBadge.style.display = 'inline';
+      incompleteBadge.style.background = 'rgba(40,167,69,0.1)';
+      incompleteBadge.style.color = '#28a745';
+    } else {
+      incompleteBadge.style.display = 'none';
+    }
+  }
   
-  // Clear table
+  // Clear table and reset any active filter (Fix 3c)
   tbody.innerHTML = '';
+  const filterInput = document.getElementById('annotationTableFilter');
+  if (filterInput) filterInput.value = '';
   
   if (projectAnnotations.length === 0) {
     tbody.innerHTML = `
@@ -599,17 +656,39 @@ function updateAnnotationTable() {
   }
   
   // Populate table
+  const oracleMode = typeof isOracleProjectMode === 'function' && isOracleProjectMode();
   projectAnnotations.forEach((ann, index) => {
     const row = document.createElement('tr');
     row.dataset.index = index;
-    
+
     // Store display index for reference
     ann._displayIndex = index + 1;
-    
+
     const colonyId = ann.colony_id || ann.no_colony || (index + 1);
-    
+
+    // Sync status indicator — only shown in Oracle mode (Fix 2b)
+    let syncDot = '';
+    if (oracleMode) {
+      const statusMap = {
+        synced:    { dot: '',  title: 'Synced',          color: '' },
+        pending:   { dot: '○', title: 'Pending sync',    color: '#888' },
+        dirty:     { dot: '●', title: 'Unsaved edit',    color: '#e67e22' },
+        error:     { dot: '⚠', title: 'Sync error',     color: '#e74c3c' },
+        conflict:  { dot: '⚡', title: 'Version conflict', color: '#9b59b6' },
+      };
+      const s = statusMap[ann._syncStatus];
+      if (s && s.dot) {
+        syncDot = `<span title="${s.title}" style="margin-left:4px;font-size:10px;color:${s.color};vertical-align:middle;">${s.dot}</span>`;
+      }
+    }
+
+    // Completeness indicator (5a)
+    const completeDot = isAnnotationComplete(ann)
+      ? ''
+      : `<span title="Missing species code" style="margin-left:3px;font-size:10px;color:#e67e22;vertical-align:middle;">⚠</span>`;
+
     row.innerHTML = `
-      <td><strong style="cursor: pointer; color: #1976d2;">${colonyId}</strong></td>
+      <td><strong style="cursor: pointer; color: #1976d2;">${colonyId}</strong>${syncDot}${completeDot}</td>
       <td style="display: none;">${ann.geometry?.type || 'Polygon'}</td>
       <td class="editable" data-field="site" data-index="${index}">${ann.site || '-'}</td>
       <td class="editable" data-field="spcode" data-index="${index}">${ann.spcode || '-'}</td>
@@ -673,6 +752,8 @@ function applySyncedAnnotation(index, syncedAnnotation) {
     if (!layer.annotationData) return;
     if (layer.annotationData._displayIndex === index + 1 || layer.annotationData === syncedAnnotation) {
       layer.annotationData = syncedAnnotation;
+      // Refresh map style to reflect completeness (5a)
+      if (layer.setStyle) layer.setStyle(getAnnotationLayerStyle(syncedAnnotation));
     }
   });
 }
@@ -689,8 +770,19 @@ async function syncAnnotationIndexToDb(index) {
   const annotation = projectAnnotations[index];
   if (!annotation) return;
 
-  const synced = await syncAnnotationToDb(annotation);
-  applySyncedAnnotation(index, synced);
+  try {
+    const synced = await syncAnnotationToDb(annotation);
+    synced._syncStatus = 'synced';
+    applySyncedAnnotation(index, synced);
+  } catch (err) {
+    if (err.isConflict) {
+      annotation._syncStatus = 'conflict';
+      updateAnnotationTable();
+      showStatus(`⚠️ Conflict: ${err.message}`, 'error');
+      return;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -790,14 +882,17 @@ function selectAnnotationForEdit(index) {
  */
 async function deleteAnnotation(index) {
   if (!confirm('Delete this annotation?')) return;
-  
+
   const projectAnnotations = getProjectAnnotations();
   const ann = projectAnnotations[index];
-  
+
   if (!ann) return;
 
-  // In Oracle mode, delete from DB first
-  if (typeof isOracleProjectMode === 'function' && isOracleProjectMode() && typeof deleteAnnotationFromDb === 'function') {
+  // In Oracle mode, delete from DB first.
+  // Skip if annotation never reached the DB (pending/error status means no DB record exists). (Fix 1e)
+  const needsDbDelete = ann._dbAnnotationId && ann._syncStatus !== 'pending' && ann._syncStatus !== 'error';
+  const isOracle = typeof isOracleProjectMode === 'function' && isOracleProjectMode();
+  if (needsDbDelete && isOracle && typeof deleteAnnotationFromDb === 'function') {
     try {
       await deleteAnnotationFromDb(ann);
     } catch (dbError) {
@@ -806,26 +901,25 @@ async function deleteAnnotation(index) {
       return;
     }
   }
-  
-  // Find and remove layer from map
+
+  // Capture layer geometry for potential undo
   const drawnItems = getDrawnItems();
   let targetLayer = null;
-  
-  // Use same matching logic as selectAnnotationForEdit
   drawnItems.eachLayer(layer => {
     if (layer.annotationData) {
-      // Match by reference (for new annotations) or by _displayIndex (for loaded annotations)
-      if (layer.annotationData === ann || 
+      if (layer.annotationData === ann ||
           (layer.annotationData._displayIndex && layer.annotationData._displayIndex === index + 1)) {
         targetLayer = layer;
       }
     }
   });
-  
+
+  // Snapshot data for undo before removal
+  const deletedAnn = { ...ann };
+  const deletedGeometry = targetLayer ? targetLayer.toGeoJSON() : null;
+
   if (targetLayer) {
     const layerId = targetLayer._leaflet_id;
-    
-    // Remove label if exists
     if (window.annotationLabels && window.annotationLabels.has(layerId)) {
       const label = window.annotationLabels.get(layerId);
       if (window.map && window.map.hasLayer(label)) {
@@ -833,18 +927,85 @@ async function deleteAnnotation(index) {
       }
       window.annotationLabels.delete(layerId);
     }
-    
-    // Remove layer from map
     drawnItems.removeLayer(targetLayer);
   }
-  
-  // Remove from project
+
   removeAnnotationFromProject(index);
-  
-  // Update table
   updateAnnotationTable();
-  
-  showStatus('🗑️ Annotation deleted', 'success');
+
+  // Show undo toast (Oracle mode only — soft delete is reversible)
+  if (isOracle && needsDbDelete && deletedAnn._dbAnnotationId) {
+    _showDeleteUndoToast(deletedAnn, deletedGeometry);
+  } else {
+    showStatus('🗑️ Annotation deleted', 'success');
+  }
+}
+
+/**
+ * Show a 5-second undo toast after an Oracle soft-delete
+ */
+function _showDeleteUndoToast(deletedAnn, deletedGeometry) {
+  // Remove any existing undo toast
+  const existing = document.getElementById('deleteUndoToast');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.id = 'deleteUndoToast';
+  toast.style.cssText = [
+    'position:fixed', 'bottom:80px', 'left:50%', 'transform:translateX(-50%)',
+    'background:#333', 'color:#fff', 'padding:10px 18px', 'border-radius:6px',
+    'z-index:9999', 'display:flex', 'align-items:center', 'gap:12px',
+    'font-size:14px', 'box-shadow:0 3px 10px rgba(0,0,0,0.4)'
+  ].join(';');
+
+  const msg = document.createElement('span');
+  msg.textContent = '🗑️ Annotation deleted';
+  toast.appendChild(msg);
+
+  const undoBtn = document.createElement('button');
+  undoBtn.textContent = 'Undo';
+  undoBtn.style.cssText = 'background:#4a9eff;border:none;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:13px;';
+  toast.appendChild(undoBtn);
+
+  document.body.appendChild(toast);
+
+  let undone = false;
+  const timeoutId = setTimeout(() => {
+    if (!undone) toast.remove();
+  }, 5000);
+
+  undoBtn.addEventListener('click', async () => {
+    undone = true;
+    clearTimeout(timeoutId);
+    toast.remove();
+    try {
+      const restored = await restoreAnnotationInDb(deletedAnn._dbAnnotationId);
+      // Re-add to projectAnnotations and map
+      const projectAnnotations = getProjectAnnotations();
+      const newIndex = projectAnnotations.length;
+      restored._displayIndex = newIndex + 1;
+      projectAnnotations.push(restored);
+
+      if (deletedGeometry && typeof L !== 'undefined') {
+        const drawnItems = getDrawnItems();
+        const layer = L.geoJSON(restored.geometry || deletedGeometry.geometry || deletedGeometry, {
+          pane: 'annotationsPane',
+          style: { color: '#3388ff', weight: 7, opacity: 0.8, fillOpacity: 0.3 }
+        }).getLayers()[0];
+        if (layer) {
+          layer.annotationData = restored;
+          layer.on('click', function(e) { showAnnotationPopup(layer, e.latlng); });
+          drawnItems.addLayer(layer);
+        }
+      }
+
+      updateAnnotationTable();
+      showStatus('↩️ Annotation restored', 'success');
+    } catch (err) {
+      console.error('Restore failed:', err);
+      showStatus(`❌ Restore failed: ${err.message}`, 'error');
+    }
+  });
 }
 
 /**
@@ -854,6 +1015,8 @@ async function deleteAnnotation(index) {
 function makeTableCellEditable(cell) {
   // Don't allow editing if already editing
   if (cell.classList.contains('editing')) return;
+  // Don't allow inline edit while the full edit modal is open (Fix 1a)
+  if (document.getElementById('editModal')?.classList.contains('active')) return;
   
   const field = cell.dataset.field;
   const index = parseInt(cell.dataset.index);
@@ -898,8 +1061,10 @@ function makeTableCellEditable(cell) {
   
   // Save function
   const saveEdit = () => {
+    // Capture state before edit for undo (5d)
+    const prevAnnotation = { ...annotation };
     let newValue = inputElement.value.trim();
-    
+
     // Convert to appropriate type
     if (newValue === '' || newValue === '-') {
       delete annotation[field];
@@ -911,7 +1076,22 @@ function makeTableCellEditable(cell) {
         annotation[field] = newValue;
       }
     }
-    
+
+    // Keep nested .properties in sync for DB-loaded annotations (Fix 1d)
+    if (annotation.properties) {
+      if (newValue === '' || newValue === '-') {
+        delete annotation.properties[field];
+      } else {
+        annotation.properties[field] = annotation[field];
+      }
+    }
+
+    // Track sync status (Fix 1e)
+    annotation._syncStatus = 'dirty';
+
+    // Push to undo stack (5d)
+    if (typeof undoPushEdit === 'function') undoPushEdit(index, prevAnnotation, { ...annotation });
+
     // Update display
     cell.classList.remove('editing');
     updateAnnotationInProject(index, annotation);
@@ -1302,6 +1482,14 @@ function createInputForField(field, value) {
  * @param {number} index - Index of annotation in projectAnnotations array
  */
 function openEditModal(index) {
+  // Cancel any active inline cell edits before opening modal (Fix 1a)
+  document.querySelectorAll('td.editing').forEach(cell => {
+    cell.classList.remove('editing');
+    const ann = getProjectAnnotations()[parseInt(cell.dataset.index)];
+    const val = ann?.[cell.dataset.field];
+    cell.textContent = (val !== undefined && val !== null) ? String(val) : '-';
+  });
+
   const projectAnnotations = getProjectAnnotations();
   const annotation = projectAnnotations[index];
   if (!annotation) {
@@ -1672,7 +1860,10 @@ async function saveEditedAnnotation() {
   }
   
   const annotation = projectAnnotations[index];
-  
+
+  // Capture state before edits for undo (5d)
+  const prevAnnotation = { ...annotation };
+
   // Update annotation with form values
   annotation.analyst = document.getElementById('edit_analyst').value;
   annotation.obs_year = parseInt(document.getElementById('edit_obs_year').value);
@@ -1689,12 +1880,24 @@ async function saveEditedAnnotation() {
   
   // Add updated_at timestamp
   annotation.updated_at = new Date().toISOString();
-  
-  // Update the layer's annotationData
+
+  // Keep nested .properties in sync for DB-loaded annotations (Fix 1d)
+  if (annotation.properties) {
+    ['analyst', 'obs_year', 'mission_id', 'site', 'transect', 'segment',
+     'spcode', 'morph_code', 'old_dead', 'juvenile', 'juv_substrate', 'remnant', 'updated_at'].forEach(f => {
+      annotation.properties[f] = annotation[f];
+    });
+  }
+
+  // Track sync status (Fix 1e)
+  annotation._syncStatus = 'dirty';
+
+  // Update the layer's annotationData and refresh style for completeness (5a)
   drawnItems.eachLayer(layer => {
     if (layer.annotationData === annotation) {
       layer.annotationData = annotation;
-      
+      if (layer.setStyle) layer.setStyle(getAnnotationLayerStyle(annotation));
+
       // Update label if enabled
       if (labelsVisible) {
         addLabelToAnnotation(layer);
@@ -1714,21 +1917,47 @@ async function saveEditedAnnotation() {
   if (typeof isOracleProjectMode === 'function' && isOracleProjectMode()) {
     try {
       await syncAnnotationIndexToDb(index);
+      annotation._syncStatus = 'synced';
     } catch (dbError) {
       console.error('DB modal edit failed:', dbError);
       showStatus(`⚠️ Saved locally, DB sync failed: ${dbError.message}`, 'error');
     }
   }
-  
+
+  // Push to undo stack (5d)
+  if (typeof undoPushEdit === 'function') undoPushEdit(index, prevAnnotation, { ...annotation });
+
   // Close modal
   closeEditModal();
-  
+
   showStatus('✅ Annotation updated', 'success');
   console.log('✅ Saved annotation', index, annotation);
 }
 
+/**
+ * Filter annotation table rows by a query string (Fix 3c)
+ * Matches against spcode, site, analyst (case-insensitive)
+ */
+function filterAnnotationTable(query) {
+  const q = (query || '').trim().toLowerCase();
+  const rows = document.querySelectorAll('#annotationTableBody tr');
+  rows.forEach(row => {
+    if (!q) { row.style.display = ''; return; }
+    const index = parseInt(row.dataset.index);
+    if (isNaN(index)) { row.style.display = ''; return; }
+    const ann = getProjectAnnotations()[index];
+    if (!ann) { row.style.display = 'none'; return; }
+    const haystack = [ann.spcode, ann.site, ann.analyst, ann.mission_id, ann.transect]
+      .filter(Boolean).join(' ').toLowerCase();
+    row.style.display = haystack.includes(q) ? '' : 'none';
+  });
+}
+
 // Make functions globally accessible
+window.isAnnotationComplete = isAnnotationComplete;
+window.getAnnotationLayerStyle = getAnnotationLayerStyle;
 window.updateAnnotationTable = updateAnnotationTable;
+window.filterAnnotationTable = filterAnnotationTable;
 window.selectAnnotationForEdit = selectAnnotationForEdit;
 window.selectSpeciesByIndex = selectSpeciesByIndex;
 window.selectJuvSubstrateByIndex = selectJuvSubstrateByIndex;

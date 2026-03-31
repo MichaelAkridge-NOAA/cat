@@ -27,7 +27,7 @@ function normalizeAnnotationForDb(annotation) {
 
   const properties = ann.properties
     ? { ...ann.properties }
-    : Object.fromEntries(Object.entries(ann).filter(([k]) => !['geometry', 'feature', '_displayIndex', 'id'].includes(k)));
+    : Object.fromEntries(Object.entries(ann).filter(([k]) => !['geometry', 'feature', '_displayIndex', 'id', '_dbAnnotationId', '_localId', '_syncStatus', '_dbAnnotationVersion'].includes(k)));
 
   return {
     feature,
@@ -46,7 +46,9 @@ function normalizeDbAnnotationResponse(annotationRow) {
     properties,
     geometry,
     id: annotationRow?.annotation_id,
-    _dbAnnotationId: annotationRow?.annotation_id
+    _dbAnnotationId: annotationRow?.annotation_id,
+    _dbAnnotationVersion: annotationRow?.version ?? 1,
+    _syncStatus: 'synced' // loaded from DB — already in sync
   };
 }
 
@@ -133,19 +135,39 @@ async function loadProjectFromDatabase(projectId) {
 
   showProjectLoadingProgress('initializing');
 
-  const response = await fetch(`${window.location.origin}/api/db/projects/${numericId}/snapshot`);
+  // Phase 1: Fast load — project metadata, layers, assets (no annotations yet)
+  const response = await fetch(`${window.location.origin}/api/db/projects/${numericId}/snapshot?include_annotations=false`);
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
     throw new Error(err.detail || `Failed to load DB project ${numericId}`);
   }
 
   const snapshot = await response.json();
+  const annotationCount = snapshot.counts?.annotations ?? 0;
+
   const transformed = {
     project: transformDbSnapshotToProject(snapshot),
-    annotations: (snapshot.annotations || []).map(normalizeDbAnnotationResponse)
+    annotations: []
   };
 
   await loadProjectData(transformed);
+
+  // Phase 2: Load annotations separately with a progress indicator
+  if (annotationCount > 0) {
+    showProjectLoadingProgress('annotations', annotationCount);
+    try {
+      const annResp = await fetch(`${window.location.origin}/api/db/projects/${numericId}/annotations`);
+      if (annResp.ok) {
+        const annData = await annResp.json();
+        projectAnnotations = (annData.annotations || []).map(normalizeDbAnnotationResponse);
+        loadProjectAnnotations();
+      }
+    } catch (annErr) {
+      console.warn('Failed to load annotations from DB:', annErr);
+      showStatus('⚠️ Project loaded but annotations could not be fetched', 'error');
+    }
+    hideLoadingOverlay();
+  }
 
   // Initialize overlay layer controls for DB mode
   if (typeof initializeOverlayControls === 'function') {
@@ -162,13 +184,33 @@ async function loadProjectFromDatabase(projectId) {
     });
     if (sessionResp.ok) {
       const sessionData = await sessionResp.json();
+      const sessionId = sessionData.session?.session_id || null;
       if (typeof setCurrentDbSessionId === 'function') {
-        setCurrentDbSessionId(sessionData.session?.session_id || null);
+        setCurrentDbSessionId(sessionId);
+      }
+      // Heartbeat every 5 minutes to keep session alive
+      if (sessionId) {
+        _startSessionHeartbeat(numericId, sessionId);
       }
     }
   } catch (sessionErr) {
     console.warn('Could not start DB annotation session:', sessionErr);
   }
+}
+
+let _sessionHeartbeatIntervalId = null;
+
+function _startSessionHeartbeat(projectId, sessionId) {
+  if (_sessionHeartbeatIntervalId) clearInterval(_sessionHeartbeatIntervalId);
+  _sessionHeartbeatIntervalId = setInterval(async () => {
+    try {
+      await fetch(`${window.location.origin}/api/db/projects/${projectId}/sessions/${sessionId}/heartbeat`, {
+        method: 'POST'
+      });
+    } catch (err) {
+      console.warn('Session heartbeat failed:', err);
+    }
+  }, 5 * 60 * 1000); // 5 minutes
 }
 
 async function syncAnnotationToDb(annotation, assetId = null) {
@@ -183,15 +225,33 @@ async function syncAnnotationToDb(annotation, assetId = null) {
   }
 
   if (annotationId) {
+    const putBody = {
+      feature: payload.feature,
+      properties: payload.properties,
+      created_by: payload.created_by
+    };
+    if (annotation._dbAnnotationVersion != null) {
+      putBody.version = annotation._dbAnnotationVersion;
+    }
+
     const putResp = await fetch(`${window.location.origin}/api/db/projects/${projectId}/annotations/${annotationId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        feature: payload.feature,
-        properties: payload.properties,
-        created_by: payload.created_by
-      })
+      body: JSON.stringify(putBody)
     });
+
+    if (putResp.status === 409) {
+      const conflictData = await putResp.json().catch(() => ({}));
+      const serverVersion = conflictData.current_annotation?.version ?? '?';
+      // Return a conflict sentinel — callers should check _syncStatus
+      const current = conflictData.current_annotation
+        ? normalizeDbAnnotationResponse(conflictData.current_annotation)
+        : null;
+      const err = new Error(`Annotation #${annotationId} was modified by someone else (server version ${serverVersion}). Refresh to get the latest.`);
+      err.isConflict = true;
+      err.serverAnnotation = current;
+      throw err;
+    }
 
     if (!putResp.ok) {
       const errorData = await putResp.json().catch(() => ({}));
@@ -232,6 +292,23 @@ async function deleteAnnotationFromDb(annotation) {
     const errorData = await response.json().catch(() => ({}));
     throw new Error(errorData.detail || `Failed to delete DB annotation #${annotationId}`);
   }
+}
+
+async function restoreAnnotationInDb(annotationId) {
+  if (!isOracleProjectMode()) return;
+
+  const projectId = currentProject.project_id;
+  const response = await fetch(`${window.location.origin}/api/db/projects/${projectId}/annotations/${annotationId}/restore`, {
+    method: 'POST'
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to restore DB annotation #${annotationId}`);
+  }
+
+  const result = await response.json();
+  return normalizeDbAnnotationResponse(result.annotation);
 }
 
 async function refreshAnnotationsFromDb() {
@@ -291,25 +368,26 @@ async function loadProjectFromFile(file) {
  * Show project loading progress
  * @param {string} stage - Loading stage: 'parsing', 'processing', 'initializing', 'complete'
  */
-function showProjectLoadingProgress(stage) {
+function showProjectLoadingProgress(stage, count) {
   const overlay = document.getElementById('loadingOverlay');
   const loadingSpinner = overlay?.querySelector('.loading-spinner p');
-  
+
   if (!overlay) return;
-  
+
   overlay.classList.add('active');
-  
+
   const messages = {
     parsing: 'Parsing project file...',
     processing: 'Creating COG files (one-time process)...',
-    initializing: 'Loading map layers and annotations...',
+    initializing: 'Loading map layers...',
+    annotations: count ? `Loading ${count} annotation${count !== 1 ? 's' : ''}…` : 'Loading annotations…',
     complete: 'Project loaded successfully!'
   };
-  
+
   if (loadingSpinner) {
     loadingSpinner.textContent = messages[stage] || 'Loading...';
   }
-  
+
   if (stage === 'complete') {
     setTimeout(() => {
       overlay.classList.remove('active');
@@ -416,17 +494,7 @@ function loadProjectAnnotations() {
   console.log(`📥 Loading ${projectAnnotations.length} project annotations...`);
   
   projectAnnotations.forEach((ann, idx) => {
-    const layer = L.geoJSON(ann.geometry, {
-      pane: 'annotationsPane',
-      style: {
-        color: '#3388ff',
-        weight: 7,
-        opacity: 0.8,
-        fillOpacity: 0.3
-      }
-    }).getLayers()[0];
-    
-    // Normalize annotation format
+    // Normalize annotation format first so style can use spcode etc.
     let normalizedAnn = {...ann};
     if (ann.properties && typeof ann.properties === 'object') {
       normalizedAnn = {
@@ -437,8 +505,17 @@ function loadProjectAnnotations() {
         _dbAnnotationId: ann._dbAnnotationId || ann.id
       };
     }
-    
     normalizedAnn._displayIndex = idx + 1;
+
+    const layerStyle = typeof getAnnotationLayerStyle === 'function'
+      ? getAnnotationLayerStyle(normalizedAnn)
+      : { color: '#3388ff', weight: 7, opacity: 0.8, fillOpacity: 0.3 };
+
+    const layer = L.geoJSON(ann.geometry, {
+      pane: 'annotationsPane',
+      style: layerStyle
+    }).getLayers()[0];
+
     layer.annotationData = normalizedAnn;
     
     // Add click handler
@@ -697,5 +774,6 @@ if (typeof window !== 'undefined') {
   window.isOracleProjectMode = isOracleProjectMode;
   window.syncAnnotationToDb = syncAnnotationToDb;
   window.deleteAnnotationFromDb = deleteAnnotationFromDb;
+  window.restoreAnnotationInDb = restoreAnnotationInDb;
   window.refreshAnnotationsFromDb = refreshAnnotationsFromDb;
 }

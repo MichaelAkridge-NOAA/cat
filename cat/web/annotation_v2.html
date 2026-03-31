@@ -1022,6 +1022,8 @@
       <span id="totalTimeDisplay" style="display: none; padding: 4px 8px; background: rgba(102, 126, 234, 0.05); color: #667eea; border-radius: 4px; font-size: 12px; font-weight: 500; font-family: 'Courier New', monospace; white-space: nowrap;" title="Total annotation time for this site">
         📊 <span id="totalTime">0h 0m</span>
       </span>
+      <button id="undoBtn" onclick="undoLastAction()" disabled title="Nothing to undo" style="background:none;border:1px solid #dee2e6;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:13px;color:#495057;opacity:0.5;" onmouseover="if(!this.disabled)this.style.opacity='1'" onmouseout="if(!this.disabled)this.style.opacity='0.85'">↩</button>
+      <button id="redoBtn" onclick="redoLastAction()" disabled title="Nothing to redo" style="background:none;border:1px solid #dee2e6;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:13px;color:#495057;opacity:0.5;" onmouseover="if(!this.disabled)this.style.opacity='1'" onmouseout="if(!this.disabled)this.style.opacity='0.85'">↪</button>
       <span id="autoSaveBadge" style="display:none; padding: 4px 8px; background: rgba(40,167,69,0.1); color: #28a745; border-radius: 4px; font-size: 12px; font-weight: 500; white-space: nowrap;" title="Auto-save status">✅ Saved</span>
       <button id="saveProjectBtn" class="btn btn-success" style="display:none; padding: 6px 12px; font-size: 13px; white-space: nowrap;">💾 Save</button>
       <a href="/project_creator.html">📁 Projects</a>
@@ -1175,7 +1177,11 @@
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; padding: 6px 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;" onclick="toggleAnnotationSection('formSection')">
         <div style="display: flex; align-items: center; gap: 8px;">
           <h3 style="margin: 0; font-size: 15px;">✏️ Annotation Form</h3>
-          <div style="font-size: 9px; color: #6c757d;">Press <kbd style="background: white; padding: 1px 4px; border-radius: 2px; border: 1px solid #ccc; font-size: 9px;">Ctrl+S</kbd> to save</div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <!-- Drawing mode indicator (Fix 3e) -->
+            <span id="drawingModeIndicator" style="display:none;font-size:9px;font-weight:600;padding:2px 6px;border-radius:10px;background:#667eea;color:white;"></span>
+            <div style="font-size: 9px; color: #6c757d;">Press <kbd style="background: white; padding: 1px 4px; border-radius: 2px; border: 1px solid #ccc; font-size: 9px;">Ctrl+S</kbd> to save</div>
+          </div>
         </div>
         <span class="section-collapse-icon" id="formSectionIcon">▼</span>
       </div>
@@ -1185,28 +1191,28 @@
       <!-- Core Fields -->
       <div class="form-group">
         <div class="form-section">
-          <label>Analyst *</label>
+          <label>Analyst * <span style="font-size:9px;color:#6c757d;font-weight:normal;">(session)</span></label>
           <input type="text" id="analyst" placeholder="NAME" maxlength="10" required />
         </div>
       </div>
-      
+
       <div class="form-group">
         <div class="form-section">
-          <label>Year *</label>
+          <label>Year * <span style="font-size:9px;color:#6c757d;font-weight:normal;">(session)</span></label>
           <input type="number" id="obs_year" placeholder="2026" min="2000" max="2100" required />
         </div>
       </div>
-      
+
       <div class="form-group">
         <div class="form-section">
-          <label>Mission ID *</label>
+          <label>Mission ID * <span style="font-size:9px;color:#6c757d;font-weight:normal;">(session)</span></label>
           <input type="text" id="mission_id" placeholder="CRUISEID" required />
         </div>
       </div>
-      
+
       <div class="form-group wide">
         <div class="form-section">
-          <label>Site *</label>
+          <label>Site * <span style="font-size:9px;color:#6c757d;font-weight:normal;">(session)</span></label>
           <input type="text" id="site" placeholder="SITE" required />
         </div>
       </div>
@@ -1486,6 +1492,13 @@
           <button class="btn btn-success" onclick="exportShapefile()" style="padding: 5px 12px; font-size: 11px;">📦 Shapefile</button>
         </div>
         
+        <!-- Live search filter (Fix 3c) -->
+        <div style="padding: 4px 0 6px 0;">
+          <input type="text" id="annotationTableFilter" placeholder="🔍 Filter by species, site, analyst…"
+            oninput="filterAnnotationTable(this.value)"
+            style="width:100%;padding:4px 8px;font-size:11px;border:1px solid #dee2e6;border-radius:4px;box-sizing:border-box;" />
+        </div>
+
         <div class="annotation-table-container">
           <table class="annotation-table" id="annotationTable">
         <thead>
@@ -1570,6 +1583,7 @@
     </div>
   </div>
 
+  <script src="js/annotation-undo.js"></script>
   <script src="js/annotation-runtime-core.js"></script>
   <script src="js/annotation-runtime-autosave.js"></script>
   <script src="js/annotation-runtime-user.js"></script>

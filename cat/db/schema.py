@@ -71,6 +71,8 @@ DDL_BLOCKS: List[str] = [
                 created_by VARCHAR2(120),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                version NUMBER DEFAULT 1,
+                deleted_at TIMESTAMP,
                 CONSTRAINT fk_cat_annotations_project
                     FOREIGN KEY (project_id)
                     REFERENCES cat_projects(project_id)
@@ -100,6 +102,7 @@ DDL_BLOCKS: List[str] = [
                 total_seconds NUMBER DEFAULT 0,
                 annotation_count NUMBER DEFAULT 0,
                 is_active NUMBER(1) DEFAULT 1,
+                last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT fk_cat_sessions_project
                     FOREIGN KEY (project_id)
                     REFERENCES cat_projects(project_id)
@@ -255,6 +258,33 @@ DDL_BLOCKS: List[str] = [
             IF SQLCODE != -955 THEN
                 RAISE;
             END IF;
+    END;
+    """,
+    # -----------------------------------------------------------------
+    # Column migrations — safe to re-run; ORA-01430 = column already exists
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_annotations ADD (version NUMBER DEFAULT 1)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_annotations ADD (deleted_at TIMESTAMP)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_annotation_sessions ADD (last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
     END;
     """,
 ]

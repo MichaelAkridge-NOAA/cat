@@ -376,13 +376,28 @@
       console.log('✅ Overrode Leaflet Draw readableDistance for 3 decimal precision');
     }
     
+    // Helper: update the drawing mode indicator badge (Fix 3e)
+    function updateDrawingModeIndicator(tool) {
+      const el = document.getElementById('drawingModeIndicator');
+      if (!el) return;
+      const labels = { polyline: 'Line', polygon: 'Polygon', rectangle: 'Rectangle' };
+      const colors = { polyline: '#f357a1', polygon: '#667eea', rectangle: '#f59e0b' };
+      if (tool && labels[tool]) {
+        el.textContent = labels[tool];
+        el.style.background = colors[tool] || '#667eea';
+        el.style.display = 'inline-block';
+      } else {
+        el.style.display = 'none';
+      }
+    }
+
     // Listen for when drawing tools are activated
     map.on('draw:drawstart', function(e) {
       // Store the type of tool being used
       if (e.layerType) {
         lastDrawingTool = e.layerType;
         console.log('🖊️ Drawing tool started:', lastDrawingTool);
-        
+
         // Add visual feedback for active tool (with delay to ensure toolbar is ready)
         const buttonClassMap = {
           'polyline': '.leaflet-draw-draw-polyline',
@@ -392,14 +407,19 @@
         setTimeout(() => {
           updateDrawingToolVisualFeedback(buttonClassMap[e.layerType]);
         }, 50);
+
+        // Update drawing mode indicator badge (Fix 3e)
+        updateDrawingModeIndicator(e.layerType);
       }
     });
-    
+
     // Listen for when drawing is stopped or cancelled
     map.on('draw:drawstop', function(e) {
       console.log('🛑 Drawing tool stopped');
       // Remove visual feedback when drawing stops
       updateDrawingToolVisualFeedback(null);
+      // Clear the mode indicator when drawing finishes (Fix 3e)
+      updateDrawingModeIndicator(null);
       // DON'T clear lastDrawingTool here - keep it so we can re-enable after save
       // Only clear it when explicitly cancelled by user
     });

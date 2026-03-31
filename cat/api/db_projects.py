@@ -104,6 +104,7 @@ class AnnotationUpdate(BaseModel):
     feature: Optional[Dict[str, Any]] = None
     properties: Optional[Dict[str, Any]] = None
     created_by: Optional[str] = None
+    version: Optional[int] = None  # client's current version for optimistic locking (4a)
 
 
 class AnnotationBulkReplace(BaseModel):
@@ -118,6 +119,10 @@ class SessionUpdate(BaseModel):
     total_seconds: Optional[int] = None
     annotation_count: Optional[int] = None
     is_active: Optional[bool] = None
+
+
+class SessionHeartbeat(BaseModel):
+    pass  # body intentionally empty — POST to the endpoint is the signal (4c)
 
 
 
@@ -163,6 +168,8 @@ def _normalize_annotation_row(row: Dict[str, Any]) -> Dict[str, Any]:
     normalized["feature"] = feature
     normalized["geometry"] = feature
     normalized["properties"] = properties
+    # Expose version for optimistic locking (4a); default 1 for legacy rows
+    normalized.setdefault("version", 1)
     return normalized
 
 
@@ -311,7 +318,11 @@ def get_project(project_id: int) -> Dict[str, Any]:
 
 
 @router.get("/projects/{project_id}/snapshot")
-def get_project_snapshot(project_id: int) -> Dict[str, Any]:
+def get_project_snapshot(project_id: int, include_annotations: bool = True) -> Dict[str, Any]:
+    """
+    Return project structure. Pass include_annotations=false to skip the annotation
+    payload and load them lazily via GET /annotations (4d).
+    """
     _ensure_oracle_mode()
 
     project = fetch_one("SELECT * FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
@@ -322,26 +333,39 @@ def get_project_snapshot(project_id: int) -> Dict[str, Any]:
         "SELECT * FROM cat_project_assets WHERE project_id = :project_id ORDER BY created_at ASC",
         {"project_id": project_id},
     )
-    annotations = fetch_all(
-        "SELECT * FROM cat_annotations WHERE project_id = :project_id ORDER BY created_at ASC",
-        {"project_id": project_id},
-    )
     layers = fetch_all(
         "SELECT * FROM cat_overlay_layers WHERE project_id = :project_id ORDER BY display_order ASC, created_at ASC",
         {"project_id": project_id},
     )
-
     normalized_layers = [_normalize_layer_row(r) for r in layers]
+
+    # Optionally skip annotations for faster initial load (4d)
+    if include_annotations:
+        annotations = fetch_all(
+            "SELECT * FROM cat_annotations WHERE project_id = :project_id AND deleted_at IS NULL ORDER BY created_at ASC",
+            {"project_id": project_id},
+        )
+        normalized_annotations = [_normalize_annotation_row(r) for r in annotations]
+    else:
+        annotation_count_row = fetch_one(
+            "SELECT COUNT(*) AS cnt FROM cat_annotations WHERE project_id = :project_id AND deleted_at IS NULL",
+            {"project_id": project_id},
+        )
+        annotations = []
+        normalized_annotations = []
+
+    annotation_count = len(annotations) if include_annotations else (annotation_count_row or {}).get("cnt", 0)
 
     return {
         "success": True,
         "project": _normalize_project_row(project),
         "assets": [_normalize_asset_row(a) for a in assets],
-        "annotations": [_normalize_annotation_row(r) for r in annotations],
+        "annotations": normalized_annotations,
         "overlay_layers": normalized_layers,
+        "annotations_included": include_annotations,
         "counts": {
             "assets": len(assets),
-            "annotations": len(annotations),
+            "annotations": annotation_count,
             "overlay_layers": len(normalized_layers),
         },
     }
@@ -476,7 +500,7 @@ def list_annotations(project_id: int, limit: int = 500, offset: int = 0) -> Dict
     sql = """
         SELECT *
         FROM cat_annotations
-        WHERE project_id = :project_id
+        WHERE project_id = :project_id AND deleted_at IS NULL
         ORDER BY created_at ASC
         OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
     """
@@ -498,14 +522,32 @@ def update_annotation(project_id: int, annotation_id: int, payload: AnnotationUp
 
     existing = fetch_one(
         """
-        SELECT annotation_id
+        SELECT annotation_id, version
         FROM cat_annotations
-        WHERE project_id = :project_id AND annotation_id = :annotation_id
+        WHERE project_id = :project_id AND annotation_id = :annotation_id AND deleted_at IS NULL
         """,
         {"project_id": project_id, "annotation_id": annotation_id},
     )
     if not existing:
         raise HTTPException(status_code=404, detail="Annotation not found")
+
+    # Optimistic locking: if client sends a version, verify it matches (4a)
+    if payload.version is not None:
+        current_version = existing.get("version") or 1
+        if payload.version != current_version:
+            current_row = fetch_one(
+                "SELECT * FROM cat_annotations WHERE annotation_id = :annotation_id",
+                {"annotation_id": annotation_id},
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Version conflict — annotation was modified by another session",
+                    "current_version": current_version,
+                    "client_version": payload.version,
+                    "current_annotation": _normalize_annotation_row(current_row) if current_row else None,
+                },
+            )
 
     fields = []
     params: Dict[str, Any] = {"project_id": project_id, "annotation_id": annotation_id}
@@ -522,6 +564,7 @@ def update_annotation(project_id: int, annotation_id: int, payload: AnnotationUp
 
     if fields:
         fields.append("updated_at = CURRENT_TIMESTAMP")
+        fields.append("version = NVL(version, 1) + 1")  # increment version (4a)
         execute(
             f"UPDATE cat_annotations SET {', '.join(fields)} WHERE project_id = :project_id AND annotation_id = :annotation_id",
             params,
@@ -536,13 +579,14 @@ def update_annotation(project_id: int, annotation_id: int, payload: AnnotationUp
 
 @router.delete("/projects/{project_id}/annotations/{annotation_id}")
 def delete_annotation(project_id: int, annotation_id: int) -> Dict[str, Any]:
+    """Soft-delete: marks deleted_at, does NOT remove the row (4b)."""
     _ensure_oracle_mode()
 
     existing = fetch_one(
         """
         SELECT annotation_id
         FROM cat_annotations
-        WHERE project_id = :project_id AND annotation_id = :annotation_id
+        WHERE project_id = :project_id AND annotation_id = :annotation_id AND deleted_at IS NULL
         """,
         {"project_id": project_id, "annotation_id": annotation_id},
     )
@@ -550,10 +594,45 @@ def delete_annotation(project_id: int, annotation_id: int) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Annotation not found")
 
     execute(
-        "DELETE FROM cat_annotations WHERE project_id = :project_id AND annotation_id = :annotation_id",
+        """
+        UPDATE cat_annotations
+        SET deleted_at = CURRENT_TIMESTAMP
+        WHERE project_id = :project_id AND annotation_id = :annotation_id
+        """,
         {"project_id": project_id, "annotation_id": annotation_id},
     )
     return {"success": True, "deleted_annotation_id": annotation_id}
+
+
+@router.post("/projects/{project_id}/annotations/{annotation_id}/restore")
+def restore_annotation(project_id: int, annotation_id: int) -> Dict[str, Any]:
+    """Restore a soft-deleted annotation (undo delete) (4b)."""
+    _ensure_oracle_mode()
+
+    existing = fetch_one(
+        """
+        SELECT annotation_id
+        FROM cat_annotations
+        WHERE project_id = :project_id AND annotation_id = :annotation_id AND deleted_at IS NOT NULL
+        """,
+        {"project_id": project_id, "annotation_id": annotation_id},
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Annotation not found or not deleted")
+
+    execute(
+        """
+        UPDATE cat_annotations
+        SET deleted_at = NULL
+        WHERE project_id = :project_id AND annotation_id = :annotation_id
+        """,
+        {"project_id": project_id, "annotation_id": annotation_id},
+    )
+    row = fetch_one(
+        "SELECT * FROM cat_annotations WHERE annotation_id = :annotation_id",
+        {"annotation_id": annotation_id},
+    )
+    return {"success": True, "annotation": _normalize_annotation_row(row)}
 
 
 @router.post("/projects/{project_id}/annotations/bulk-replace")
@@ -602,7 +681,7 @@ def annotations_geojson(project_id: int) -> Dict[str, Any]:
     _ensure_oracle_mode()
 
     rows = fetch_all(
-        "SELECT * FROM cat_annotations WHERE project_id = :project_id ORDER BY created_at ASC",
+        "SELECT * FROM cat_annotations WHERE project_id = :project_id AND deleted_at IS NULL ORDER BY created_at ASC",
         {"project_id": project_id},
     )
 
@@ -1129,6 +1208,17 @@ def start_session(project_id: int, payload: SessionStart) -> Dict[str, Any]:
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Auto-close stale sessions (no heartbeat for >2h) across all users on this project (4c)
+    execute(
+        """
+        UPDATE cat_annotation_sessions
+        SET is_active = 0, end_time = CURRENT_TIMESTAMP
+        WHERE project_id = :project_id AND is_active = 1
+          AND last_heartbeat < CURRENT_TIMESTAMP - INTERVAL '2' HOUR
+        """,
+        {"project_id": project_id},
+    )
+
     # End any previously active session for this user on this project
     execute(
         """
@@ -1223,6 +1313,22 @@ def end_session(project_id: int, session_id: int) -> Dict[str, Any]:
         {"project_id": project_id, "session_id": session_id},
     )
     return {"success": True, "session": updated}
+
+
+@router.post("/projects/{project_id}/sessions/{session_id}/heartbeat")
+def session_heartbeat(project_id: int, session_id: int) -> Dict[str, Any]:
+    """Keep a session alive — call every ~5 minutes to prevent stale-session cleanup (4c)."""
+    _ensure_oracle_mode()
+
+    execute(
+        """
+        UPDATE cat_annotation_sessions
+        SET last_heartbeat = CURRENT_TIMESTAMP
+        WHERE project_id = :project_id AND session_id = :session_id AND is_active = 1
+        """,
+        {"project_id": project_id, "session_id": session_id},
+    )
+    return {"success": True, "session_id": session_id}
 
 
 @router.get("/projects/{project_id}/sessions/stats")

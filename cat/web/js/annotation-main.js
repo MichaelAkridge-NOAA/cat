@@ -231,10 +231,44 @@ function handleKeyboardShortcuts(e) {
     cancelCurrentOperation();
   }
   
-  // Ctrl+S or Cmd+S - Save annotation (not project)
+  // Ctrl+Z / Cmd+Z — undo (5d)
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+    // Only fire when no text input is focused
+    const tag = document.activeElement?.tagName;
+    if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) {
+      e.preventDefault();
+      if (typeof undoLastAction === 'function') undoLastAction();
+      return;
+    }
+  }
+
+  // Ctrl+Y / Ctrl+Shift+Z / Cmd+Shift+Z — redo (5d)
+  if (((e.ctrlKey || e.metaKey) && e.key === 'y') ||
+      ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z')) {
+    const tag = document.activeElement?.tagName;
+    if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) {
+      e.preventDefault();
+      if (typeof redoLastAction === 'function') redoLastAction();
+      return;
+    }
+  }
+
+  // Ctrl+S or Cmd+S — context-aware save (Fix 3b)
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
     e.preventDefault();
-    saveAnnotation();
+    if (document.getElementById('editModal')?.classList.contains('active')) {
+      // Edit modal open → save the modal edit
+      if (typeof saveEditedAnnotation === 'function') saveEditedAnnotation();
+    } else if (getCurrentAnnotation()) {
+      // Annotation in progress → save it
+      saveAnnotation();
+    } else {
+      // Nothing active → manual project sync
+      if (typeof runAutoSave === 'function') {
+        markUnsavedChanges();
+        runAutoSave();
+      }
+    }
   }
 }
 

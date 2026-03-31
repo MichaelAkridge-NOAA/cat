@@ -24,6 +24,19 @@ function setupDrawingHandlers(map) {
   // Handle draw deleted
   map.on(L.Draw.Event.DELETED, handleDrawDeleted);
   
+  // Escape key: discard in-progress unsaved annotation and clear form (Fix 2c)
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!currentAnnotation || !currentAnnotation.layer || currentAnnotation.layer.annotationData) return;
+    // Only act if no modal or dropdown is open
+    if (document.getElementById('editModal')?.classList.contains('active')) return;
+    if (document.querySelector('.species-autocomplete-dropdown[style*="block"]')) return;
+    drawnItems.removeLayer(currentAnnotation.layer);
+    currentAnnotation = null;
+    if (typeof clearAnnotationForm === 'function') clearAnnotationForm();
+    if (typeof showStatus === 'function') showStatus('Annotation discarded', 'info');
+  });
+
   console.log('✅ Drawing event handlers registered');
 }
 
@@ -78,12 +91,27 @@ async function handleDrawCreated(event) {
  * @param {L.FeatureGroup} drawnItems - Feature group containing drawings
  */
 function handleNormalDrawing(layer, type, drawnItems) {
-  // Remove any previous unsaved annotation to prevent "ghost" shapes
+  // Guard: if there's an in-progress unsaved annotation with form data, confirm before discarding (Fix 2c)
   if (currentAnnotation && currentAnnotation.layer && !currentAnnotation.layer.annotationData) {
+    const formHasContent = ['spcode', 'morph_code', 'transect', 'segment'].some(id => {
+      const el = document.getElementById(id);
+      return el && el.value && el.value.trim() !== '' && el.value !== '-';
+    });
+
+    if (formHasContent) {
+      const discard = confirm('You have an annotation in progress with unsaved data.\n\nDiscard it and start a new one?');
+      if (!discard) {
+        // User chose to keep working — remove the just-drawn layer and abort
+        drawnItems.removeLayer(layer);
+        return;
+      }
+    }
+
+    // Discard the previous unsaved shape
     console.log('🧹 Removing previous unsaved annotation');
     drawnItems.removeLayer(currentAnnotation.layer);
   }
-  
+
   drawnItems.addLayer(layer);
   
   // Store current drawing with full precision geometry

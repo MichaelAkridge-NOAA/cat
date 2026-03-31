@@ -1,29 +1,32 @@
 // Extracted from annotation-file-mode-runtime.js (Phase 2b: user helpers)
     // Fetch current logged-in user and auto-fill analyst field
     async function fetchCurrentUser() {
-      // Restore analyst from localStorage if not already populated
-      const analystField = document.getElementById('analyst');
-      if (analystField && !analystField.value) {
-        const saved = localStorage.getItem('cat_analyst');
-        if (saved) {
-          analystField.value = saved;
-          markFieldAsAutofilled(analystField);
-          console.log('✅ Restored analyst from localStorage:', saved);
+      // --- Sticky field persistence (Fix 3a) ---
+      // Restore and persist: analyst, obs_year, mission_id, site
+      const stickyFields = [
+        { id: 'analyst',    key: 'cat_analyst',    transform: v => v.trim().toUpperCase() },
+        { id: 'obs_year',   key: 'cat_obs_year',   transform: v => v.trim() },
+        { id: 'mission_id', key: 'cat_mission_id', transform: v => v.trim() },
+        { id: 'site',       key: 'cat_site',       transform: v => v.trim() },
+      ];
+
+      stickyFields.forEach(({ id, key, transform }) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        // Restore saved value (don't overwrite if already populated by project load)
+        if (!el.value) {
+          const saved = localStorage.getItem(key);
+          if (saved) {
+            el.value = saved;
+            markFieldAsAutofilled(el);
+            console.log(`✅ Restored ${id} from localStorage:`, saved);
+          }
         }
-      }
-      // Persist analyst name to localStorage whenever it changes
-      if (analystField) {
-        analystField.addEventListener('change', () => {
-          if (analystField.value.trim()) {
-            localStorage.setItem('cat_analyst', analystField.value.trim().toUpperCase());
-          }
-        });
-        analystField.addEventListener('blur', () => {
-          if (analystField.value.trim()) {
-            localStorage.setItem('cat_analyst', analystField.value.trim().toUpperCase());
-          }
-        });
-      }
+        // Persist on change/blur
+        const persist = () => { if (el.value.trim()) localStorage.setItem(key, transform(el.value)); };
+        el.addEventListener('change', persist);
+        el.addEventListener('blur', persist);
+      });
       return;
       
       /* Removed database authentication code
