@@ -51,6 +51,49 @@ copy_cat_source() {
     fi
 }
 
+detect_workstation_url() {
+    # Returns the Cloud Workstation external URL for the given port (e.g. 8000)
+    local port="${1:-8000}"
+    local ws_name hostname cluster_domain
+    hostname=$(hostname 2>/dev/null | tr -d '\n' || echo "")
+
+    # Method 1: DNS search domains in /etc/resolv.conf
+    cluster_domain=$(grep -E '^search|^domain' /etc/resolv.conf 2>/dev/null \
+        | grep -oE '[a-z0-9-]+\.cloudworkstations\.dev' \
+        | head -1 || echo "")
+
+    # Method 2: GCP metadata server attributes
+    if [ -z "$cluster_domain" ]; then
+        for attr in cluster-hostname workstation-cluster-domain workstation-cluster; do
+            local val
+            val=$(curl -sf -m 2 -H 'Metadata-Flavor: Google' \
+                "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$attr" \
+                2>/dev/null || echo "")
+            if echo "$val" | grep -q 'cloudworkstations\.dev'; then
+                cluster_domain=$(echo "$val" | grep -oE '[a-z0-9.-]+\.cloudworkstations\.dev' | head -1)
+                break
+            fi
+        done
+    fi
+
+    # Method 3: proxy-url metadata attribute
+    if [ -z "$cluster_domain" ]; then
+        local proxy_url
+        proxy_url=$(curl -sf -m 2 -H 'Metadata-Flavor: Google' \
+            "http://metadata.google.internal/computeMetadata/v1/instance/attributes/proxy-url" \
+            2>/dev/null || echo "")
+        if echo "$proxy_url" | grep -q 'cloudworkstations\.dev'; then
+            cluster_domain=$(echo "$proxy_url" | grep -oE '[a-z0-9.-]+\.cloudworkstations\.dev' | head -1)
+        fi
+    fi
+
+    if [ -n "$cluster_domain" ] && [ -n "$hostname" ]; then
+        echo "https://${port}-${hostname}.${cluster_domain}"
+    else
+        echo ""
+    fi
+}
+
 wait_for_container_health() {
     local container_name="$1"
     local retries="${2:-60}"
@@ -181,6 +224,10 @@ else
 fi
 
 sudo -u "$ACTUAL_USER" mkdir -p "$CAT_INSTALL_DIR/oracle-data"
+# Oracle container runs as UID 54321 (oracle user) - bind mount must be writable by that UID
+sudo chown 54321:54321 "$CAT_INSTALL_DIR/oracle-data"
+sudo chmod 750 "$CAT_INSTALL_DIR/oracle-data"
+echo "    - Oracle: $CAT_INSTALL_DIR/oracle-data (owned by UID 54321)"
 
 if [ ! -f "$CAT_INSTALL_DIR/docker-compose.cat.yml" ]; then
     echo "  ERROR: docker-compose.cat.yml not found in $CAT_INSTALL_DIR"
@@ -289,7 +336,15 @@ cd "$(dirname "$0")"
 echo "CAT Service Status:"
 docker compose -f docker-compose.cat.yml ps
 echo ""
-echo "Recent logs:"
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health 2>/dev/null || echo "000")
+if echo "$HTTP_CODE" | grep -q '^2'; then
+    echo "  ✓ CAT app responding (HTTP $HTTP_CODE)"
+    echo "  Access: http://localhost:8000"
+else
+    echo "  ✗ CAT app not responding (HTTP $HTTP_CODE)"
+fi
+echo ""
+echo "Recent logs (last 20 lines):"
 docker compose -f docker-compose.cat.yml logs --tail=20
 STATUSSCRIPT
 chmod +x "$CAT_INSTALL_DIR/cat-status.sh"
@@ -303,21 +358,131 @@ docker compose -f docker-compose.cat.yml logs -f
 LOGSSCRIPT
 chmod +x "$CAT_INSTALL_DIR/cat-logs.sh"
 
+# Diagnostics script (mirrors label studio pattern)
+sudo -u "$ACTUAL_USER" bash -c "cat > '$CAT_INSTALL_DIR/cat-diagnostics.sh'" << 'DIAGSCRIPT'
+#!/bin/bash
+CAT_DIR="$(dirname "$0")"
+echo "=== CAT Diagnostics ==="
+echo ""
+echo "--- Container Status ---"
+docker compose -f "$CAT_DIR/docker-compose.cat.yml" ps 2>/dev/null
+echo ""
+echo "--- Health Checks ---"
+ORACLE_HEALTH=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' database-oracle-free 2>/dev/null || echo "not running")
+echo "  Oracle: $ORACLE_HEALTH"
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health 2>/dev/null || echo "000")
+if echo "$HTTP_CODE" | grep -qE '^2'; then
+    echo "  CAT app: OK (HTTP $HTTP_CODE) → http://localhost:8000"
+else
+    echo "  CAT app: NOT reachable (HTTP $HTTP_CODE)"
+fi
+echo ""
+echo "--- Cloud Workstation URL Detection ---"
+HOSTNAME=$(hostname 2>/dev/null)
+CLUSTER=$(grep -E '^search|^domain' /etc/resolv.conf 2>/dev/null \
+    | grep -oE '[a-z0-9-]+\.cloudworkstations\.dev' | head -1 || echo "")
+echo "  hostname:       $HOSTNAME"
+echo "  DNS domain:     ${CLUSTER:-(not detected)}"
+if [ -n "$CLUSTER" ]; then
+    echo "  Expected URL:   https://8000-${HOSTNAME}.${CLUSTER}"
+    echo "  ✓ Use that URL in your Cloud Workstation browser tab"
+else
+    echo "  ✗ Could not auto-detect Cloud Workstation domain"
+    echo "    Run: cat-set-url.sh https://8000-HOSTNAME.CLUSTER.cloudworkstations.dev"
+fi
+echo ""
+echo "--- Oracle Data Directory ---"
+ORACLE_DATA="$CAT_DIR/oracle-data"
+echo "  Path:  $ORACLE_DATA"
+ls -la "$ORACLE_DATA" 2>/dev/null | head -5 || echo "  (empty or not found)"
+OWNER=$(stat -c '%U (%u)' "$ORACLE_DATA" 2>/dev/null || echo "unknown")
+echo "  Owner: $OWNER (should be 54321 for Oracle container)"
+echo ""
+echo "--- Recent CAT App Logs ---"
+docker compose -f "$CAT_DIR/docker-compose.cat.yml" logs --tail=15 cat-app 2>/dev/null
+echo ""
+echo "--- Recent Oracle Logs ---"
+docker compose -f "$CAT_DIR/docker-compose.cat.yml" logs --tail=10 database-oracle-free 2>/dev/null
+DIAGSCRIPT
+chmod +x "$CAT_INSTALL_DIR/cat-diagnostics.sh"
+
+# Set-URL script (for Cloud Workstation URL override)
+sudo -u "$ACTUAL_USER" bash -c "cat > '$CAT_INSTALL_DIR/cat-set-url.sh'" << 'SETURLSCRIPT'
+#!/bin/bash
+# Usage: cat-set-url.sh https://8000-HOSTNAME.CLUSTER.cloudworkstations.dev
+CAT_DIR="$(dirname "$0")"
+if [ -z "$1" ]; then
+    echo "Usage: $0 https://8000-HOSTNAME.CLUSTER.cloudworkstations.dev"
+    echo ""
+    echo "Sets the Cloud Workstation external URL for CAT."
+    echo "Find your URL in the Cloud Workstations web console → port 8000 forwarding link."
+    [ -f "$CAT_DIR/.env.custom" ] && echo "Current: $(cat $CAT_DIR/.env.custom)" || echo "(not set)"
+    exit 1
+fi
+WS_URL="${1%/}"
+if ! echo "$WS_URL" | grep -q '^https\?://'; then
+    echo "Error: URL must start with http:// or https://"
+    exit 1
+fi
+echo "CAT_EXTERNAL_URL=${WS_URL}" > "$CAT_DIR/.env.custom"
+echo "✓ URL saved. Restart with: $CAT_DIR/cat-restart.sh"
+SETURLSCRIPT
+chmod +x "$CAT_INSTALL_DIR/cat-set-url.sh"
+
 echo "  ✓ Management scripts created:"
-echo "    - cat-start.sh: Start CAT services"
-echo "    - cat-stop.sh: Stop CAT services"
-echo "    - cat-restart.sh: Restart CAT services"
-echo "    - cat-status.sh: Check service status"
-echo "    - cat-logs.sh: View logs"
+echo "    - cat-start.sh:       Start CAT services"
+echo "    - cat-stop.sh:        Stop CAT services"
+echo "    - cat-restart.sh:     Restart CAT services"
+echo "    - cat-status.sh:      Check service status"
+echo "    - cat-logs.sh:        View logs"
+echo "    - cat-diagnostics.sh: Diagnose Cloud Workstation connectivity"
+echo "    - cat-set-url.sh:     Set Cloud Workstation external URL"
 
 # =============================================================================
-# Step 8: Create systemd service for auto-start
+# Step 8: Configure auto-start (workstation-startup.d → systemd → .bashrc)
 # =============================================================================
-echo "[Step 8/10] Creating systemd service for auto-start..."
-[ -d /run/systemd/system ] && HAS_SYSTEMD=true || HAS_SYSTEMD=false
+echo "[Step 8/10] Configuring auto-start on boot..."
+AUTO_START_STATUS="DISABLED"
 
-if [ "$HAS_SYSTEMD" = true ] && command -v systemctl >/dev/null 2>&1; then
-sudo bash -c "cat > /etc/systemd/system/cat.service" << SERVICEEOF
+# --- Method 1: Google Cloud Workstation hook directory (preferred) ----------
+if [ -d "/etc/workstation-startup.d" ]; then
+    STARTUP_HOOK="/etc/workstation-startup.d/50-start-cat"
+    sudo bash -c "cat > '$STARTUP_HOOK'" << HOOKEOF
+#!/bin/bash
+set -euo pipefail
+LOG_FILE="/var/log/cat-bootstrap.log"
+echo "=== CAT bootstrap \$(date '+%Y-%m-%d %H:%M:%S %Z') ===" >> "\$LOG_FILE"
+
+ACTUAL_USER=\$(awk -F: '\$3>=1000 && \$3<60000 && \$1!="nobody" {print \$1; exit}' /etc/passwd)
+[ -z "\${ACTUAL_USER:-}" ] && { echo "No non-root user; skipping" >> "\$LOG_FILE"; exit 0; }
+
+CAT_DIR="$CAT_INSTALL_DIR"
+# Wait up to 2 min for home mount and docker socket
+for i in \$(seq 1 24); do
+    [ -f "\$CAT_DIR/docker-compose.cat.yml" ] && [ -S /var/run/docker.sock ] && break
+    sleep 5
+done
+
+[ ! -f "\$CAT_DIR/docker-compose.cat.yml" ] && { echo "docker-compose.cat.yml not found" >> "\$LOG_FILE"; exit 0; }
+
+if docker compose -f "\$CAT_DIR/docker-compose.cat.yml" ps | grep -q 'Up'; then
+    echo "CAT already running" >> "\$LOG_FILE"
+    exit 0
+fi
+
+echo "Starting CAT services..." >> "\$LOG_FILE"
+cd "\$CAT_DIR"
+docker compose -f docker-compose.cat.yml up -d >> "\$LOG_FILE" 2>&1 || true
+echo "CAT start complete" >> "\$LOG_FILE"
+HOOKEOF
+    sudo chmod +x "$STARTUP_HOOK"
+    AUTO_START_STATUS="ENABLED via /etc/workstation-startup.d/"
+    echo "  ✓ Cloud Workstation startup hook installed: $STARTUP_HOOK"
+    echo "    CAT will start automatically on workstation boot."
+
+# --- Method 2: systemd (non-Cloud-Workstation Linux) -----------------------
+elif [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    sudo bash -c "cat > /etc/systemd/system/cat.service" << SERVICEEOF
 [Unit]
 Description=CAT: Coral Annotation Tool
 Requires=docker.service
@@ -330,30 +495,40 @@ RemainAfterExit=yes
 WorkingDirectory=$CAT_INSTALL_DIR
 User=$ACTUAL_USER
 Group=$ACTUAL_USER
-
-# Start command
 ExecStart=/usr/bin/docker compose -f docker-compose.cat.yml up -d
-
-# Stop command
 ExecStop=/usr/bin/docker compose -f docker-compose.cat.yml down
-
-# Restart behavior
 Restart=on-failure
 RestartSec=10s
 
 [Install]
 WantedBy=multi-user.target
 SERVICEEOF
-
     sudo systemctl daemon-reload
     sudo systemctl enable cat.service
-    AUTO_START_STATUS="ENABLED"
-    echo "  ✓ Systemd service created and enabled"
-    echo "    Service will start automatically on boot"
+    AUTO_START_STATUS="ENABLED via systemd"
+    echo "  ✓ Systemd service installed and enabled"
+
+# --- Method 3: .bashrc auto-start (fallback) --------------------------------
 else
-    AUTO_START_STATUS="DISABLED (systemd not available in this environment)"
-    echo "  ⚠️  systemd is not available (common in cloud/container workstations)."
-    echo "     Skipping auto-start service setup. Use cat-start.sh manually."
+    BASHRC="$ACTUAL_HOME/.bashrc"
+    # Remove any old CAT autostart blocks first
+    sudo -u "$ACTUAL_USER" sed -i '/# CAT auto-start/,/# cat-autostart-end/d' "$BASHRC" 2>/dev/null || true
+    sudo -u "$ACTUAL_USER" bash -c "cat >> '$BASHRC'" << 'BASHRCEOF'
+
+# CAT auto-start (only for interactive shells)
+if [[ $- == *i* ]] && [ -t 0 ]; then
+    if [ -f "\$HOME/cat_deployment/cat-start.sh" ]; then
+        ORACLE_UP=$(docker inspect -f '{{.State.Health.Status}}' database-oracle-free 2>/dev/null || echo "")
+        CAT_UP=$(docker inspect -f '{{.State.Running}}' cat-app 2>/dev/null || echo "")
+        if [ "$CAT_UP" != "true" ]; then
+            (nohup bash "\$HOME/cat_deployment/cat-start.sh" >> "\$HOME/cat_deployment/autostart.log" 2>&1 &) &>/dev/null
+        fi
+    fi
+fi
+# cat-autostart-end
+BASHRCEOF
+    AUTO_START_STATUS="ENABLED via .bashrc (opens on first login)"
+    echo "  ✓ .bashrc auto-start configured (fallback mode)"
 fi
 
 # =============================================================================
@@ -361,6 +536,24 @@ fi
 # =============================================================================
 echo "[Step 9/10] Starting CAT services for the first time..."
 cd "$CAT_INSTALL_DIR"
+
+# Check for stale partial Oracle data from a previous failed install
+ORACLE_DATA_DIR="$CAT_INSTALL_DIR/oracle-data"
+if [ -n "$(ls -A "$ORACLE_DATA_DIR" 2>/dev/null)" ]; then
+    # Directory has content but Oracle container is not currently running or healthy
+    ORACLE_RUNNING=$(docker inspect -f '{{.State.Running}}' database-oracle-free 2>/dev/null || echo "false")
+    if [ "$ORACLE_RUNNING" != "true" ]; then
+        echo "  ⚠️  oracle-data directory is non-empty from a previous install attempt."
+        echo "     Cleaning stale data to allow fresh Oracle initialization..."
+        docker compose -f docker-compose.cat.yml down -v 2>/dev/null || true
+        sudo rm -rf "${ORACLE_DATA_DIR:?}"/*
+        # Re-apply correct ownership after wipe
+        sudo chown 54321:54321 "$ORACLE_DATA_DIR"
+        sudo chmod 750 "$ORACLE_DATA_DIR"
+        echo "  ✓ Stale Oracle data cleared"
+    fi
+fi
+
 docker compose -f docker-compose.cat.yml up -d database-oracle-free || {
     echo "  ERROR: Failed to start Oracle container"
     exit 1
@@ -396,9 +589,6 @@ for i in {1..30}; do
     sleep 2
 done
 
-echo "  Waiting for services to be healthy..."
-sleep 10
-
 # Check service status
 if [ "$APP_READY" = true ]; then
     echo "  ✓ CAT services started successfully"
@@ -410,6 +600,10 @@ fi
 # Step 10: Display summary
 # =============================================================================
 echo "[Step 10/10] Installation complete!"
+
+# Auto-detect Cloud Workstation URL
+DETECTED_URL=$(detect_workstation_url "${CAT_HOST_PORT:-8000}" 2>/dev/null || echo "")
+
 echo ""
 echo "=============================================="
 echo "CAT Installation Summary"
@@ -420,18 +614,24 @@ echo "📁 Data Directory: $CAT_DATA_DIR"
 echo "🌿 Branch: $CAT_BRANCH"
 echo ""
 echo "🌐 Access CAT at: http://localhost:8000"
-echo "   (Or use Cloud Workstation proxy URL)"
+if [ -n "$DETECTED_URL" ]; then
+    echo "   Cloud Workstation URL: $DETECTED_URL"
+else
+    echo "   Cloud Workstation URL: (run cat-diagnostics.sh to detect)"
+fi
 echo ""
 echo "🚀 Auto-Bootstrap: ENABLED"
 echo "   - CAT tables created automatically"
 echo "   - Reference data ingested on startup"
 echo ""
 echo "🛠️  Management Commands:"
-echo "   Start:   $CAT_INSTALL_DIR/cat-start.sh"
-echo "   Stop:    $CAT_INSTALL_DIR/cat-stop.sh"
-echo "   Restart: $CAT_INSTALL_DIR/cat-restart.sh"
-echo "   Status:  $CAT_INSTALL_DIR/cat-status.sh"
-echo "   Logs:    $CAT_INSTALL_DIR/cat-logs.sh"
+echo "   Start:       $CAT_INSTALL_DIR/cat-start.sh"
+echo "   Stop:        $CAT_INSTALL_DIR/cat-stop.sh"
+echo "   Restart:     $CAT_INSTALL_DIR/cat-restart.sh"
+echo "   Status:      $CAT_INSTALL_DIR/cat-status.sh"
+echo "   Logs:        $CAT_INSTALL_DIR/cat-logs.sh"
+echo "   Diagnostics: $CAT_INSTALL_DIR/cat-diagnostics.sh"
+echo "   Set URL:     $CAT_INSTALL_DIR/cat-set-url.sh <URL>"
 echo ""
 echo "⚙️  Configuration:"
 echo "   Environment: $CAT_INSTALL_DIR/.env"
