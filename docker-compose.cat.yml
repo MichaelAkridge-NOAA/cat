@@ -24,7 +24,7 @@ services:
     restart: unless-stopped
     image: gvenzl/oracle-free:latest
     ports: 
-      - "1521:1521"
+      - "${ORACLE_HOST_PORT:-1521}:1521"
     environment:
       # Root password (required - must be set in .env)
       - ORACLE_PASSWORD=${ORACLE_PASSWORD}
@@ -55,6 +55,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        - HTTP_PROXY=${HTTP_PROXY:-}
+        - HTTPS_PROXY=${HTTPS_PROXY:-}
+        - NO_PROXY=${NO_PROXY:-}
     depends_on:
       database-oracle-free:
         condition: service_healthy
@@ -82,12 +86,17 @@ services:
       - CAT_MODE=${CAT_MODE:-db}  # 'file' or 'db' (default: db)
       - CAT_HOST=0.0.0.0
       - CAT_PORT=8000
+
+      # Optional outbound proxy settings
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-}
       
       # Auto-bootstrap: create tables and ingest reference data on startup
       - CAT_AUTO_BOOTSTRAP=${CAT_AUTO_BOOTSTRAP:-true}
       
     ports:
-      - "8000:8000"
+      - "${CAT_HOST_PORT:-8000}:8000"
     volumes:
       # Mount data directory for COG files and exports
       - ./data:/app/data

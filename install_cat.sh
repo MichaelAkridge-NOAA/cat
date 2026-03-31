@@ -51,6 +51,34 @@ copy_cat_source() {
     fi
 }
 
+wait_for_container_health() {
+    local container_name="$1"
+    local retries="${2:-60}"
+    local interval="${3:-5}"
+
+    local i status
+    for ((i=1; i<=retries; i++)); do
+        status=$(docker inspect -f '{{if .State.Running}}{{if .State.Health}}{{.State.Health.Status}}{{else}}running{{end}}{{else}}stopped{{end}}' "$container_name" 2>/dev/null || echo "missing")
+
+        case "$status" in
+            healthy|running)
+                echo "  ✓ $container_name is $status"
+                return 0
+                ;;
+            unhealthy)
+                echo "  Attempt $i/$retries - $container_name is unhealthy, waiting ${interval}s..."
+                ;;
+            *)
+                echo "  Attempt $i/$retries - $container_name status: $status, waiting ${interval}s..."
+                ;;
+        esac
+
+        sleep "$interval"
+    done
+
+    return 1
+}
+
 # =============================================================================
 # Step 1: Update system and install prerequisites
 # =============================================================================
@@ -192,6 +220,8 @@ DB_SERVICE_NAME=FREEPDB1
 CAT_STORAGE_BACKEND=oracle
 CAT_HOST=0.0.0.0
 CAT_PORT=8000
+CAT_HOST_PORT=8000
+ORACLE_HOST_PORT=1521
 
 # Auto-bootstrap on startup (creates tables and loads reference data)
 CAT_DB_AUTO_BOOTSTRAP=true
@@ -284,7 +314,9 @@ echo "    - cat-logs.sh: View logs"
 # Step 8: Create systemd service for auto-start
 # =============================================================================
 echo "[Step 8/10] Creating systemd service for auto-start..."
+[ -d /run/systemd/system ] && HAS_SYSTEMD=true || HAS_SYSTEMD=false
 
+if [ "$HAS_SYSTEMD" = true ] && command -v systemctl >/dev/null 2>&1; then
 sudo bash -c "cat > /etc/systemd/system/cat.service" << SERVICEEOF
 [Unit]
 Description=CAT: Coral Annotation Tool
@@ -313,26 +345,65 @@ RestartSec=10s
 WantedBy=multi-user.target
 SERVICEEOF
 
-sudo systemctl daemon-reload
-sudo systemctl enable cat.service
-echo "  ✓ Systemd service created and enabled"
-echo "    Service will start automatically on boot"
+    sudo systemctl daemon-reload
+    sudo systemctl enable cat.service
+    AUTO_START_STATUS="ENABLED"
+    echo "  ✓ Systemd service created and enabled"
+    echo "    Service will start automatically on boot"
+else
+    AUTO_START_STATUS="DISABLED (systemd not available in this environment)"
+    echo "  ⚠️  systemd is not available (common in cloud/container workstations)."
+    echo "     Skipping auto-start service setup. Use cat-start.sh manually."
+fi
 
 # =============================================================================
 # Step 9: Start CAT services
 # =============================================================================
 echo "[Step 9/10] Starting CAT services for the first time..."
 cd "$CAT_INSTALL_DIR"
-docker compose -f docker-compose.cat.yml up -d
+docker compose -f docker-compose.cat.yml up -d database-oracle-free || {
+    echo "  ERROR: Failed to start Oracle container"
+    exit 1
+}
+
+echo "  Waiting for Oracle to become healthy (this can take several minutes on first run)..."
+if ! wait_for_container_health "database-oracle-free" 90 5; then
+    echo "  ERROR: Oracle did not become healthy in time"
+    echo "  Last Oracle logs:"
+    docker compose -f docker-compose.cat.yml logs --tail=100 database-oracle-free || true
+    exit 1
+fi
+
+docker compose -f docker-compose.cat.yml up -d cat-app || {
+    echo "  ERROR: Failed to start CAT app container"
+    exit 1
+}
+
+echo "  Waiting for CAT app health..."
+if ! wait_for_container_health "cat-app" 60 3; then
+    echo "  ERROR: CAT app did not become healthy in time"
+    echo "  Last CAT app logs:"
+    docker compose -f docker-compose.cat.yml logs --tail=100 cat-app || true
+    exit 1
+fi
+
+APP_READY=false
+for i in {1..30}; do
+    if curl -sf "http://localhost:8000/health" >/dev/null 2>&1; then
+        APP_READY=true
+        break
+    fi
+    sleep 2
+done
 
 echo "  Waiting for services to be healthy..."
 sleep 10
 
 # Check service status
-if docker compose -f docker-compose.cat.yml ps | grep -q "Up"; then
+if [ "$APP_READY" = true ]; then
     echo "  ✓ CAT services started successfully"
 else
-    echo "  ⚠️  Services may still be starting. Check with: $CAT_INSTALL_DIR/cat-status.sh"
+    echo "  ⚠️  CAT health endpoint not reachable yet. Check with: $CAT_INSTALL_DIR/cat-status.sh"
 fi
 
 # =============================================================================
@@ -346,7 +417,7 @@ echo "=============================================="
 echo ""
 echo "📁 Installation Directory: $CAT_INSTALL_DIR"
 echo "📁 Data Directory: $CAT_DATA_DIR"
-echo "� Branch: $CAT_BRANCH"
+echo "🌿 Branch: $CAT_BRANCH"
 echo ""
 echo "🌐 Access CAT at: http://localhost:8000"
 echo "   (Or use Cloud Workstation proxy URL)"
@@ -366,8 +437,10 @@ echo "⚙️  Configuration:"
 echo "   Environment: $CAT_INSTALL_DIR/.env"
 echo "   Compose:     $CAT_INSTALL_DIR/docker-compose.cat.yml"
 echo ""
-echo "🔄 Auto-start on boot: ENABLED"
-echo "   Manage: sudo systemctl [start|stop|status] cat.service"
+echo "🔄 Auto-start on boot: $AUTO_START_STATUS"
+if [ "$HAS_SYSTEMD" = true ] && command -v systemctl >/dev/null 2>&1; then
+    echo "   Manage: sudo systemctl [start|stop|status] cat.service"
+fi
 echo ""
 echo "⚠️  IMPORTANT NEXT STEPS:"
 echo "   1. Edit $CAT_INSTALL_DIR/.env"
