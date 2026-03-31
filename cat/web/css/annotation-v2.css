@@ -1,0 +1,478 @@
+/* ============================================================
+   CAT v2 (Dev Preview) — Additional Styles
+   Layered on top of existing annotation-styles/panels/controls
+   ============================================================ */
+
+/* ─── V2 Dev Banner ─── */
+.v2-dev-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: #fff;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  animation: v2-pulse 2s ease-in-out infinite;
+  white-space: nowrap;
+}
+@keyframes v2-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.75; }
+}
+
+/* ─── Bulk Draw Mode Banner ─── */
+.bulk-mode-banner {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #fff;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+  margin-bottom: 4px;
+}
+.bulk-mode-banner.active {
+  display: flex;
+}
+.bulk-mode-banner .bulk-count {
+  background: rgba(255,255,255,0.25);
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.bulk-mode-banner .bulk-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.bulk-mode-banner .bulk-actions button {
+  padding: 3px 10px;
+  border: 1px solid rgba(255,255,255,0.4);
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.bulk-mode-banner .bulk-actions button:hover {
+  background: rgba(255,255,255,0.3);
+}
+.bulk-mode-banner .bulk-actions button.bulk-stop {
+  background: rgba(239, 68, 68, 0.5);
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+/* ─── Bulk Toggle Toolbar Button ─── */
+/* V2 toolbar now inline in navbar */
+.v2-toolbar-inline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 12px;
+  padding-right: 12px;
+  border-right: 1px solid rgba(255,255,255,0.15);
+}
+.v2-tool-btn {
+  padding: 5px 10px;
+  border: 1px solid rgba(0,0,0,0.15);
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+  white-space: nowrap;
+}
+.v2-tool-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(0,0,0,0.15);
+}
+.v2-tool-btn.active {
+  color: #fff;
+}
+.v2-tool-btn-bulk {
+  background: #ecfdf5;
+  color: #059669;
+  border-color: #a7f3d0;
+}
+.v2-tool-btn-bulk.active {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  border-color: #059669;
+}
+.v2-tool-btn-centroid {
+  background: #fef3c7;
+  color: #d97706;
+  border-color: #fde68a;
+}
+.v2-tool-btn-centroid.active {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  border-color: #d97706;
+}
+.v2-tool-btn-undo {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+.v2-tool-btn-undo:hover {
+  background: #fee2e2;
+}
+
+/* ─── Layer Toolbar Buttons ─── */
+.v2-toolbar-sep {
+  display: inline-block;
+  width: 1px;
+  height: 24px;
+  background: rgba(0,0,0,0.12);
+  margin: 0 2px;
+  vertical-align: middle;
+}
+.v2-tool-btn-layers {
+  background: #eff6ff;
+  color: #2563eb;
+  border-color: #bfdbfe;
+}
+.v2-tool-btn-layers:hover {
+  background: #dbeafe;
+}
+.v2-tool-btn-upload {
+  background: #f5f3ff;
+  color: #7c3aed;
+  border-color: #ddd6fe;
+}
+.v2-tool-btn-upload:hover {
+  background: #ede9fe;
+}
+
+/* ─── Centroid Markers ─── */
+.centroid-marker {
+  width: 8px;
+  height: 8px;
+  background: #f59e0b;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 4px rgba(0,0,0,0.3);
+}
+
+/* ─── Resizable Annotation Table ─── */
+.annotation-panel .resize-handle {
+  position: absolute;
+  top: -5px;
+  left: 0;
+  right: 0;
+  height: 10px;
+  cursor: ns-resize;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.annotation-panel .resize-handle::after {
+  content: '';
+  width: 40px;
+  height: 4px;
+  background: #cbd5e1;
+  border-radius: 2px;
+  transition: background 0.2s;
+}
+.annotation-panel .resize-handle:hover::after,
+.annotation-panel .resize-handle.dragging::after {
+  background: #667eea;
+}
+
+/* Table height control buttons */
+.table-size-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+.table-size-btn {
+  padding: 2px 6px;
+  background: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: #475569;
+  font-weight: 600;
+}
+.table-size-btn:hover {
+  background: #667eea;
+  color: #fff;
+  border-color: #667eea;
+}
+.table-size-btn.active {
+  background: #667eea;
+  color: #fff;
+  border-color: #667eea;
+}
+
+/* ─── Sortable Table Headers ─── */
+.annotation-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  padding-right: 18px;
+}
+.annotation-table th.sortable:hover {
+  background: #5568d3;
+}
+.annotation-table th.sortable::after {
+  content: '⇅';
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  opacity: 0.6;
+}
+.annotation-table th.sortable.sort-asc::after {
+  content: '▲';
+  opacity: 1;
+}
+.annotation-table th.sortable.sort-desc::after {
+  content: '▼';
+  opacity: 1;
+}
+
+/* ─── Batch Fill Column Indicator ─── */
+.annotation-table th.batch-fillable {
+  position: relative;
+}
+.annotation-table th .batch-fill-btn {
+  display: none;
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 16px;
+  height: 16px;
+  background: rgba(255,255,255,0.3);
+  border: none;
+  border-radius: 3px;
+  font-size: 9px;
+  cursor: pointer;
+  color: #fff;
+  line-height: 16px;
+  text-align: center;
+}
+.annotation-table th:hover .batch-fill-btn {
+  display: block;
+}
+.annotation-table th .batch-fill-btn:hover {
+  background: rgba(255,255,255,0.5);
+}
+
+/* ─── Keyboard Nav Highlight for Table Cells ─── */
+.annotation-table td.kb-focus {
+  outline: 3px solid #667eea;
+  outline-offset: -2px;
+  background: #eef2ff !important;
+  box-shadow: inset 0 0 0 2px rgba(102, 126, 234, 0.3);
+  position: relative;
+  z-index: 10;
+}
+
+.annotation-table td.kb-focus::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 12px 12px 0;
+  border-color: transparent #667eea transparent transparent;
+}
+
+/* Cell copy indicator */
+.annotation-table td.copied {
+  animation: copyFlash 0.6s ease;
+}
+@keyframes copyFlash {
+  0%, 100% { background: inherit; }
+  50% { background: #d1fae5; }
+}
+
+/* Multi-select cells */
+.annotation-table td.kb-focus.multi-select {
+  outline: 2px dashed #667eea;
+  background: #f3f4f6 !important;
+}
+
+/* Paste target indicator */
+.annotation-table td.paste-target {
+  background: #fef3c7 !important;
+  animation: pulseYellow 0.8s ease infinite;
+}
+@keyframes pulseYellow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* ─── Keyboard Shortcuts Hint ─── */
+.kb-shortcuts-hint {
+  padding: 10px 14px;
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border: 1px solid #bae6fd;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: #0c4a6e;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.kb-shortcuts-hint kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  color: #1e293b;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  margin: 0 2px;
+}
+
+.kb-shortcuts-hint strong {
+  font-weight: 700;
+  color: #0369a1;
+}
+
+/* ─── Batch Fill Modal ─── */
+.batch-fill-modal {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 5000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.batch-fill-modal.active {
+  display: flex;
+}
+.batch-fill-content {
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+  padding: 24px;
+  max-width: 420px;
+  width: 100%;
+}
+.batch-fill-content h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  color: #1e293b;
+}
+.batch-fill-content .batch-scope {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.batch-fill-content .batch-scope label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #475569;
+  cursor: pointer;
+}
+.batch-fill-content .batch-input-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.batch-fill-content .batch-input-row input,
+.batch-fill-content .batch-input-row select {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.batch-fill-content .batch-input-row input:focus,
+.batch-fill-content .batch-input-row select:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.15);
+}
+.batch-fill-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ─── All-Caps Text Inputs (v2 default) ─── */
+.v2-allcaps input[type="text"] {
+  text-transform: uppercase;
+}
+.v2-allcaps input[type="text"]::placeholder {
+  text-transform: none;
+}
+
+/* ─── Quick Defaults Bar ─── */
+.v2-defaults-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: #f1f5f9;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #475569;
+  margin-bottom: 4px;
+}
+.v2-defaults-bar button {
+  padding: 2px 8px;
+  background: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  color: #475569;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+.v2-defaults-bar button:hover {
+  background: #667eea;
+  color: #fff;
+  border-color: #667eea;
+}
+
+/* ─── Undo Toast ─── */
+.v2-undo-toast {
+  position: fixed;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: #1e293b;
+  color: #fff;
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  z-index: 6000;
+  opacity: 0;
+  transition: all 0.25s;
+  pointer-events: none;
+  max-width: 90vw;
+  text-align: center;
+}
+.v2-undo-toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}

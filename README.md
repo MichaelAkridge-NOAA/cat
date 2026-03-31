@@ -1,13 +1,15 @@
 # CAT: Coral Annotation Tool
 <a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="https://github.com/MichaelAkridge-NOAA/cat/raw/main/docs/logo.png" align="right" alt="logo" width="400"/></a>
-  **C**oral **A**nnotation **T**ool - File-based , Structure from Motion (SfM) Orthomosaic coral reef annotation and visualization tool to support coral reef research.
-### Try the Lite Version Demo: https://michaelakridge-noaa.github.io/cat-web-lite/
+  **C**oral **A**nnotation **T**ool — Docker-deployed, Oracle-backed Structure from Motion (SfM) orthomosaic coral reef annotation and project management system.
+
+> **Branch:** `cat_db` — Oracle database backend with auto-bootstrap.  
+> For the lightweight, file-based version see the [`main` branch](https://github.com/MichaelAkridge-NOAA/cat).
 
 ### About
 
-**CAT** is a lightweight, file-based annotation system designed specifically for marine scientists and coral reef researchers working with Structure from Motion (SfM) orthomosaic imagery. Built with modern web technologies and Cloud Optimized GeoTIFF (COG) support, CAT provides a streamlined workflow for annotating, analyzing, and managing coral reef datasets without the complexity of databases or heavy dependencies.
+**CAT** is an annotation and visualization platform designed for marine scientists working with Structure from Motion (SfM) orthomosaic imagery. This branch adds an **Oracle database backend** for centralized project management, persistent annotations, overlay layer support, and multi-user workflows — all deployed via Docker Compose.
 
-Perfect for field research environments where simplicity, speed, and reliability are essential.
+On first startup the system auto-bootstraps: Oracle init scripts create the schema, and the CAT app ingests reference data from CSVs — no manual DDL required.
 
 ### Features
 > ⚠️ **Note: Under Active Development**: CAT is under active development. Features are being added regularly and some functionality may change. See the [Roadmap](#roadmap) section for planned improvements.
@@ -25,10 +27,12 @@ Perfect for field research environments where simplicity, speed, and reliability
 - **Annotation Timer** - Track time spent on each annotation session
 
 ### **Project Management**
-- **File-Based Storage** - No database required, pure JSON format
-- **Drag & Drop Interface** - Easy project creation with multiple TIF files
+- **Oracle Database Backend** - Centralized project and annotation storage
+- **Auto-Bootstrap** - Schema and reference data created on first startup
+- **Shapefile Overlay Layers** - Import, edit, reorder, and style vector overlays per project
 - **GeoJSON Export** - Export annotations in standard GeoJSON format
-- **Project Templates** - Reusable project structures for consistent workflows
+- **Drag & Drop Interface** - Easy project creation with multiple TIF files
+- **Live Status Dashboard** - Homepage shows DB connection, project count at a glance
 
 ### **Cloud Optomized GeoTiff (COG) Processing** (https://github.com/MichaelAkridge-NOAA/sfm-orthomosaic-tile-viewer)
 - **Batch Conversion** - Convert multiple GeoTIFFs to COG format simultaneously
@@ -41,91 +45,90 @@ Perfect for field research environments where simplicity, speed, and reliability
 <img src="./docs/example_01.png"/>
 <img src="./docs/example_02.png"/>
 
-## Quick Start
+## Quick Start (Docker + Oracle)
 
 ### Prerequisites
-- Python 3.9 or higher
-- Local Installation & usage only. (*Note: database and cloud version in development.)
+- Docker & Docker Compose (v2+)
+- Git
 
-### Installation
+### 1. Clone & Configure
 
-**Option 1: Install from PyPI (Recommended)**
-- Link: https://pypi.org/project/coral-annotation-tool
+```bash
+git clone -b cat_db https://github.com/MichaelAkridge-NOAA/cat.git
+cd cat
+
+# Create your .env from the template and set passwords
+cp .env.example .env
+nano .env   # <-- change ORACLE_PASSWORD and APP_SCHEMA_PASSWORD
+```
+
+### 2. Start
+
+```bash
+docker compose -f docker-compose.cat.yml up -d --build
+```
+
+On first startup:
+1. Oracle Free initializes and runs `scripts/db-init/*.sql` (creates schema + tables)
+2. CAT app waits for Oracle, verifies schema, ingests reference CSVs
+3. FastAPI server starts on **http://localhost:8000**
+
+### 3. Verify
+
+```bash
+# Service status
+docker compose -f docker-compose.cat.yml ps
+
+# Health + config
+curl http://localhost:8000/health
+curl http://localhost:8000/api/config
+```
+
+### Google Cloud Workstation Deployment
+
+For a full automated install (Docker, systemd auto-start, management scripts):
+
+```bash
+sudo bash install_cat.sh
+```
+
+See [docs/DEPLOYMENT_PLAN.md](docs/DEPLOYMENT_PLAN.md) for architecture details.
+
+### Standalone / File Mode (no database)
+
+CAT also works without Oracle for local, file-based workflows:
 
 ```bash
 pip install coral-annotation-tool
+cat   # starts server at http://localhost:8000
 ```
 
-```bash
-# Or Install with desktop shortcut support (one-time)
-pip install coral-annotation-tool[shortcuts]
-# Create shortcuts
-cat-create-shortcuts
-```
-
-### Running the Application
-<a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="./docs/desktop_shortcut.png" align="right" alt="logo" /></a>
-After installation, simply run:
-- Double click on Desktop icon
-- Start Menu (Windows) or Applications (Mac/Linux)
-- Command line: `cat`
-```bash
-cat
-```
-
-The application will be available at: **http://localhost:8000**
-
-
-**Option 2: Install from source (Local Development)**
-
-```bash
-git clone https://github.com/MichaelAkridge-NOAA/cat
-cd cat
-pip install -e .
-```
-
-**If installed locally (from source):**
-```bash
-# Install with shortcut support
-pip install -e .[shortcuts]
-
-# Create shortcuts
-cat-create-shortcuts
-
-# Or use the helper scripts in the repo:
-# Windows: Double-click create_shortcuts.bat
-# Mac/Linux: ./create_shortcuts.sh
-```
-
-**Remove shortcuts (if needed):**
-```bash
-cat-remove-shortcuts
-```
+Or from source: `python main.py`
 ---
 
 ## Usage
 
 ### Creating Your First Project
 
-1. **Navigate to Project Creator**
-   - Open http://localhost:8000
-   - Click "Create Project" card
+1. **Open the Project Manager**
+   - Navigate to http://localhost:8000
+   - Click the **Project Manager** card (the primary action)
 
-2. **Add Your Data**
-   - Drag & drop TIF/GeoTIFF files
-   - Optionally add shapefile layers (.shp, .shx, .dbf, .prj)
-   - Fill in project metadata (Site, Year, Cruise, Observer, etc.)
+2. **Create a New Project** (Oracle mode)
+   - Click **"Quick Create"** in the Oracle Projects panel
+   - Fill in: Project Name, Site, Island, Year, Cruise, Observer
+   - Add COG TIF file paths (GCS `gs://` URLs or local paths)
+   - Click **Create Project**
 
-3. **Generate Project**
-   - Click "Generate Project"
-   - Review the JSON structure
-   - Download the project file
+3. **Add Overlay Layers** (optional)
+   - Open a project and click **"Manage Layers"**
+   - Upload shapefiles (ZIP or loose .shp/.shx/.dbf/.prj)
+   - Toggle visibility, reorder, change colors, zoom to layer extent
 
 4. **Start Annotating**
-   - Click "Coral Annotation" from homepage
-   - Upload your project JSON file
-   - Wait for COG conversion (first time only)
-   - Begin annotating coral features!
+   - Click **"Open"** on any project to launch the annotation view
+   - Draw polygons, lines, and points on the orthomosaic
+   - Annotations save to Oracle automatically
 
 ### Annotation Workflow
 
@@ -224,11 +227,17 @@ Located in: `data/reference/list_of_coral.csv`
 
 ## Roadmap
 <a href="./docs/example_ai_0.png" target="_blank"><img src="./docs/example_ai_0.png" align="right" alt="logo" /></a>
+
+### ✅ Completed (this branch)
+- **Oracle Database Backend** - Centralized project, annotation, and session storage
+- **Google Cloud Storage (GCS) Integration** - Native `gs://` bucket paths for COG imagery
+- **Cloud Workstation Support** - Docker Compose deployment with auto-bootstrap
+- **Shapefile Overlay Layers** - Import, edit, reorder, style, and persist vector overlays
+- **Geometry Editing** - Double-click to edit overlay features, auto-save to Oracle
+- **Live Status Dashboard** - Homepage shows DB health, project count
+
 ### 🚧 In Progress
-- **AI-Assisted Annotation** - Automated and Semi-automated coral detection, segmentation and classification features (YOLO,SAM3)
-- **Google Cloud Storage (GCS) Integration** - Native support for `gs://` bucket paths
-- **Cloud Workstation Support** - Optimized deployment for Google Cloud Workstations
-- **Database Backend** - Optional Oracle/SQLlite/PostgreSQL/GIS backend for large projects
+- **AI-Assisted Annotation** - Automated and semi-automated coral detection, segmentation and classification (YOLO, SAM3)
 - **Multi-user Support** - Shared annotation sessions with user tracking
 <a href="./docs/example_ai_01.png" target="_blank"><img src="./docs/example_ai_01.png"  alt="logo" /></a>
 
@@ -260,4 +269,5 @@ This repository is a scientific product and is not official communication of the
 This repository's code is available under the terms specified in [LICENSE.md](./LICENSE.md).
 
 ## Acknowledgments
-This project uses [TiTiler](https://github.com/developmentseed/titiler) by Development Seed for dynamic tile generation. TiTiler is licensed under the [MIT License](https://github.com/developmentseed/titiler/blob/main/LICENSE).
+- This project uses [TiTiler](https://github.com/developmentseed/titiler) by Development Seed for dynamic tile generation. TiTiler is licensed under the [MIT License](https://github.com/developmentseed/titiler/blob/main/LICENSE).
+- [pyshortcuts](https://github.com/newville/pyshortcuts)

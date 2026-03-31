@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CAT: Create Annotation Project</title>
+  <title>CAT: Load & Create Annotation Project</title>
   <meta charset="utf-8">
   <meta name="viewport" content="initial-scale=1.0">
   <style>
@@ -244,6 +244,13 @@
       background: #6c757d;
       color: white;
     }
+    .btn-danger {
+      background: #dc3545;
+      color: white;
+    }
+    .btn-danger:hover {
+      background: #c82333;
+    }
     
     /* Status */
     .status {
@@ -293,16 +300,140 @@
       padding-top: 20px;
       border-top: 2px solid #eee;
     }
+
+    /* ===== Site Browser Styles ===== */
+    .mode-selection {
+      grid-template-columns: 1fr 1fr 1fr;
+    }
+    .site-filter-bar {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .site-filter-bar select,
+    .site-filter-bar input[type="text"] {
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .site-stats-row {
+      display: flex;
+      gap: 14px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+    .site-stat-card {
+      flex: 1;
+      min-width: 130px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      text-align: center;
+      color: white;
+    }
+    .site-stat-card h3 { margin: 0 0 4px 0; font-size: 26px; }
+    .site-stat-card p  { margin: 0; font-size: 12px; opacity: .9; }
+    .site-stat-total    { background: linear-gradient(135deg,#667eea,#764ba2); }
+    .site-stat-cog      { background: linear-gradient(135deg,#10b981,#059669); }
+    .site-stat-nocog    { background: linear-gradient(135deg,#f59e0b,#d97706); }
+    .site-grid-wrap {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+      gap: 12px;
+      max-height: 520px;
+      overflow-y: auto;
+      padding: 4px 2px;
+    }
+    .site-card {
+      background: #f8f9fa;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 14px;
+      position: relative;
+      transition: all .25s;
+    }
+    .site-card:hover { border-color: #667eea; box-shadow: 0 3px 10px rgba(102,126,234,.2); }
+    .site-card-name  { font-size: 15px; font-weight: 700; color: #222; margin-bottom: 5px; }
+    .site-card-meta  { font-size: 12px; color: #666; margin-bottom: 3px; }
+    .site-badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-right: 4px;
+    }
+    .badge-depth-S { background:#d1ecf1; color:#0c5460; }
+    .badge-depth-M { background:#fff3cd; color:#856404; }
+    .badge-depth-D { background:#d6d8db; color:#383d41; }
+    .badge-cog    { background:#d4edda; color:#155724; }
+    .badge-nocog  { background:#f8d7da; color:#721c24; }
+    .site-visit-strip {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #e8e8e8;
+      font-size: 11px;
+      color: #555;
+    }
+    .site-card-actions { margin-top: 10px; display: flex; gap: 6px; }
+    .btn-annotate {
+      flex: 1; padding: 6px; font-size: 11px; font-weight: 600;
+      border: none; border-radius: 5px; cursor: pointer; transition: all .2s;
+      background: linear-gradient(135deg,#667eea,#764ba2); color: white;
+    }
+    .btn-annotate:hover { opacity: .88; }
+    .btn-annotate:disabled { background: #ccc; cursor: not-allowed; }
+    .gcs-panel {
+      background: #f0f9ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+    .gcs-panel h3 { margin: 0 0 10px 0; font-size: 15px; color: #1e3a8a; }
+    .gcs-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .gcs-row input { flex: 1; min-width: 200px; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; font-family: monospace; }
+    .gcs-row select { padding: 9px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; }
+    .site-empty-state { text-align: center; padding: 40px 20px; color: #999; grid-column: 1/-1; }
+    .site-empty-state-icon { font-size: 48px; margin-bottom: 10px; opacity: .5; }
+
+    /* Collapsible COG matching toggle */
+    details[id="gcsCogMatchingDetails"] summary::-webkit-details-marker { display: none; }
+    details[id="gcsCogMatchingDetails"] summary::marker { display: none; content: ""; }
+    details[id="gcsCogMatchingDetails"][open] .gcs-toggle-icon { transform: rotate(90deg); }
+    details[id="gcsCogMatchingDetails"][open] summary { border-radius: 8px 8px 0 0; }
+
+    /* Oracle project quick-create modal */
+    .modal-overlay {
+      display: none; position: fixed; top:0; left:0; right:0; bottom:0;
+      background: rgba(0,0,0,.55); z-index: 9000; align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-box {
+      background: white; border-radius: 10px; padding: 28px; max-width: 500px; width: 95%;
+      box-shadow: 0 20px 60px rgba(0,0,0,.35);
+    }
+    .modal-box h3 { margin: 0 0 18px 0; font-size: 18px; color: #333; }
+    .modal-field { margin-bottom: 14px; }
+    .modal-field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; color: #444; }
+    .modal-field input, .modal-field select, .modal-field textarea {
+      width: 100%; padding: 9px 11px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px;
+    }
+    .modal-field textarea { resize: vertical; min-height: 60px; }
+    .modal-cog-uri { font-family: monospace; font-size: 11px; background: #f8f9fa; padding: 8px; border-radius: 4px; word-break: break-all; color: #1e3a8a; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
   </style>
 </head>
 <body>
   <nav class="navbar">
     <h1>
       <span>🪸</span>
-      <span>CAT: Project Creator</span>
+      <span>CAT: Project Manager</span>
     </h1>
     <div class="nav-links">
-      <a href="/annotation_file_mode.html">Annotation Tool</a>
+      <a href="#" onclick="event.preventDefault(); showVersionSelector(); return false;">Annotation Tool</a>
       <a href="/">Home</a>
     </div>
   </nav>
@@ -310,8 +441,8 @@
   <div class="container" style="margin-top: 70px;">
     <div class="content">
       <div style="text-align: center; margin-bottom: 30px;">
-        <h1 style="font-size: 32px; color: #333; margin-bottom: 10px;">📁 Create Annotation Project</h1>
-        <p style="color: #666; font-size: 16px;">Build file-based coral annotation projects from your TIF files</p>
+        <h1 style="font-size: 32px; color: #333; margin-bottom: 10px;">📁 Annotation Project Manager</h1>
+        <p id="projectManagerSubtitle" style="color: #666; font-size: 16px;">Create, edit, and open annotation projects</p>
       </div>
       
       <!-- Mode Selection -->
@@ -325,6 +456,11 @@
           <div class="mode-icon">📂</div>
           <h3>Load Existing Project</h3>
           <p>Upload an existing project.json to edit or continue</p>
+        </div>
+        <div class="mode-card" id="siteMode" onclick="selectMode('site')">
+          <div class="mode-icon">🗺️</div>
+          <h3>Site Browser</h3>
+          <p>Browse survey sites and link to cloud COG files</p>
         </div>
       </div>
       
@@ -468,7 +604,39 @@
       
       <!-- Load Mode -->
       <div id="loadSection" class="creator-section">
-        <h2>📂 Load Existing Project</h2>
+        <h2 id="loadSectionHeading">📂 Load Existing Project</h2>
+
+        <div id="dbProjectBrowser" style="display:none; margin-bottom: 20px; padding: 16px; background: #f0f9ff; border: 1px solid #bfdbfe; border-radius: 8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom: 10px;">
+            <h3 style="margin:0; color:#1e3a8a; font-size:16px;">🗄️ Oracle Projects</h3>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#475569; cursor:pointer;" title="Show v2 Dev Preview button for each project">
+                <input type="checkbox" id="showV2Toggle" onchange="renderDbProjectList(dbProjects)" style="cursor:pointer;">
+                <span>Show v2</span>
+              </label>
+              <button class="btn btn-primary" onclick="fetchDbProjects()" style="padding: 8px 14px; font-size: 12px; margin:0;">🔄 Refresh DB List</button>
+            </div>
+          </div>
+          <div style="display:flex; gap:8px; margin-bottom: 10px;">
+            <input type="text" id="dbProjectSearch" placeholder="Search by project name, site, cruise, observer..." oninput="filterDbProjects()" style="flex:1; padding:10px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px;">
+            <select id="dbProjectSort" onchange="fetchDbProjects()" style="padding:10px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; background:#fff;">
+              <option value="created_at:desc">Newest</option>
+              <option value="created_at:asc">Oldest</option>
+              <option value="project_name:asc">Name A-Z</option>
+              <option value="project_name:desc">Name Z-A</option>
+              <option value="site:asc">Site A-Z</option>
+            </select>
+          </div>
+          <div id="dbProjectMeta" style="font-size:12px; color:#64748b; margin-bottom:8px;"></div>
+          <div id="dbProjectList" style="max-height: 260px; overflow-y:auto; border:1px solid #dbeafe; border-radius:6px; background:#fff;">
+            <div style="padding: 14px; color:#64748b; font-size:13px;">Loading projects...</div>
+          </div>
+        </div>
+
+        <div id="legacyFileLoadPanel">
+          <div style="margin-bottom: 10px; padding: 10px 12px; background: #fff7ed; border: 1px solid #fdba74; border-radius: 6px; color: #9a3412; font-size: 12px;">
+            Legacy file-based load mode
+          </div>
         
         <div class="drop-zone" id="loadDropZone">
           <div class="drop-zone-icon">📄</div>
@@ -490,7 +658,246 @@
             <button class="btn btn-success" onclick="openInViewer()">🚀 Open in Viewer</button>
           </div>
         </div>
+        </div>
       </div>
+
+      <!-- ===== Site Browser Mode ===== -->
+      <div id="siteSection" class="creator-section">
+        <h2>🗺️ Site Browser</h2>
+
+        <!-- Stats Row -->
+        <div class="site-stats-row">
+          <div class="site-stat-card site-stat-total">
+            <h3 id="sbStatTotal">—</h3><p>Total Sites</p>
+          </div>
+          <div class="site-stat-card site-stat-cog">
+            <h3 id="sbStatCog">—</h3><p>With Cloud COG</p>
+          </div>
+          <div class="site-stat-card site-stat-nocog">
+            <h3 id="sbStatNoCog">—</h3><p>No COG Yet</p>
+          </div>
+        </div>
+
+        <!-- Filter Bar -->
+        <div class="site-filter-bar">
+          <label style="font-weight:600; font-size:13px;">Filter:</label>
+          <select id="sbRegionFilter" onchange="renderSiteBrowser()">
+            <option value="">All Regions</option>
+          </select>
+          <select id="sbDepthFilter" onchange="renderSiteBrowser()">
+            <option value="">All Depths</option>
+            <option value="S">Shallow (S)</option>
+            <option value="M">Medium (M)</option>
+            <option value="D">Deep (D)</option>
+          </select>
+          <select id="sbCogFilter" onchange="renderSiteBrowser()">
+            <option value="">All Sites</option>
+            <option value="with">With COG</option>
+            <option value="without">No COG</option>
+          </select>
+          <input type="text" id="sbSearchInput" placeholder="Search site, cruise, island…"
+            oninput="renderSiteBrowser()" style="flex:1; min-width:160px;">
+          <button class="btn btn-primary" onclick="loadSiteBrowser()" style="white-space:nowrap; padding:8px 14px; font-size:12px;">
+            🔄 Reload Sites
+          </button>
+        </div>
+
+        <!-- Site Grid -->
+        <div class="site-grid-wrap" id="sbSiteGrid">
+          <div class="site-empty-state">
+            <div class="site-empty-state-icon">📍</div>
+            <p>Loading sites…</p>
+          </div>
+        </div>
+
+        <!-- GCS COG Matching Panel (collapsible, at the bottom) -->
+        <details id="gcsCogMatchingDetails" style="margin-top: 24px;">
+          <summary style="cursor:pointer; user-select:none; padding:12px 16px; background:linear-gradient(135deg,#e0f2fe,#bfdbfe); border:1px solid #93c5fd; border-radius:8px; font-weight:700; font-size:14px; color:#1e3a8a; list-style:none; display:flex; align-items:center; gap:8px;">
+            <span class="gcs-toggle-icon" style="transition:transform .2s; display:inline-block;">▶</span>
+            ☁️ Cloud COG Matching
+            <span style="font-weight:400; font-size:12px; color:#3b82f6; margin-left:auto;">Click to expand</span>
+          </summary>
+          <div class="gcs-panel" style="margin-top:0; border-top-left-radius:0; border-top-right-radius:0; border-top:none;">
+            <p style="font-size:13px; color:#374151; margin:0 0 12px 0;">
+              Link your survey sites to Cloud Optimized GeoTIFFs on GCS. Either auto-load the
+              most recent conversion report or scan a GCS prefix live.
+            </p>
+            <div class="gcs-row">
+              <button class="btn btn-primary" onclick="loadLatestGcsReport()" style="white-space:nowrap;">
+                📋 Load Latest COG Report
+              </button>
+              <span style="align-self:center; color:#64748b; font-size:13px;">— or scan GCS —</span>
+            </div>
+            <div class="gcs-row">
+              <input type="text" id="gcsPrefixInput"
+                placeholder="gs://nmfs_odp_pifsc/PIFSC/ESD/ARP/StRS_Sites_Products/orthomosaic_cog/2025"
+                style="font-size:12px;">
+              <select id="gcsPatternSelect">
+                <option value="*_mos_cog*.tif">*_mos_cog*.tif</option>
+                <option value="*_dem_cog*.tif">*_dem_cog*.tif</option>
+                <option value="*_cog*.tif">*_cog*.tif</option>
+                <option value="*.tif">*.tif</option>
+              </select>
+              <button class="btn btn-primary" onclick="scanGcs()" id="scanGcsBtn" style="white-space:nowrap;">
+                🔍 Scan GCS
+              </button>
+            </div>
+            <div id="gcsScanStatus" style="font-size:13px; color:#0c5460; margin-top:6px;"></div>
+          </div>
+        </details>
+      </div>
+
+      <!-- Oracle Quick-Create Modal -->
+      <div class="modal-overlay" id="oracleCreateModal">
+        <div class="modal-box">
+          <h3>🗄️ Create Oracle Project</h3>
+          <div class="modal-field">
+            <label>Project Name *</label>
+            <input type="text" id="ocProjectName" placeholder="e.g., WAK-2104 2025 Survey">
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="modal-field">
+              <label>Site Code</label>
+              <input type="text" id="ocSite" readonly style="background:#f8f9fa;">
+            </div>
+            <div class="modal-field">
+              <label>Cruise</label>
+              <input type="text" id="ocCruise" placeholder="e.g., SE2502_Leg1">
+            </div>
+            <div class="modal-field">
+              <label>Year</label>
+              <input type="number" id="ocYear" value="2025">
+            </div>
+            <div class="modal-field">
+              <label>Region</label>
+              <input type="text" id="ocRegion">
+            </div>
+            <div class="modal-field">
+              <label>Observer</label>
+              <input type="text" id="ocObserver" placeholder="initials">
+            </div>
+          </div>
+          <div class="modal-field">
+            <label>Notes</label>
+            <textarea id="ocNotes" placeholder="Optional notes"></textarea>
+          </div>
+          <div class="modal-field">
+            <label>Cloud COG URI (asset)</label>
+            <div class="modal-cog-uri" id="ocCogUri">—</div>
+          </div>
+          <div class="modal-field">
+            <label>Cloud DEM URI (asset)</label>
+            <div class="modal-cog-uri" id="ocDemUri">—</div>
+          </div>
+          <div id="ocStatus" style="font-size:13px; margin-top:8px;"></div>
+          <div class="modal-actions">
+            <button class="btn" onclick="closeOracleModal()"
+              style="background:#6c757d; color:white; padding:10px 20px;">Cancel</button>
+            <button class="btn btn-success" onclick="submitOracleProject()"
+              style="padding:10px 20px;" id="ocSubmitBtn">
+              🚀 Create &amp; Open
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- DB Project Edit Modal -->
+      <div class="modal-overlay" id="dbEditModal">
+        <div class="modal-box">
+          <h3>✏️ Edit Oracle Project</h3>
+          <div class="modal-field">
+            <label>Project Name *</label>
+            <input type="text" id="dbEditProjectName" placeholder="Project name">
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="modal-field">
+              <label>Site</label>
+              <input type="text" id="dbEditSite">
+            </div>
+            <div class="modal-field">
+              <label>Cruise</label>
+              <input type="text" id="dbEditCruise">
+            </div>
+            <div class="modal-field">
+              <label>Year</label>
+              <input type="number" id="dbEditYear">
+            </div>
+            <div class="modal-field">
+              <label>Region</label>
+              <input type="text" id="dbEditRegion">
+            </div>
+            <div class="modal-field">
+              <label>Observer</label>
+              <input type="text" id="dbEditObserver">
+            </div>
+          </div>
+          <div class="modal-field">
+            <label>Notes</label>
+            <textarea id="dbEditNotes" placeholder="Optional notes"></textarea>
+          </div>
+          <!-- Overlay Layers Section -->
+          <div style="margin-top:16px; border-top:1px solid #e2e8f0; padding-top:14px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+              <label style="font-weight:600; font-size:14px;">🗂️ Overlay Layers</label>
+              <button class="btn" style="padding:4px 12px; font-size:11px; background:#6366f1; color:white;" onclick="openLayerManager(activeDbEditProjectId)">
+                Manage Layers
+              </button>
+            </div>
+            <div id="dbEditLayerSummary" style="font-size:12px; color:#64748b;">Loading layers...</div>
+          </div>
+
+          <div id="dbEditStatus" style="font-size:13px; margin-top:8px;"></div>
+          <div class="modal-actions">
+            <button class="btn" onclick="closeDbEditModal()"
+              style="background:#6c757d; color:white; padding:10px 20px;">Cancel</button>
+            <button class="btn btn-success" onclick="saveDbProjectEdits()"
+              style="padding:10px 20px;" id="dbEditSaveBtn">
+              💾 Save Changes
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Layer Manager Modal -->
+      <div class="modal-overlay" id="layerManagerModal">
+        <div class="modal-box" style="max-width:700px;">
+          <h3>🗂️ Layer Manager — <span id="layerManagerProjectName"></span></h3>
+
+          <!-- Upload Section -->
+          <div style="margin-bottom:16px; padding:14px; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:8px; text-align:center; cursor:pointer; transition:all 0.2s;"
+               id="layerUploadZone"
+               ondragover="event.preventDefault(); this.style.borderColor='#6366f1'; this.style.background='#eef2ff';"
+               ondragleave="this.style.borderColor='#cbd5e1'; this.style.background='#f8fafc';"
+               ondrop="handleLayerUploadDrop(event)"
+               onclick="document.getElementById('layerFileInput').click()">
+            <div style="font-size:14px; color:#475569;">📁 Drop shapefile ZIP or files here</div>
+            <div style="font-size:11px; color:#94a3b8; margin-top:4px;">ZIP archive <b>or</b> .shp + .shx + .dbf + .prj files</div>
+            <input type="file" id="layerFileInput" accept=".zip,.shp,.shx,.dbf,.prj,.cpg,.sbn,.sbx" multiple style="display:none;" onchange="handleLayerFileSelect(event)">
+          </div>
+          <div id="layerUploadProgress" style="display:none; margin-bottom:12px;">
+            <div style="background:#e2e8f0; height:6px; border-radius:3px; overflow:hidden;">
+              <div id="layerUploadBar" style="background:#6366f1; height:100%; width:0%; transition:width 0.3s;"></div>
+            </div>
+            <div id="layerUploadStatus" style="font-size:11px; color:#64748b; margin-top:4px;"></div>
+          </div>
+
+          <!-- Layer List -->
+          <div style="margin-bottom:10px; font-size:12px; color:#94a3b8;">Drag layers to reorder. Toggle visibility with checkboxes.</div>
+          <div id="layerManagerList" style="max-height:340px; overflow-y:auto; min-height:60px;"></div>
+          <div id="layerManagerEmpty" style="text-align:center; padding:30px; color:#94a3b8; font-size:13px;">No overlay layers yet.</div>
+
+          <div id="layerManagerStatus" style="font-size:13px; margin-top:8px;"></div>
+          <div class="modal-actions">
+            <button class="btn" onclick="closeLayerManager()"
+              style="background:#6c757d; color:white; padding:10px 20px;">Close</button>
+            <button class="btn btn-success" onclick="saveLayerManagerChanges()"
+              style="padding:10px 20px;" id="layerManagerSaveBtn">
+              💾 Save Changes
+            </button>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
   
@@ -506,20 +913,96 @@
     let annotationsFileName = '';
     let shapefileImportData = null;
     let shapefileColumnMapping = {};
+    let storageBackend = 'file';
+    let dbApiAvailable = false;
+    let dbProjects = [];
+    let dbProjectSearchDebounce = null;
+    let activeDbEditProjectId = null;
+
+    // ===== Site Browser state =====
+    let sbAllSites = [];
+    let sbCogMap = {};
+    let sbAssetMap = {};
+
+    async function initializeStorageBackend() {
+      try {
+        const response = await fetch('/api/config');
+        if (!response.ok) return;
+        const config = await response.json();
+        storageBackend = config?.storage_backend || 'file';
+        dbApiAvailable = !!config?.db_api_available;
+
+        const subtitle = document.getElementById('projectManagerSubtitle');
+        if (subtitle && storageBackend === 'oracle') {
+          subtitle.textContent = 'Manage Oracle-backed annotation projects and launch site-linked workflows';
+        }
+
+        const createModeCard = document.getElementById('createMode');
+        const createSection = document.getElementById('createSection');
+        const loadModeCard = document.getElementById('loadMode');
+        const loadHeading = document.getElementById('loadSectionHeading');
+        const legacyFileLoadPanel = document.getElementById('legacyFileLoadPanel');
+
+        if (storageBackend === 'oracle') {
+          if (createModeCard) createModeCard.style.display = 'none';
+          if (createSection) createSection.style.display = 'none';
+          if (loadModeCard) {
+            const icon = loadModeCard.querySelector('.mode-icon');
+            const title = loadModeCard.querySelector('h3');
+            const desc = loadModeCard.querySelector('p');
+            if (icon) icon.textContent = '🗄️';
+            if (title) title.textContent = 'Oracle Projects';
+            if (desc) desc.textContent = 'Open, edit, and delete existing Oracle projects';
+          }
+          if (loadHeading) loadHeading.textContent = '🗄️ Oracle Project Manager';
+          if (legacyFileLoadPanel) legacyFileLoadPanel.style.display = 'none';
+          if (currentMode === 'create') {
+            currentMode = 'load';
+            selectMode('load');
+          }
+        } else {
+          if (createModeCard) createModeCard.style.display = '';
+          if (createSection) createSection.style.display = '';
+          if (legacyFileLoadPanel) legacyFileLoadPanel.style.display = '';
+        }
+
+        const dbBrowser = document.getElementById('dbProjectBrowser');
+        if (dbBrowser) {
+          const showDbBrowser = storageBackend === 'oracle';
+          dbBrowser.style.display = showDbBrowser ? 'block' : 'none';
+          if (showDbBrowser) {
+            fetchDbProjects();
+          }
+        }
+
+        console.log(`🧭 Project Creator backend: ${storageBackend} (db_api_available=${dbApiAvailable})`);
+      } catch (error) {
+        console.warn('Could not detect storage backend, defaulting to file mode:', error);
+      }
+    }
     
     // ========================================
     // MODE SELECTION
     // ========================================
     function selectMode(mode) {
+      if (storageBackend === 'oracle' && mode === 'create') {
+        mode = 'load';
+      }
       currentMode = mode;
       
       // Update cards
       document.getElementById('createMode').classList.toggle('active', mode === 'create');
       document.getElementById('loadMode').classList.toggle('active', mode === 'load');
+      document.getElementById('siteMode').classList.toggle('active', mode === 'site');
       
       // Show/hide sections
       document.getElementById('createSection').classList.toggle('active', mode === 'create');
       document.getElementById('loadSection').classList.toggle('active', mode === 'load');
+      document.getElementById('siteSection').classList.toggle('active', mode === 'site');
+
+      if (mode === 'site' && sbAllSites.length === 0) {
+        loadSiteBrowser();
+      }
     }
     
     // ========================================
@@ -557,7 +1040,936 @@
       setupDropZone('shapefileDropZone', 'shapefileInput', addShapefiles);
       setupDropZone('annotationsDropZone', 'annotationsInput', loadAnnotationsFile);
       setupDropZone('loadDropZone', 'loadInput', loadProjectFile);
+      initializeStorageBackend();
     });
+
+    // ========================================
+    // SITE BROWSER
+    // ========================================
+
+    async function loadSiteBrowser() {
+      const grid = document.getElementById('sbSiteGrid');
+      grid.innerHTML = '<div class="site-empty-state"><div class="site-empty-state-icon">⏳</div><p>Loading sites…</p></div>';
+      try {
+        const resp = await fetch('/api/sites');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        sbAllSites = data.sites || [];
+
+        // Populate region filter
+        const regionSel = document.getElementById('sbRegionFilter');
+        const currentRegion = regionSel.value;
+        regionSel.innerHTML = '<option value="">All Regions</option>';
+        (data.regions || []).forEach(r => {
+          const opt = document.createElement('option');
+          opt.value = r; opt.textContent = r;
+          if (r === currentRegion) opt.selected = true;
+          regionSel.appendChild(opt);
+        });
+
+        renderSiteBrowser();
+      } catch (err) {
+        console.error('Error loading sites:', err);
+        grid.innerHTML = `<div class="site-empty-state"><div class="site-empty-state-icon">⚠️</div><p>Error loading sites: ${err.message}</p></div>`;
+      }
+    }
+
+    function _applyCogMap(sites, cogMap) {
+      return sites.map(s => ({
+        ...s,
+        has_cog: !!(((sbAssetMap[s.site_name] || {}).cog_uri) || ((sbAssetMap[s.site_name] || {}).dem_uri) || cogMap[s.site_name] || s.cog_uri || s.dem_uri),
+        has_dem: !!(((sbAssetMap[s.site_name] || {}).dem_uri) || s.dem_uri),
+        cog_uri: ((sbAssetMap[s.site_name] || {}).cog_uri) || cogMap[s.site_name] || s.cog_uri || null,
+        dem_uri: ((sbAssetMap[s.site_name] || {}).dem_uri) || s.dem_uri || null,
+      }));
+    }
+
+    function renderSiteBrowser() {
+      const region   = document.getElementById('sbRegionFilter').value;
+      const depth    = document.getElementById('sbDepthFilter').value;
+      const cogFilt  = document.getElementById('sbCogFilter').value;
+      const search   = (document.getElementById('sbSearchInput').value || '').toLowerCase();
+
+      let sites = _applyCogMap(sbAllSites, sbCogMap);
+
+      if (region)  sites = sites.filter(s => s.region === region);
+      if (depth)   sites = sites.filter(s => s.depth_bin === depth);
+      if (cogFilt === 'with')    sites = sites.filter(s => s.has_cog);
+      if (cogFilt === 'without') sites = sites.filter(s => !s.has_cog);
+      if (search) sites = sites.filter(s =>
+        s.site_name.toLowerCase().includes(search) ||
+        (s.visit?.cruise_leg || '').toLowerCase().includes(search) ||
+        (s.visit?.island || '').toLowerCase().includes(search) ||
+        (s.visit?.photographer || '').toLowerCase().includes(search)
+      );
+
+      // Stats (over all sites with current cog overlay, ignoring text filters)
+      const allWithCog = _applyCogMap(sbAllSites, sbCogMap);
+      document.getElementById('sbStatTotal').textContent  = sbAllSites.length;
+      document.getElementById('sbStatCog').textContent    = allWithCog.filter(s => s.has_cog).length;
+      document.getElementById('sbStatNoCog').textContent  = allWithCog.filter(s => !s.has_cog).length;
+
+      const grid = document.getElementById('sbSiteGrid');
+      if (sites.length === 0) {
+        grid.innerHTML = '<div class="site-empty-state"><div class="site-empty-state-icon">🔍</div><p>No sites match your filters</p></div>';
+        return;
+      }
+
+      grid.innerHTML = '';
+      sites.forEach(site => {
+        const card = document.createElement('div');
+        card.className = 'site-card';
+
+        const depthLabel = {S:'Shallow',M:'Medium',D:'Deep'}[site.depth_bin] || site.depth_bin;
+        const depthBadge = site.depth_bin
+          ? `<span class="site-badge badge-depth-${site.depth_bin}">${depthLabel}</span>` : '';
+        const cogBadge = site.has_cog
+          ? `<span class="site-badge badge-cog">☁️ COG Ready</span>`
+          : `<span class="site-badge badge-nocog">⚠️ No COG</span>`;
+        const demBadge = site.has_dem
+          ? `<span class="site-badge" style="background:#ecfdf3; color:#065f46; border-color:#a7f3d0;">🗻 DEM</span>`
+          : '';
+
+        const v = site.visit || {};
+        const visitStrip = (v.survey_date || v.cruise_leg || v.island || v.latitude) ? `
+          <div class="site-visit-strip">
+            ${v.survey_date ? `📅 ${v.survey_date} &nbsp;` : ''}
+            ${v.cruise_leg  ? `🚢 ${v.cruise_leg} &nbsp;` : ''}
+            ${v.island      ? `🏝️ ${v.island} &nbsp;`    : ''}
+            ${v.photographer? `📷 ${v.photographer} &nbsp;`:  ''}
+            ${(v.latitude && v.longitude) ? `<br>📍 ${v.latitude.toFixed(4)}, ${v.longitude.toFixed(4)}` : ''}
+          </div>` : '';
+
+        const cogSnip = (site.cog_uri || site.dem_uri)
+          ? `<div style="font-size:10px; color:#1e3a8a; font-family:monospace; word-break:break-all; margin-top:6px; background:#eff6ff; padding:4px 6px; border-radius:3px;">
+              ${site.cog_uri ? `MOS: ${site.cog_uri.split('/').pop()}` : ''}
+              ${site.dem_uri ? `${site.cog_uri ? '<br>' : ''}DEM: ${site.dem_uri.split('/').pop()}` : ''}
+            </div>`
+          : '';
+
+        card.innerHTML = `
+          <div class="site-card-name">${site.site_name}</div>
+          <div class="site-card-meta">Region: <strong>${site.region || '—'}</strong></div>
+          <div style="margin:6px 0;">${depthBadge}${cogBadge}${demBadge}</div>
+          ${cogSnip}
+          ${visitStrip}
+          <div class="site-card-actions">
+            <button class="btn-annotate" onclick="openOracleModal(${JSON.stringify(site).replace(/"/g,'&quot;')})"
+              ${site.has_cog && storageBackend === 'oracle' ? '' : 'disabled'}
+              title="${!site.has_cog ? 'No cloud COG matched yet' : storageBackend !== 'oracle' ? 'Oracle mode not enabled (set CAT_STORAGE_BACKEND=oracle)' : 'Create Oracle project'}">
+              ${storageBackend === 'oracle' ? '🗄️ Create Oracle Project' : '🔒 Oracle mode off'}
+            </button>
+          </div>`;
+
+        grid.appendChild(card);
+      });
+    }
+
+    // ========================================
+    // GCS SCAN
+    // ========================================
+
+    async function loadLatestGcsReport() {
+      const statusEl = document.getElementById('gcsScanStatus');
+      statusEl.textContent = '⏳ Loading latest COG conversion report…';
+      try {
+        const resp = await fetch('/api/sites/load-gcs-report', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({})
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+
+        sbCogMap = data.cog_map || {};
+        sbAssetMap = data.asset_map || {};
+        // Merge into sbAllSites
+        if (data.sites && data.sites.length) sbAllSites = data.sites;
+        statusEl.innerHTML = `✅ Loaded report: <strong>${data.report_file?.split(/[\\/]/).pop()}</strong> &nbsp;·&nbsp; `
+          + `${data.total_converted} converted &nbsp;·&nbsp; `
+          + `<strong>${data.sites_matched}</strong> sites matched &nbsp;·&nbsp; `
+          + `${data.sites_unmatched} unmatched`;
+        statusEl.style.color = '#155724';
+        renderSiteBrowser();
+      } catch (err) {
+        statusEl.textContent = `⚠️ ${err.message}`;
+        statusEl.style.color = '#721c24';
+      }
+    }
+
+    async function scanGcs() {
+      const prefix = document.getElementById('gcsPrefixInput').value.trim();
+      if (!prefix) { alert('Enter a GCS prefix first'); return; }
+      const pattern = document.getElementById('gcsPatternSelect').value;
+      const btn = document.getElementById('scanGcsBtn');
+      const statusEl = document.getElementById('gcsScanStatus');
+      btn.disabled = true;
+      statusEl.textContent = `⏳ Scanning ${prefix} …`;
+      statusEl.style.color = '#0c5460';
+      try {
+        const resp = await fetch('/api/sites/scan-gcs', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ gcs_prefix: prefix, pattern })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+        sbCogMap = data.cog_map || {};
+        sbAssetMap = data.asset_map || {};
+        if (data.sites && data.sites.length) sbAllSites = data.sites;
+        statusEl.innerHTML = `✅ Found <strong>${data.total_files_found}</strong> files &nbsp;·&nbsp; `
+          + `<strong>${data.sites_matched}</strong> sites matched &nbsp;·&nbsp; `
+          + `${data.sites_unmatched} unmatched`;
+        statusEl.style.color = '#155724';
+        renderSiteBrowser();
+      } catch (err) {
+        statusEl.textContent = `⚠️ ${err.message}`;
+        statusEl.style.color = '#721c24';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    // ========================================
+    // ORACLE QUICK-CREATE MODAL
+    // ========================================
+
+    let _ocSite = null;
+
+    function openOracleModal(site) {
+      _ocSite = site;
+      const v = site.visit || {};
+      document.getElementById('ocProjectName').value =
+        `${site.site_name} ${v.survey_date ? new Date(v.survey_date).getFullYear() : new Date().getFullYear()} Survey`;
+      document.getElementById('ocSite').value      = site.site_name;
+      document.getElementById('ocCruise').value    = v.cruise_leg || '';
+      document.getElementById('ocYear').value      = v.survey_date ? new Date(v.survey_date).getFullYear() : new Date().getFullYear();
+      document.getElementById('ocRegion').value    = site.region || '';
+      document.getElementById('ocObserver').value  = v.photographer || '';
+      document.getElementById('ocNotes').value     = '';
+      document.getElementById('ocCogUri').textContent = site.cog_uri || '(none)';
+      document.getElementById('ocDemUri').textContent = site.dem_uri || '(none)';
+      document.getElementById('ocStatus').textContent = '';
+      document.getElementById('ocSubmitBtn').disabled = false;
+      document.getElementById('oracleCreateModal').classList.add('open');
+    }
+
+    function closeOracleModal() {
+      document.getElementById('oracleCreateModal').classList.remove('open');
+      _ocSite = null;
+    }
+
+    async function submitOracleProject() {
+      if (!dbApiAvailable || storageBackend !== 'oracle') { alert('Oracle mode not enabled.\nSet CAT_STORAGE_BACKEND=oracle and restart the server.'); return; }
+      const name = document.getElementById('ocProjectName').value.trim();
+      if (!name) { alert('Project name is required'); return; }
+
+      const btn = document.getElementById('ocSubmitBtn');
+      const statusEl = document.getElementById('ocStatus');
+      btn.disabled = true;
+      statusEl.textContent = '⏳ Creating project…';
+      statusEl.style.color = '#0c5460';
+
+      try {
+        // 1. Create the Oracle project
+        const projResp = await fetch('/api/db/projects', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            project_name: name,
+            site: document.getElementById('ocSite').value || null,
+            cruise: document.getElementById('ocCruise').value || null,
+            year: parseInt(document.getElementById('ocYear').value) || null,
+            region: document.getElementById('ocRegion').value || null,
+            observer: document.getElementById('ocObserver').value || null,
+            notes: document.getElementById('ocNotes').value || null,
+            metadata: _ocSite?.visit ? { visit_info: _ocSite.visit } : {},
+          })
+        });
+        if (!projResp.ok) {
+          const err = await projResp.json();
+          throw new Error(err.detail || `HTTP ${projResp.status}`);
+        }
+        const projData = await projResp.json();
+        const projectId = projData.project?.project_id ?? projData.project_id;
+
+        // 2. Add orthomosaic/DEM assets if we have them
+        const cogUri = _ocSite?.cog_uri;
+        const demUri = _ocSite?.dem_uri;
+        if (projectId) {
+          const assetsToAdd = [];
+          if (cogUri) {
+            assetsToAdd.push({
+              asset_name: cogUri.split('/').pop(),
+              cog_url: cogUri,
+              asset_type: 'COG',
+              source_uri: _ocSite?.visit?.piclea_file_path || null,
+            });
+          }
+          if (demUri && demUri !== cogUri) {
+            assetsToAdd.push({
+              asset_name: demUri.split('/').pop(),
+              cog_url: demUri,
+              asset_type: 'DEM',
+              source_uri: _ocSite?.visit?.piclea_file_path || null,
+            });
+          }
+
+          for (const asset of assetsToAdd) {
+            const assetResp = await fetch(`/api/db/projects/${projectId}/assets`, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(asset)
+            });
+            // Non-fatal if asset fails
+            if (!assetResp.ok) {
+              const ae = await assetResp.json().catch(() => ({}));
+              console.warn('Asset creation failed:', ae.detail || assetResp.status);
+            }
+          }
+        }
+
+        statusEl.textContent = `✅ Project created! (ID: ${projectId})`;
+        statusEl.style.color = '#155724';
+
+        // 3. Open in annotation viewer after short delay
+        setTimeout(() => {
+          closeOracleModal();
+          window.open(`/annotation_file_mode.html?project_id=${projectId}`, '_blank');
+        }, 800);
+
+      } catch (err) {
+        statusEl.textContent = `⚠️ ${err.message}`;
+        statusEl.style.color = '#721c24';
+        btn.disabled = false;
+      }
+    }
+
+    // Close modal on overlay click
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('oracleCreateModal').addEventListener('click', function(e) {
+        if (e.target === this) closeOracleModal();
+      });
+      document.getElementById('dbEditModal').addEventListener('click', function(e) {
+        if (e.target === this) closeDbEditModal();
+      });
+      document.getElementById('layerManagerModal').addEventListener('click', function(e) {
+        if (e.target === this) closeLayerManager();
+      });
+    });
+
+    function normalizeAnnotationForDb(annotation) {
+      const ann = annotation || {};
+      const rawGeometry = ann.geometry || ann.feature?.geometry || ann.feature || null;
+      const feature = rawGeometry && rawGeometry.type === 'Feature'
+        ? rawGeometry
+        : {
+            type: 'Feature',
+            geometry: rawGeometry,
+            properties: {}
+          };
+
+      const properties = ann.properties
+        ? { ...ann.properties }
+        : Object.fromEntries(Object.entries(ann).filter(([k]) => !['geometry', 'feature', '_displayIndex', 'id'].includes(k)));
+
+      return {
+        feature,
+        properties,
+        created_by: properties.ANALYST || properties.analyst || document.getElementById('observer')?.value || null
+      };
+    }
+
+    async function fetchDbProjects() {
+      const listContainer = document.getElementById('dbProjectList');
+      const metaContainer = document.getElementById('dbProjectMeta');
+      if (!listContainer) return;
+
+      listContainer.innerHTML = '<div style="padding: 14px; color:#64748b; font-size:13px;">Loading projects...</div>';
+      if (metaContainer) metaContainer.textContent = '';
+
+      try {
+        const query = (document.getElementById('dbProjectSearch')?.value || '').trim();
+        const sortRaw = document.getElementById('dbProjectSort')?.value || 'created_at:desc';
+        const [sortBy, sortDir] = sortRaw.split(':');
+
+        const params = new URLSearchParams({
+          limit: '200',
+          offset: '0',
+          sort_by: sortBy || 'created_at',
+          sort_dir: sortDir || 'desc'
+        });
+        if (query) {
+          params.set('q', query);
+        }
+
+        const response = await fetch(`/api/db/projects?${params.toString()}`);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.detail || `HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        dbProjects = Array.isArray(data?.projects) ? data.projects : [];
+        renderDbProjectList(dbProjects);
+
+        if (metaContainer) {
+          const total = data?.total_count ?? dbProjects.length;
+          const showing = data?.count ?? dbProjects.length;
+          metaContainer.textContent = `Showing ${showing} of ${total} project(s)`;
+        }
+      } catch (error) {
+        console.error('Error loading DB projects:', error);
+        listContainer.innerHTML = `<div style="padding: 14px; color:#b91c1c; font-size:13px;">❌ Failed to load DB projects: ${error.message}</div>`;
+        if (metaContainer) metaContainer.textContent = '';
+      }
+    }
+
+    function filterDbProjects() {
+      clearTimeout(dbProjectSearchDebounce);
+      dbProjectSearchDebounce = setTimeout(() => {
+        fetchDbProjects();
+      }, 250);
+    }
+
+    function renderDbProjectList(projects) {
+      const listContainer = document.getElementById('dbProjectList');
+      if (!listContainer) return;
+
+      if (!projects.length) {
+        listContainer.innerHTML = '<div style="padding: 14px; color:#64748b; font-size:13px;">No DB projects found.</div>';
+        return;
+      }
+
+      listContainer.innerHTML = projects.map((project) => {
+        const created = project.created_at ? new Date(project.created_at).toLocaleString() : 'Unknown';
+        const site = project.site || '-';
+        const observer = project.observer || '-';
+        const safeName = (project.project_name || '').replace(/'/g, "&#39;");
+        const showV2 = document.getElementById('showV2Toggle')?.checked || false;
+        return `
+          <div style="padding: 12px; border-bottom: 1px solid #e2e8f0; display:flex; justify-content:space-between; gap:12px; align-items:center;">
+            <div style="min-width:0;">
+              <div style="font-weight:600; color:#0f172a; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                #${project.project_id} • ${project.project_name || 'Untitled'}
+              </div>
+              <div style="font-size:12px; color:#475569; margin-top:3px;">
+                Site: ${site} • Observer: ${observer}
+              </div>
+              <div style="font-size:11px; color:#64748b; margin-top:2px;">
+                Created: ${created}
+              </div>
+            </div>
+            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+              <button class="btn btn-primary" style="padding: 8px 10px; font-size:12px; margin:0; white-space:nowrap;" onclick="editDbProject(${project.project_id})">
+                ✏️ Edit
+              </button>
+              <button class="btn" style="padding: 8px 10px; font-size:12px; margin:0; white-space:nowrap; background:#6366f1; color:white;" onclick="openLayerManager(${project.project_id}, '${safeName}')">
+                🗂️ Layers
+              </button>
+              <button class="btn btn-danger" style="padding: 8px 10px; font-size:12px; margin:0; white-space:nowrap;" onclick="deleteDbProject(${project.project_id}, '${safeName}')">
+                🗑 Delete
+              </button>
+              ${showV2 ? `<button class="btn" style="padding: 8px 10px; font-size:12px; margin:0; white-space:nowrap; background:linear-gradient(135deg,#f59e0b,#d97706); color:white; border:1px dashed rgba(255,255,255,0.4);" onclick="openDbProjectV2(${project.project_id})" title="Open in v2 Dev Preview (bulk draw, batch edit, etc.)">
+                🧪 v2
+              </button>` : ''}
+              <button class="btn btn-success" style="padding: 8px 10px; font-size:12px; margin:0; white-space:nowrap;" onclick="openDbProject(${project.project_id})">
+                🚀 Open
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function editDbProject(projectId) {
+      if (!projectId) return;
+      try {
+        const response = await fetch(`/api/db/projects/${projectId}`);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.detail || `HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        const project = data?.project || {};
+
+        activeDbEditProjectId = projectId;
+        document.getElementById('dbEditProjectName').value = project.project_name || '';
+        document.getElementById('dbEditSite').value = project.site || '';
+        document.getElementById('dbEditCruise').value = project.cruise || '';
+        document.getElementById('dbEditYear').value = project.year ?? '';
+        document.getElementById('dbEditRegion').value = project.region || '';
+        document.getElementById('dbEditObserver').value = project.observer || '';
+        document.getElementById('dbEditNotes').value = project.notes || '';
+        document.getElementById('dbEditStatus').textContent = '';
+        document.getElementById('dbEditSaveBtn').disabled = false;
+        document.getElementById('dbEditModal').classList.add('open');
+
+        // Load layer summary
+        loadEditLayerSummary(projectId);
+      } catch (error) {
+        alert(`Failed to load project: ${error.message}`);
+      }
+    }
+
+    function closeDbEditModal() {
+      document.getElementById('dbEditModal').classList.remove('open');
+      activeDbEditProjectId = null;
+    }
+
+    async function saveDbProjectEdits() {
+      if (!activeDbEditProjectId) return;
+
+      const name = document.getElementById('dbEditProjectName').value.trim();
+      if (!name) {
+        alert('Project name is required');
+        return;
+      }
+
+      const saveBtn = document.getElementById('dbEditSaveBtn');
+      const statusEl = document.getElementById('dbEditStatus');
+      saveBtn.disabled = true;
+      statusEl.style.color = '#0c5460';
+      statusEl.textContent = '⏳ Saving changes...';
+
+      try {
+        const payload = {
+          project_name: name,
+          site: document.getElementById('dbEditSite').value.trim() || null,
+          cruise: document.getElementById('dbEditCruise').value.trim() || null,
+          year: document.getElementById('dbEditYear').value ? parseInt(document.getElementById('dbEditYear').value, 10) : null,
+          region: document.getElementById('dbEditRegion').value.trim() || null,
+          observer: document.getElementById('dbEditObserver').value.trim() || null,
+          notes: document.getElementById('dbEditNotes').value.trim() || null,
+        };
+
+        const response = await fetch(`/api/db/projects/${activeDbEditProjectId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.detail || `HTTP ${response.status}`);
+        }
+
+        statusEl.style.color = '#155724';
+        statusEl.textContent = '✅ Project updated';
+        await fetchDbProjects();
+        setTimeout(() => closeDbEditModal(), 500);
+      } catch (error) {
+        statusEl.style.color = '#721c24';
+        statusEl.textContent = `⚠️ ${error.message}`;
+        saveBtn.disabled = false;
+      }
+    }
+
+    async function deleteDbProject(projectId, projectName) {
+      if (!projectId) return;
+      const label = projectName || `Project ${projectId}`;
+      const confirmed = confirm(`Delete project "${label}" (ID: ${projectId})?\n\nThis cannot be undone.`);
+      if (!confirmed) return;
+
+      try {
+        const response = await fetch(`/api/db/projects/${projectId}`, { method: 'DELETE' });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.detail || `HTTP ${response.status}`);
+        }
+        await fetchDbProjects();
+      } catch (error) {
+        alert(`Failed to delete project: ${error.message}`);
+      }
+    }
+
+    function openDbProject(projectId) {
+      if (!projectId) return;
+      window.location.href = `/annotation_file_mode.html?project_id=${encodeURIComponent(projectId)}`;
+    }
+
+    function openDbProjectV2(projectId) {
+      if (!projectId) return;
+      window.location.href = `/annotation_v2.html?project_id=${encodeURIComponent(projectId)}`;
+    }
+
+    // ========================================
+    // Layer Manager
+    // ========================================
+    let layerManagerProjectId = null;
+    let layerManagerLayers = [];
+    let layerOrderChanged = false;
+    let draggedLayerItem = null;
+
+    async function openLayerManager(projectId, projectName) {
+      if (!projectId) return;
+      layerManagerProjectId = projectId;
+      layerOrderChanged = false;
+
+      const nameEl = document.getElementById('layerManagerProjectName');
+      if (nameEl) nameEl.textContent = projectName || `Project #${projectId}`;
+
+      document.getElementById('layerManagerStatus').textContent = '';
+      document.getElementById('layerManagerModal').classList.add('open');
+
+      await loadLayerManagerList();
+    }
+
+    function closeLayerManager() {
+      document.getElementById('layerManagerModal').classList.remove('open');
+      layerManagerProjectId = null;
+      layerManagerLayers = [];
+    }
+
+    async function loadLayerManagerList() {
+      const listEl = document.getElementById('layerManagerList');
+      const emptyEl = document.getElementById('layerManagerEmpty');
+      listEl.innerHTML = '<div style="padding:12px; color:#94a3b8;">Loading layers...</div>';
+
+      try {
+        const resp = await fetch(`/api/db/projects/${layerManagerProjectId}/overlay-layers`);
+        if (!resp.ok) throw new Error('Failed to load layers');
+        const data = await resp.json();
+        layerManagerLayers = (data.layers || []).sort((a, b) => (a.display_order || 0) - (b.display_order || 0));
+        renderLayerManagerList();
+      } catch (err) {
+        listEl.innerHTML = `<div style="padding:12px; color:#ef4444;">❌ ${err.message}</div>`;
+        if (emptyEl) emptyEl.style.display = 'none';
+      }
+    }
+
+    function renderLayerManagerList() {
+      const listEl = document.getElementById('layerManagerList');
+      const emptyEl = document.getElementById('layerManagerEmpty');
+
+      if (!layerManagerLayers.length) {
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+        if (emptyEl) emptyEl.style.display = 'block';
+        return;
+      }
+
+      if (emptyEl) emptyEl.style.display = 'none';
+      listEl.style.display = 'block';
+
+      listEl.innerHTML = layerManagerLayers.map((layer, idx) => {
+        const dateStr = layer.created_at ? new Date(layer.created_at).toLocaleDateString() : '';
+        const checked = layer.is_active ? 'checked' : '';
+        const nameColor = layer.is_active ? '#0f172a' : '#94a3b8';
+        return `
+          <div class="layer-mgr-item" data-index="${idx}" draggable="true"
+               style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:white; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:6px; cursor:move; transition:box-shadow 0.15s;"
+               onmouseenter="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.08)'" onmouseleave="this.style.boxShadow='none'">
+            <span style="color:#94a3b8; font-size:16px; cursor:grab;">☰</span>
+            <input type="checkbox" ${checked} onchange="toggleLayerMgrActive(${layer.layer_id})" style="cursor:pointer; width:16px; height:16px;">
+            <div style="flex:1; min-width:0;">
+              <div style="font-weight:600; font-size:13px; color:${nameColor}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                ${layer.layer_name}
+              </div>
+              <div style="font-size:11px; color:#94a3b8;">${dateStr}</div>
+            </div>
+            <button onclick="deleteLayerMgr(${layer.layer_id})" style="background:#fee2e2; color:#dc2626; border:none; border-radius:4px; padding:4px 8px; font-size:11px; cursor:pointer; white-space:nowrap;"
+                    onmouseenter="this.style.background='#fca5a5'" onmouseleave="this.style.background='#fee2e2'">
+              🗑️ Remove
+            </button>
+          </div>
+        `;
+      }).join('');
+
+      // Wire up drag and drop for reordering
+      listEl.querySelectorAll('.layer-mgr-item').forEach(item => {
+        item.addEventListener('dragstart', (e) => {
+          draggedLayerItem = item;
+          item.style.opacity = '0.4';
+          e.dataTransfer.effectAllowed = 'move';
+        });
+        item.addEventListener('dragend', () => {
+          if (draggedLayerItem) draggedLayerItem.style.opacity = '1';
+          draggedLayerItem = null;
+          listEl.querySelectorAll('.layer-mgr-item').forEach(el => el.style.borderTop = '');
+        });
+        item.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          item.style.borderTop = '2px solid #6366f1';
+        });
+        item.addEventListener('dragleave', () => {
+          item.style.borderTop = '';
+        });
+        item.addEventListener('drop', (e) => {
+          e.preventDefault();
+          item.style.borderTop = '';
+          if (!draggedLayerItem || draggedLayerItem === item) return;
+          const fromIdx = parseInt(draggedLayerItem.dataset.index);
+          const toIdx = parseInt(item.dataset.index);
+          const [moved] = layerManagerLayers.splice(fromIdx, 1);
+          layerManagerLayers.splice(toIdx, 0, moved);
+          layerOrderChanged = true;
+          renderLayerManagerList();
+        });
+      });
+    }
+
+    function toggleLayerMgrActive(layerId) {
+      const layer = layerManagerLayers.find(l => l.layer_id === layerId);
+      if (layer) {
+        layer.is_active = layer.is_active ? 0 : 1;
+        renderLayerManagerList();
+      }
+    }
+
+    async function deleteLayerMgr(layerId) {
+      if (!confirm('Permanently delete this layer and all its features?')) return;
+      try {
+        const resp = await fetch(`/api/db/projects/${layerManagerProjectId}/overlay-layers/${layerId}`, { method: 'DELETE' });
+        if (!resp.ok) throw new Error('Failed to delete');
+        layerManagerLayers = layerManagerLayers.filter(l => l.layer_id !== layerId);
+        renderLayerManagerList();
+        setLayerManagerStatus('✅ Layer deleted', '#16a34a');
+      } catch (err) {
+        setLayerManagerStatus(`❌ ${err.message}`, '#dc2626');
+      }
+    }
+
+    async function saveLayerManagerChanges() {
+      const statusEl = document.getElementById('layerManagerStatus');
+      const saveBtn = document.getElementById('layerManagerSaveBtn');
+      saveBtn.disabled = true;
+      setLayerManagerStatus('⏳ Saving...', '#0c5460');
+
+      try {
+        // Save display order if changed
+        if (layerOrderChanged) {
+          const orders = layerManagerLayers.map((l, i) => ({ layer_id: l.layer_id, display_order: i }));
+          const resp = await fetch(`/api/db/projects/${layerManagerProjectId}/overlay-layers/reorder`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ layer_orders: orders })
+          });
+          if (!resp.ok) throw new Error('Failed to save order');
+        }
+
+        // Save is_active for each layer
+        for (const layer of layerManagerLayers) {
+          await fetch(`/api/db/projects/${layerManagerProjectId}/overlay-layers/${layer.layer_id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_active: layer.is_active ? true : false })
+          });
+        }
+
+        setLayerManagerStatus('✅ All changes saved', '#16a34a');
+        layerOrderChanged = false;
+        // Refresh edit modal layer summary if open
+        if (activeDbEditProjectId) loadEditLayerSummary(activeDbEditProjectId);
+      } catch (err) {
+        setLayerManagerStatus(`❌ ${err.message}`, '#dc2626');
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+
+    function setLayerManagerStatus(msg, color) {
+      const el = document.getElementById('layerManagerStatus');
+      if (el) { el.textContent = msg; el.style.color = color || '#475569'; }
+    }
+
+    // Shapefile Upload in Layer Manager
+    function handleLayerUploadDrop(e) {
+      e.preventDefault();
+      const zone = document.getElementById('layerUploadZone');
+      zone.style.borderColor = '#cbd5e1';
+      zone.style.background = '#f8fafc';
+      if (e.dataTransfer.files.length) uploadLayerFiles(e.dataTransfer.files);
+    }
+
+    function handleLayerFileSelect(e) {
+      if (e.target.files.length) uploadLayerFiles(e.target.files);
+      e.target.value = ''; // reset so same file can be re-selected
+    }
+
+    /**
+     * Upload shapefile — accepts FileList containing either:
+     *   • A single .zip archive, OR
+     *   • Loose shapefile component files (.shp, .shx, .dbf, .prj, etc.)
+     */
+    async function uploadLayerFiles(fileList) {
+      if (!layerManagerProjectId) return;
+
+      const files = Array.from(fileList);
+      const SHAPEFILE_EXTS = ['.shp','.shx','.dbf','.prj','.cpg','.sbn','.sbx','.fbn','.fbx','.ain','.aih','.ixs','.mxs','.atx','.xml','.qix'];
+      const isZip = files.length === 1 && files[0].name.toLowerCase().endsWith('.zip');
+      const looseFiles = files.filter(f => SHAPEFILE_EXTS.some(ext => f.name.toLowerCase().endsWith(ext)));
+      const hasShp = looseFiles.some(f => f.name.toLowerCase().endsWith('.shp'));
+
+      if (!isZip && !hasShp) {
+        setLayerManagerStatus('⚠️ Drop a .zip archive OR shapefile components (must include .shp)', '#dc2626');
+        return;
+      }
+
+      const progressEl = document.getElementById('layerUploadProgress');
+      const barEl = document.getElementById('layerUploadBar');
+      const statusEl = document.getElementById('layerUploadStatus');
+      progressEl.style.display = 'block';
+      barEl.style.width = '30%';
+      barEl.style.background = '#6366f1';
+
+      const formData = new FormData();
+      let endpoint;
+
+      if (isZip) {
+        statusEl.textContent = `Uploading ${files[0].name}...`;
+        formData.append('file', files[0]);
+        endpoint = `/api/db/projects/${layerManagerProjectId}/overlay-layers/upload-shapefile`;
+      } else {
+        statusEl.textContent = `Uploading ${looseFiles.length} shapefile components...`;
+        for (const f of looseFiles) {
+          formData.append('files', f);
+        }
+        endpoint = `/api/db/projects/${layerManagerProjectId}/overlay-layers/upload-shapefile-files`;
+      }
+
+      try {
+        barEl.style.width = '60%';
+        const resp = await fetch(endpoint, {
+          method: 'POST',
+          body: formData
+        });
+
+        barEl.style.width = '90%';
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `Upload failed (HTTP ${resp.status})`);
+        }
+
+        const data = await resp.json();
+        barEl.style.width = '100%';
+        statusEl.textContent = `✅ ${data.message}`;
+        setTimeout(() => { progressEl.style.display = 'none'; }, 3000);
+
+        // Reload layer list
+        await loadLayerManagerList();
+        setLayerManagerStatus(`✅ Imported: ${data.layer_name} (${data.feature_count} features)`, '#16a34a');
+      } catch (err) {
+        barEl.style.width = '100%';
+        barEl.style.background = '#ef4444';
+        statusEl.textContent = `❌ ${err.message}`;
+        setTimeout(() => { progressEl.style.display = 'none'; barEl.style.background = '#6366f1'; }, 5000);
+      }
+    }
+
+    // Load layer summary for edit modal
+    async function loadEditLayerSummary(projectId) {
+      const el = document.getElementById('dbEditLayerSummary');
+      if (!el) return;
+      try {
+        const resp = await fetch(`/api/db/projects/${projectId}/overlay-layers`);
+        if (!resp.ok) throw new Error('Failed');
+        const data = await resp.json();
+        const layers = data.layers || [];
+        const active = layers.filter(l => l.is_active).length;
+        if (!layers.length) {
+          el.innerHTML = 'No overlay layers. <a href="#" onclick="openLayerManager(' + projectId + '); return false;" style="color:#6366f1;">Add layers →</a>';
+        } else {
+          el.textContent = `${layers.length} layer(s) — ${active} active, ${layers.length - active} hidden`;
+        }
+      } catch (err) {
+        el.textContent = 'Could not load layers';
+      }
+    }
+
+    async function createDbProjectAndLaunch(project) {
+      if (!dbApiAvailable) {
+        throw new Error('DB API is not available');
+      }
+
+      const createResp = await fetch('/api/db/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_name: project.project_name,
+          site: project.site || null,
+          cruise: project.cruise || null,
+          year: project.year || null,
+          region: project.region || null,
+          observer: project.metadata?.observer || null,
+          notes: project.metadata?.notes || null,
+          metadata: project.metadata || {}
+        })
+      });
+
+      if (!createResp.ok) {
+        const errorData = await createResp.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to create DB project');
+      }
+
+      const createData = await createResp.json();
+      const projectId = createData?.project?.project_id;
+      if (!projectId) {
+        throw new Error('DB project_id not returned by API');
+      }
+
+      const assetIdByName = {};
+      for (const tif of (project.tif_files || [])) {
+        const assetResp = await fetch(`/api/db/projects/${projectId}/assets`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            asset_name: tif.name,
+            cog_url: tif.cog_path,
+            asset_type: tif.type || 'COG',
+            source_uri: tif.tif_path || null,
+            bounds: tif.bounds || null
+          })
+        });
+
+        if (!assetResp.ok) {
+          const errorData = await assetResp.json().catch(() => ({}));
+          throw new Error(errorData.detail || `Failed to create asset for ${tif.name}`);
+        }
+
+        const assetData = await assetResp.json();
+        const assetId = assetData?.asset?.asset_id;
+        if (assetId) {
+          assetIdByName[tif.name] = assetId;
+        }
+      }
+
+      if (Array.isArray(project.annotations) && project.annotations.length > 0) {
+        const annotationsPayload = project.annotations.map((ann) => {
+          const normalized = normalizeAnnotationForDb(ann);
+
+          // Best-effort asset assignment by orthomosaic/cog hints
+          const ortho = normalized.properties.ortho_file || normalized.properties.ORTHO_FILE || null;
+          if (ortho) {
+            const match = (project.tif_files || []).find(t =>
+              t.name === ortho ||
+              t.cog_path === ortho ||
+              t.tif_path === ortho ||
+              ortho.endsWith(`/${t.name}.tif`) ||
+              ortho.endsWith(`\\${t.name}.tif`)
+            );
+            if (match && assetIdByName[match.name]) {
+              normalized.asset_id = assetIdByName[match.name];
+            }
+          }
+
+          return normalized;
+        });
+
+        const bulkResp = await fetch(`/api/db/projects/${projectId}/annotations/bulk-replace`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ annotations: annotationsPayload })
+        });
+
+        if (!bulkResp.ok) {
+          const errorData = await bulkResp.json().catch(() => ({}));
+          throw new Error(errorData.detail || 'Failed to import annotations into DB project');
+        }
+      }
+
+      window.location.href = `/annotation_file_mode.html?project_id=${encodeURIComponent(projectId)}`;
+    }
     
     // ========================================
     // FILE MANAGEMENT
@@ -1440,6 +2852,18 @@
       }
       
       const project = generateProjectObject();
+
+      if (storageBackend === 'oracle') {
+        showStatus('createStatus', 'info', '🗄️ Creating Oracle project and opening viewer...');
+        try {
+          await createDbProjectAndLaunch(project);
+          return;
+        } catch (error) {
+          console.error('Error creating Oracle project:', error);
+          showStatus('createStatus', 'error', `❌ Oracle project creation failed: ${error.message}`);
+          return;
+        }
+      }
       
       // Download the JSON file (same as saveProject)
       const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
@@ -1505,12 +2929,117 @@
     
     function openInViewer() {
       if (!loadedProject) return;
+
+      // If loaded JSON already has a DB project id and Oracle mode is active, go directly
+      if (storageBackend === 'oracle' && loadedProject.project_id) {
+        window.location.href = `/annotation_file_mode.html?project_id=${encodeURIComponent(loadedProject.project_id)}`;
+        return;
+      }
       
       // Save to localStorage temporarily
       localStorage.setItem('annotationProject', JSON.stringify(loadedProject));
       
-      // Redirect to viewer
+      // Show version selector
+      showVersionSelector();
+    }
+    
+    function showVersionSelector() {
+      const modal = document.createElement('div');
+      modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+      `;
+      
+      modal.innerHTML = `
+        <div style="background: white; border-radius: 12px; padding: 32px; max-width: 520px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+          <h2 style="margin: 0 0 16px 0; color: #333; font-size: 24px;">Open Annotation Tool</h2>
+          <p style="color: #666; margin-bottom: 20px;">Choose which version to open.</p>
+
+          <button onclick="launchAnnotationTool()" style="
+            padding: 16px 18px;
+            border: 2px solid #10b981;
+            background: #f0fdf4;
+            border-radius: 8px;
+            cursor: pointer;
+            text-align: left;
+            transition: all 0.3s;
+            width: 100%;
+          " onmouseover="this.style.background='#dcfce7'; this.style.borderColor='#059669'" onmouseout="this.style.background='#f0fdf4'; this.style.borderColor='#10b981'">
+            <div style="font-weight: bold; font-size: 16px; color: #10b981; margin-bottom: 6px;">
+              🚀 Open Viewer (Stable)
+            </div>
+            <div style="color: #666; font-size: 14px;">
+              Recommended default annotation workflow
+            </div>
+          </button>
+
+          <button onclick="launchAnnotationToolV2()" style="
+            margin-top: 12px;
+            padding: 16px 18px;
+            border: 2px dashed #f59e0b;
+            background: linear-gradient(135deg, #fffbeb 0%, #fff 100%);
+            border-radius: 8px;
+            cursor: pointer;
+            text-align: left;
+            transition: all 0.3s;
+            width: 100%;
+          " onmouseover="this.style.background='#fef3c7'; this.style.borderColor='#d97706'" onmouseout="this.style.background='linear-gradient(135deg, #fffbeb 0%, #fff 100%)'; this.style.borderColor='#f59e0b'">
+            <div style="font-weight: bold; font-size: 16px; color: #d97706; margin-bottom: 6px;">
+              🧪 v2 Dev Preview
+            </div>
+            <div style="color: #666; font-size: 14px;">
+              Bulk draw mode, Ctrl+Z undo, batch table editing, sortable columns, arrow-key nav
+            </div>
+            <div style="margin-top: 6px; font-size: 11px; color: #92400e; background: #fef3c7; display: inline-block; padding: 2px 8px; border-radius: 3px;">
+              ⚠️ In development — may have rough edges
+            </div>
+          </button>
+
+          <div style="margin-top: 14px; font-size: 12px; color: #64748b;">
+            Need legacy file-mode viewer? <a href="/annotation_file_mode_REFACTORED.html" style="color:#2563eb; text-decoration:none;">Open legacy viewer</a>
+          </div>
+
+          <button onclick="this.closest('[style*=fixed]').remove()" style="
+            margin-top: 18px;
+            padding: 10px 20px;
+            background: #f3f4f6;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            cursor: pointer;
+            width: 100%;
+            font-size: 14px;
+            color: #6b7280;
+          " onmouseover="this.style.background='#e5e7eb'" onmouseout="this.style.background='#f3f4f6'">
+            Cancel
+          </button>
+        </div>
+      `;
+      
+      document.body.appendChild(modal);
+    }
+    
+    function launchAnnotationTool() {
+      // Remove modal
+      const modal = document.querySelector('[style*="position: fixed"]');
+      if (modal) modal.remove();
+
       window.location.href = '/annotation_file_mode.html';
+    }
+
+    function launchAnnotationToolV2() {
+      // Remove modal
+      const modal = document.querySelector('[style*="position: fixed"]');
+      if (modal) modal.remove();
+
+      window.location.href = '/annotation_v2.html';
     }
     
     // ========================================

@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Data and cache
+data/*
+!data/reference/
+cache/
+exports/
+results/
+*.log
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Documentation
+docs/
+*.md
+!README.md
+!LICENSE.md
+!MANIFEST.in
+
+# Testing
+test/
+tests/
+.pytest_cache/
+
+# Reference folder (old_app and mission-system for reference only)
+reference*/
+
+# Config files
+.env
+.env.*
+!.env.example
+bumpversion.cfg
+
+# Reports
+*.json
+!data/reference/*.json
+
+# Scripts not needed in container
+create_shortcuts.*
+install_*.sh
+*.bat
+
+# Local Oracle data (managed by Docker volumes)
+oracle-data/

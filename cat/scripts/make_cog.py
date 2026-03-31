@@ -3,13 +3,13 @@
 make_cog.py — Convert a GeoTIFF to a Cloud Optimized GeoTIFF (COG).
 
 Examples (Windows CMD):
-  python make_cog.py ^
+  python -m cat.scripts.make_cog ^
     --src "C:\\path\\to\\2025_GUA-2838_mos.tif" ^
     --dst "C:\\path\\to\\2025_GUA-2838_mos_cog.tif" ^
     --resampling bilinear
 
 For single-band DEMs you can set nodata (within dtype range), e.g.:
-  python make_cog.py --src dem.tif --dst dem_cog.tif --nodata -9999 --resampling bilinear
+  python -m cat.scripts.make_cog --src dem.tif --dst dem_cog.tif --nodata -9999 --resampling bilinear
 """
 
 import argparse

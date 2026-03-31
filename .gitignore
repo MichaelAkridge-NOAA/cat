@@ -119,3 +119,15 @@ secrets.yaml
 credentials.json
 *.pem
 *.key
+
+# Reference folder (old_app backup, not part of main codebase)
+reference*/
+
+# Local Oracle data volumes
+oracle-data/
+
+# Backup staging directory
+backups/
+
+# Exports directory
+exports/

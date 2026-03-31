@@ -10,9 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 keywords = ["coral", "annotation", "geotiff", "cog", "orthomosaic", "marine-biology", "gis"]
-authors = [
-  {name = "Michael Akridge"}
-]
+authors = [{name = "Michael Akridge"}]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
@@ -26,7 +24,7 @@ classifiers = [
 ]
 
 dependencies = [
-  "fastapi>=0.100.0",
+  "fastapi>=0.100,<1",
   "uvicorn[standard]>=0.23.0",
   "titiler.core>=0.15.0",
   "titiler.extensions>=0.15.0",
@@ -34,23 +32,17 @@ dependencies = [
   "rio-cogeo>=5.0.0",
   "python-multipart>=0.0.6",
   "aiofiles>=23.0.0",
-  "pydantic>=2.0.0",
+  "pydantic>=2,<3",
   "numpy>=1.24.0",
   "geopandas>=0.14",
   "pyogrio>=0.7",
   "rtree>=1.0",
+  "oracledb>=2.4.1",
 ]
 
 [project.optional-dependencies]
-dev = [
-  "pytest>=7.0.0",
-  "pytest-asyncio>=0.21.0",
-  "black>=23.0.0",
-  "flake8>=6.0.0",
-]
-shortcuts = [
-  "pyshortcuts>=1.9.0",
-]
+dev = ["pytest>=7", "pytest-asyncio>=0.21", "black>=23", "flake8>=6"]
+shortcuts = ["pyshortcuts>=1.9.0"]
 
 [project.urls]
 Homepage = "https://github.com/MichaelAkridge-NOAA/cat"
@@ -67,11 +59,16 @@ cat-create-shortcuts = "cat.shortcuts:main_create"
 cat-remove-shortcuts = "cat.shortcuts:main_remove"
 
 [tool.setuptools]
-packages = ["cat", "cat.api"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["cat*"]
 
 [tool.setuptools.package-data]
 cat = [
   "web/*.html",
+  "web/*.css",
+  "web/*.js",
   "docs/*.png",
   "docs/*.ico",
   "data/reference/*.csv",

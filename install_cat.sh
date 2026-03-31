@@ -1,0 +1,333 @@
+#!/bin/bash
+# =============================================================================
+# CAT: Coral Annotation Tool - Installation Script for Google Cloud Workstations
+# Version: 2.0.0 (2026-03-30)
+# =============================================================================
+# Installs and configures CAT with Docker and Oracle database
+# Handles auto-start on reboot and management commands
+# Auto-bootstrap: Creates CAT schema and ingests reference data on startup
+# =============================================================================
+SCRIPT_VERSION="2.0.0"
+CAT_BRANCH="cat_db"
+
+echo "=============================================="
+echo "CAT Installer v${SCRIPT_VERSION}"
+echo "Coral Annotation Tool with Oracle DB"
+echo "Branch: ${CAT_BRANCH}"
+echo "=============================================="
+echo ""
+
+# Detect the actual user (not root even when using sudo)
+ACTUAL_USER="${SUDO_USER:-$USER}"
+ACTUAL_HOME=$(eval echo ~$ACTUAL_USER)
+
+echo "Detected user: $ACTUAL_USER"
+echo "Home directory: $ACTUAL_HOME"
+
+# =============================================================================
+# Configuration
+# =============================================================================
+CAT_INSTALL_DIR="$ACTUAL_HOME/cat_deployment"
+CAT_DATA_DIR="$ACTUAL_HOME/cat_data"
+CAT_EXPORTS_DIR="$CAT_DATA_DIR/exports"
+CAT_REPO_URL="https://github.com/MichaelAkridge-NOAA/cat.git"
+
+# =============================================================================
+# Step 1: Update system and install prerequisites
+# =============================================================================
+echo "[Step 1/10] Updating system and installing prerequisites..."
+sudo apt-get update
+sudo apt-get install -y \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release \
+    git \
+    || {
+    echo "  ERROR: Failed to install prerequisites"
+    exit 1
+}
+echo "  ✓ Prerequisites installed"
+
+# =============================================================================
+# Step 2: Install Docker if not present
+# =============================================================================
+if ! command -v docker &> /dev/null; then
+    echo "[Step 2/10] Installing Docker..."
+    
+    # Add Docker's official GPG key
+    sudo mkdir -p /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    
+    # Set up Docker repository
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
+      $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
+    # Install Docker Engine
+    sudo apt-get update
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    
+    # Add user to docker group
+    sudo usermod -aG docker $ACTUAL_USER
+    echo "  ✓ Docker installed. You may need to log out and back in for group changes to take effect."
+else
+    echo "[Step 2/10] Docker already installed"
+    docker --version
+fi
+
+# =============================================================================
+# Step 3: Create directory structure
+# =============================================================================
+echo "[Step 3/10] Creating directory structure..."
+sudo -u "$ACTUAL_USER" mkdir -p "$CAT_INSTALL_DIR"
+sudo -u "$ACTUAL_USER" mkdir -p "$CAT_EXPORTS_DIR"
+sudo -u "$ACTUAL_USER" mkdir -p "$CAT_DATA_DIR/reference"
+sudo -u "$ACTUAL_USER" mkdir -p "$CAT_INSTALL_DIR/oracle-data"
+echo "  ✓ Directories created:"
+echo "    - Install: $CAT_INSTALL_DIR"
+echo "    - Data: $CAT_DATA_DIR"
+echo "    - Exports: $CAT_EXPORTS_DIR"
+echo "    - Oracle: $CAT_INSTALL_DIR/oracle-data (bind mount)"
+
+# =============================================================================
+# Step 4: Clone CAT repository from cat_db branch
+# =============================================================================
+echo "[Step 4/10] Cloning CAT application from $CAT_BRANCH branch..."
+
+if [ ! -d "$CAT_INSTALL_DIR/.git" ]; then
+    echo "  Cloning CAT repository (branch: $CAT_BRANCH)..."
+    sudo -u "$ACTUAL_USER" git clone -b "$CAT_BRANCH" "$CAT_REPO_URL" "$CAT_INSTALL_DIR" || {
+        echo "  ERROR: Failed to clone repository"
+        echo "  Trying fallback: copy from current directory..."
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if [ "$SCRIPT_DIR" != "$CAT_INSTALL_DIR" ]; then
+            sudo -u "$ACTUAL_USER" rsync -av --exclude='.git' --exclude='__pycache__' \
+                --exclude='*.pyc' --exclude='venv' --exclude='data/*' \
+                --exclude='oracle-data' \
+                "$SCRIPT_DIR/" "$CAT_INSTALL_DIR/"
+        fi
+    }
+else
+    echo "  Repository already exists, pulling latest from $CAT_BRANCH..."
+    cd "$CAT_INSTALL_DIR"
+    sudo -u "$ACTUAL_USER" git fetch origin
+    sudo -u "$ACTUAL_USER" git checkout "$CAT_BRANCH"
+    sudo -u "$ACTUAL_USER" git pull origin "$CAT_BRANCH"
+fi
+echo "  ✓ CAT files ready"
+
+# =============================================================================
+# Step 5: Create .env file from template
+# =============================================================================
+echo "[Step 5/10] Configuring environment variables..."
+cd "$CAT_INSTALL_DIR"
+
+if [ ! -f .env ]; then
+    if [ -f .env.example ]; then
+        sudo -u "$ACTUAL_USER" cp .env.example .env
+        echo "  ✓ Created .env from template"
+        echo "  ⚠️  IMPORTANT: Edit .env file and set your passwords!"
+        echo "      Location: $CAT_INSTALL_DIR/.env"
+    else
+        echo "  Creating .env file..."
+        sudo -u "$ACTUAL_USER" cat > .env << 'ENVFILE'
+# Oracle Database (root password)
+ORACLE_PASSWORD=ChangeMe123
+
+# CAT Application User (auto-created by Oracle container)
+# docker-compose maps: APP_SCHEMA_NAME -> CAT_DB_USER, APP_SCHEMA_PASSWORD -> CAT_DB_PASSWORD
+APP_SCHEMA_NAME=cat_user
+APP_SCHEMA_PASSWORD=ChangeMe123
+
+# Database Service Name
+DB_SERVICE_NAME=FREEPDB1
+
+# CAT Settings
+CAT_STORAGE_BACKEND=oracle
+CAT_HOST=0.0.0.0
+CAT_PORT=8000
+
+# Auto-bootstrap on startup (creates tables and loads reference data)
+CAT_DB_AUTO_BOOTSTRAP=true
+ENVFILE
+        echo "  ✓ Created .env file"
+        echo "  ⚠️  IMPORTANT: Edit .env and change default passwords!"
+    fi
+else
+    echo "  ✓ .env file already exists"
+fi
+
+# =============================================================================
+# Step 6: Build Docker images
+# =============================================================================
+echo "[Step 6/10] Building Docker images..."
+cd "$CAT_INSTALL_DIR"
+docker compose -f docker-compose.cat.yml build || {
+    echo "  ERROR: Failed to build Docker images"
+    exit 1
+}
+echo "  ✓ Docker images built"
+
+# =============================================================================
+# Step 7: Create management scripts
+# =============================================================================
+echo "[Step 7/10] Creating management scripts..."
+
+# Start script
+sudo -u "$ACTUAL_USER" cat > "$CAT_INSTALL_DIR/cat-start.sh" << 'STARTSCRIPT'
+#!/bin/bash
+cd "$(dirname "$0")"
+echo "Starting CAT services..."
+docker compose -f docker-compose.cat.yml up -d
+echo "✓ CAT services started"
+echo "Access CAT at: http://localhost:8000"
+docker compose -f docker-compose.cat.yml ps
+STARTSCRIPT
+chmod +x "$CAT_INSTALL_DIR/cat-start.sh"
+
+# Stop script
+sudo -u "$ACTUAL_USER" cat > "$CAT_INSTALL_DIR/cat-stop.sh" << 'STOPSCRIPT'
+#!/bin/bash
+cd "$(dirname "$0")"
+echo "Stopping CAT services..."
+docker compose -f docker-compose.cat.yml down
+echo "✓ CAT services stopped"
+STOPSCRIPT
+chmod +x "$CAT_INSTALL_DIR/cat-stop.sh"
+
+# Restart script
+sudo -u "$ACTUAL_USER" cat > "$CAT_INSTALL_DIR/cat-restart.sh" << 'RESTARTSCRIPT'
+#!/bin/bash
+cd "$(dirname "$0")"
+echo "Restarting CAT services..."
+docker compose -f docker-compose.cat.yml restart
+echo "✓ CAT services restarted"
+docker compose -f docker-compose.cat.yml ps
+RESTARTSCRIPT
+chmod +x "$CAT_INSTALL_DIR/cat-restart.sh"
+
+# Status script
+sudo -u "$ACTUAL_USER" cat > "$CAT_INSTALL_DIR/cat-status.sh" << 'STATUSSCRIPT'
+#!/bin/bash
+cd "$(dirname "$0")"
+echo "CAT Service Status:"
+docker compose -f docker-compose.cat.yml ps
+echo ""
+echo "Recent logs:"
+docker compose -f docker-compose.cat.yml logs --tail=20
+STATUSSCRIPT
+chmod +x "$CAT_INSTALL_DIR/cat-status.sh"
+
+# Logs script
+sudo -u "$ACTUAL_USER" cat > "$CAT_INSTALL_DIR/cat-logs.sh" << 'LOGSSCRIPT'
+#!/bin/bash
+cd "$(dirname "$0")"
+echo "Following CAT logs (Ctrl+C to exit)..."
+docker compose -f docker-compose.cat.yml logs -f
+LOGSSCRIPT
+chmod +x "$CAT_INSTALL_DIR/cat-logs.sh"
+
+echo "  ✓ Management scripts created:"
+echo "    - cat-start.sh: Start CAT services"
+echo "    - cat-stop.sh: Stop CAT services"
+echo "    - cat-restart.sh: Restart CAT services"
+echo "    - cat-status.sh: Check service status"
+echo "    - cat-logs.sh: View logs"
+
+# =============================================================================
+# Step 8: Create systemd service for auto-start
+# =============================================================================
+echo "[Step 8/10] Creating systemd service for auto-start..."
+
+sudo bash -c "cat > /etc/systemd/system/cat.service" << SERVICEEOF
+[Unit]
+Description=CAT: Coral Annotation Tool
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=$CAT_INSTALL_DIR
+User=$ACTUAL_USER
+Group=$ACTUAL_USER
+
+# Start command
+ExecStart=/usr/bin/docker compose -f docker-compose.cat.yml up -d
+
+# Stop command
+ExecStop=/usr/bin/docker compose -f docker-compose.cat.yml down
+
+# Restart behavior
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+SERVICEEOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable cat.service
+echo "  ✓ Systemd service created and enabled"
+echo "    Service will start automatically on boot"
+
+# =============================================================================
+# Step 9: Start CAT services
+# =============================================================================
+echo "[Step 9/10] Starting CAT services for the first time..."
+cd "$CAT_INSTALL_DIR"
+docker compose -f docker-compose.cat.yml up -d
+
+echo "  Waiting for services to be healthy..."
+sleep 10
+
+# Check service status
+if docker compose -f docker-compose.cat.yml ps | grep -q "Up"; then
+    echo "  ✓ CAT services started successfully"
+else
+    echo "  ⚠️  Services may still be starting. Check with: $CAT_INSTALL_DIR/cat-status.sh"
+fi
+
+# =============================================================================
+# Step 10: Display summary
+# =============================================================================
+echo "[Step 10/10] Installation complete!"
+echo ""
+echo "=============================================="
+echo "CAT Installation Summary"
+echo "=============================================="
+echo ""
+echo "📁 Installation Directory: $CAT_INSTALL_DIR"
+echo "📁 Data Directory: $CAT_DATA_DIR"
+echo "� Branch: $CAT_BRANCH"
+echo ""
+echo "🌐 Access CAT at: http://localhost:8000"
+echo "   (Or use Cloud Workstation proxy URL)"
+echo ""
+echo "🚀 Auto-Bootstrap: ENABLED"
+echo "   - CAT tables created automatically"
+echo "   - Reference data ingested on startup"
+echo ""
+echo "🛠️  Management Commands:"
+echo "   Start:   $CAT_INSTALL_DIR/cat-start.sh"
+echo "   Stop:    $CAT_INSTALL_DIR/cat-stop.sh"
+echo "   Restart: $CAT_INSTALL_DIR/cat-restart.sh"
+echo "   Status:  $CAT_INSTALL_DIR/cat-status.sh"
+echo "   Logs:    $CAT_INSTALL_DIR/cat-logs.sh"
+echo ""
+echo "⚙️  Configuration:"
+echo "   Environment: $CAT_INSTALL_DIR/.env"
+echo "   Compose:     $CAT_INSTALL_DIR/docker-compose.cat.yml"
+echo ""
+echo "🔄 Auto-start on boot: ENABLED"
+echo "   Manage: sudo systemctl [start|stop|status] cat.service"
+echo ""
+echo "⚠️  IMPORTANT NEXT STEPS:"
+echo "   1. Edit $CAT_INSTALL_DIR/.env"
+echo "   2. Change ORACLE_PASSWORD and APP_SCHEMA_PASSWORD"
+echo "   3. Run: $CAT_INSTALL_DIR/cat-restart.sh"
+echo ""
+echo "=============================================="

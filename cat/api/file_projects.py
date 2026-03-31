@@ -547,6 +547,7 @@ async def export_shapefile(data: Dict = Body(...)):
                     "NO_COLONY": ann.get("no_colony", 0),
                     "SPCODE": ann.get("spcode", ""),
                     "JUVENILE": ann.get("juvenile", 0),
+                    "JUV_SUBST": ann.get("juv_substrate", ""),  # Shapefile field names max 10 chars
                     "REMNANT": ann.get("remnant", 0),
                     "FRAGMENT": ann.get("fragment", 0),
                     "MORPH_CODE": ann.get("morph_code", ""),

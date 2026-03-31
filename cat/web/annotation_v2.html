@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CAT: Coral Annotation Tool</title>
+  <title>CAT v2 Dev Preview — Coral Annotation Tool</title>
   <meta charset="utf-8">
   <meta name="viewport" content="initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="css/annotation-styles.css" />
   <link rel="stylesheet" href="css/annotation-panels.css" />
   <link rel="stylesheet" href="css/annotation-controls.css" />
+  <link rel="stylesheet" href="css/annotation-v2.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
   <!-- Phase 1: Externalized CSS files (legacy inline styles retained but disabled) -->
@@ -1009,6 +1010,7 @@
       <img src="/logo.png" alt="CAT">
       <span class="cat-text">CAT:</span>
       <span>Coral Annotation Tool</span>
+      <span class="v2-dev-badge">🧪 v2 Dev</span>
     </h1>
     <div class="nav-links">
       <span id="currentUserBadge" style="display: none; padding: 4px 8px; background: rgba(102, 126, 234, 0.1); color: #667eea; border-radius: 4px; font-size: 12px; font-weight: 500; white-space: nowrap;">
@@ -1581,5 +1583,10 @@
   <script src="js/annotation-runtime-operations.js"></script>
   <script src="js/annotation-overlay-layers.js"></script>
   <!-- Phase 2h: Runtime fully split into focused modules -->
+
+  <!-- ═══ v2 Enhancement Modules ═══ -->
+  <script src="js/v2-bulk.js"></script>
+  <script src="js/v2-table.js"></script>
+  <script src="js/v2-defaults.js"></script>
 </body>
 </html>

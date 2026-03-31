@@ -1,0 +1,670 @@
+/* ================================================
+   CAT - Coral Annotation Tool
+   Panels, Modals, and Layer Controls
+   ================================================ */
+
+/* ─── Shapefile Pane: reduced hit area for click-through ───
+   Shapefile overlay features sit below annotations (z-index 450 vs 650).
+   Clicks on fills pass through to annotations; strokes remain clickable. */
+.leaflet-shapefilePane-pane path {
+  pointer-events: stroke;
+}
+
+/* Annotation Form Panel - Bottom Horizontal Layout */
+.annotation-panel {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  right: 10px;
+  background: white;
+  padding: 10px;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+  z-index: 1000;
+  max-height: 55vh;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.annotation-panel h3 {
+  margin: 0;
+  font-size: 14px;
+  color: #667eea;
+  font-weight: 600;
+}
+
+/* Collapsible Sections */
+.collapsible {
+  background: #f8f9fa;
+  padding: 8px 12px;
+  margin: 10px -15px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  color: #333;
+  border-top: 1px solid #dee2e6;
+  border-bottom: 1px solid #dee2e6;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.collapsible:hover {
+  background: #e9ecef;
+}
+
+.collapsible-content {
+  padding: 10px 0;
+  display: none;
+}
+
+.collapsible-content.active {
+  display: block;
+}
+
+.collapsible::after {
+  content: '▼';
+  font-size: 10px;
+}
+
+.collapsible.active::after {
+  content: '▲';
+}
+
+/* Annotation Table View */
+.annotation-table-container {
+  flex: 1;
+  overflow: auto;
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  max-height: 200px;
+  min-height: 100px;
+}
+
+.annotation-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  background: white;
+}
+
+.annotation-table thead {
+  position: sticky;
+  top: 0;
+  background: #667eea;
+  color: white;
+  z-index: 10;
+}
+
+.annotation-table th {
+  padding: 6px 8px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  border-right: 1px solid rgba(255,255,255,0.2);
+}
+
+.annotation-table th:last-child {
+  border-right: none;
+}
+
+.annotation-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #dee2e6;
+  border-right: 1px solid #f0f0f0;
+  white-space: nowrap;
+}
+
+.annotation-table td:last-child {
+  border-right: none;
+}
+
+.annotation-table tbody tr {
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.annotation-table tbody tr:hover {
+  background: #e9ecef;
+}
+
+.annotation-table tbody tr.selected {
+  background: #d1ecf1;
+  font-weight: 600;
+}
+
+.annotation-table .actions {
+  display: flex;
+  gap: 5px;
+}
+
+.annotation-table .btn-sm {
+  padding: 2px 6px;
+  font-size: 10px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.annotation-table .btn-edit {
+  background: #667eea;
+  color: white;
+}
+
+.annotation-table .btn-edit:hover {
+  background: #5568d3;
+}
+
+.annotation-table .btn-delete {
+  background: #dc3545;
+  color: white;
+}
+
+.annotation-table .btn-delete:hover {
+  background: #c82333;
+}
+
+/* Editable Cells */
+.annotation-table td.editable {
+  cursor: cell;
+  position: relative;
+}
+
+.annotation-table td.editable:hover {
+  background: #fff3cd;
+  outline: 1px dashed #ffc107;
+}
+
+.annotation-table td.editing {
+  padding: 2px;
+  background: #fff;
+}
+
+.annotation-table td.editing input,
+.annotation-table td.editing select {
+  width: 100%;
+  padding: 4px 6px;
+  border: 2px solid #667eea;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.annotation-table td.editing input:focus,
+.annotation-table td.editing select:focus {
+  outline: none;
+  border-color: #06b6d4;
+}
+
+/* Combined Map Layers Panel */
+.layer-control {
+  position: absolute;
+  top: 80px;
+  left: 10px;
+  bottom: 10px;
+  background: white;
+  padding: 0;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+  z-index: 1000;
+  width: 280px;
+  transition: all 0.3s ease;
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.layer-control.collapsed {
+  width: auto;
+  max-height: auto;
+  bottom: auto;
+  overflow: visible;
+}
+
+/* Layer Section Dividers */
+.layer-section {
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.layer-section:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #495057;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+  padding: 5px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.section-title:hover {
+  background: #f8f9fa;
+}
+
+.section-collapse-icon {
+  font-size: 10px;
+  color: #667eea;
+  transition: transform 0.3s;
+}
+
+.layer-section.collapsed .section-collapse-icon {
+  transform: rotate(-90deg);
+}
+
+.section-content {
+  max-height: 2000px;
+  overflow: visible;
+  transition: max-height 0.3s ease, margin-top 0.3s ease, padding 0.3s ease;
+  margin-top: 10px;
+}
+
+.layer-section.collapsed .section-content {
+  max-height: 0;
+  margin-top: 0;
+  overflow: hidden;
+}
+
+.section-content.collapsed {
+  max-height: 0;
+  margin-top: 0;
+  overflow: hidden;
+  padding: 0 !important;
+}
+
+/* Collapsible Panel Header */
+.panel-header {
+  padding: 12px 15px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 2px solid #667eea;
+  user-select: none;
+}
+
+.panel-header:hover {
+  background: #f8f9fa;
+}
+
+.panel-header h4 {
+  margin: 0;
+  font-size: 14px;
+  color: #333;
+}
+
+.panel-header .collapse-icon {
+  font-size: 12px;
+  color: #667eea;
+  transition: transform 0.3s;
+}
+
+.panel-header.collapsed .collapse-icon {
+  transform: rotate(-90deg);
+}
+
+.panel-content {
+  padding: 15px 20px;
+  max-height: none;
+  overflow: visible;
+  transition: max-height 0.3s ease, padding 0.3s ease;
+}
+
+.panel-content.collapsed {
+  max-height: 0;
+  padding: 0 20px;
+  overflow: hidden;
+}
+
+.layer-control h4 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  color: #333;
+  border-bottom: 2px solid #667eea;
+  padding-bottom: 6px;
+}
+
+.layer-item {
+  margin-bottom: 15px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.layer-item:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.layer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.layer-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.layer-collapse-icon {
+  font-size: 10px;
+  margin-left: 6px;
+  color: #999;
+  transition: transform 0.2s;
+}
+
+.layer-details {
+  max-height: 500px;
+  overflow: visible; /* Changed from hidden to allow slider thumb to show */
+  transition: max-height 0.3s ease;
+  padding: 0 5px 10px 5px; /* Extra bottom padding for slider thumb */
+}
+
+.layer-details.collapsed {
+  max-height: 0;
+  padding: 0;
+  overflow: hidden; /* Hide when collapsed */
+}
+
+.layer-toggle {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.layer-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  transition: .3s;
+  border-radius: 24px;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .3s;
+  border-radius: 50%;
+}
+
+.layer-toggle input:checked + .toggle-slider {
+  background-color: #667eea;
+}
+
+.layer-toggle input:checked + .toggle-slider:before {
+  transform: translateX(20px);
+}
+
+.layer-toggle input:disabled + .toggle-slider {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.opacity-control {
+  margin-top: 5px;
+  padding: 5px 0; /* Add vertical padding so thumb doesn't get clipped */
+}
+
+.opacity-control label {
+  font-size: 11px;
+  color: #666;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.opacity-slider {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: #ddd;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 5px 0; /* Add vertical margin for thumb clearance */
+  cursor: pointer;
+}
+
+.opacity-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #667eea;
+  cursor: pointer;
+}
+
+.opacity-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #667eea;
+  cursor: pointer;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+}
+
+.cog-selector select {
+  width: 100%;
+  padding: 6px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+/* Loading Overlay */
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.15);
+  backdrop-filter: blur(1px);
+  z-index: 3000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.loading-overlay.active {
+  display: flex;
+}
+
+.loading-spinner {
+  background: white;
+  padding: 30px;
+  border-radius: 8px;
+  text-align: center;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  pointer-events: auto;
+}
+
+.spinner {
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #667eea;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 15px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Edit Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 4000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.modal-overlay.active {
+  display: flex;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  max-width: 900px;
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  padding: 20px 25px;
+  border-bottom: 2px solid #667eea;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header h3 {
+  margin: 0;
+  color: #333;
+  font-size: 18px;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 32px;
+  color: #999;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  line-height: 28px;
+  transition: color 0.2s;
+}
+
+.modal-close:hover {
+  color: #333;
+}
+
+.modal-body {
+  padding: 25px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-footer {
+  padding: 15px 25px;
+  border-top: 1px solid #eee;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.modal-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 15px;
+}
+
+.modal-form-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-form-field.wide {
+  grid-column: span 2;
+}
+
+.modal-form-field.full {
+  grid-column: span 3;
+}
+
+.modal-form-field label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.modal-form-field input,
+.modal-form-field select {
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.modal-form-field input:focus,
+.modal-form-field select:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+}
+
+/* Shapefile Editor Styles */
+.edit-tool-btn {
+  transition: all 0.2s ease;
+  border: 1px solid #ccc !important;
+}
+
+.edit-tool-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  border-color: #007bff !important;
+}
+
+.edit-tool-btn:active {
+  transform: translateY(0);
+}

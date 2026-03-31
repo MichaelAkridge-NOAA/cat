@@ -1,3 +1,6 @@
+# Environment variable loading
+python-dotenv>=1.0.0
+
 # TiTiler and FastAPI dependencies for tile server
 titiler.application>=0.16
 uvicorn[standard]>=0.20.0
@@ -13,8 +16,7 @@ rtree>=1.0
 
 # File handling and geospatial dependencies
 pydantic>=2.0.0
-
-accelerate>=0.24.0
+oracledb>=2.4.1
 
 # Shapefile support (optional)
 fiona>=1.9.0

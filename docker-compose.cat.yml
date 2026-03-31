@@ -1,0 +1,139 @@
+# =============================================================================
+# Docker Compose for CAT: Coral Annotation Tool with Oracle Database
+# =============================================================================
+# This compose file integrates CAT with Oracle Free database
+# 
+# Usage:
+#   docker compose -f docker-compose.cat.yml up -d          # Start
+#   docker compose -f docker-compose.cat.yml down           # Stop
+#   docker compose -f docker-compose.cat.yml logs -f        # Logs
+#   docker compose -f docker-compose.cat.yml down -v        # Reset (deletes data!)
+#
+# On first startup:
+#   1. Oracle initializes and runs scripts from /container-entrypoint-initdb.d
+#   2. CAT user and tables are created automatically
+#   3. CAT app starts and loads reference data from CSV files
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Oracle Database with Auto-Init Scripts
+  # ---------------------------------------------------------------------------
+  database-oracle-free:
+    container_name: database-oracle-free
+    restart: unless-stopped
+    image: gvenzl/oracle-free:latest
+    ports: 
+      - "1521:1521"
+    environment:
+      # Root password (required - must be set in .env)
+      - ORACLE_PASSWORD=${ORACLE_PASSWORD}
+      # Auto-create app user (CAT application user)
+      - APP_USER=${APP_SCHEMA_NAME:-cat_user}
+      - APP_USER_PASSWORD=${APP_SCHEMA_PASSWORD}
+    volumes:
+      # Persistent data - bind mount to local directory
+      - ./oracle-data:/opt/oracle/oradata
+      # Initialization scripts - run on FIRST startup only
+      - ./scripts/db-init:/container-entrypoint-initdb.d:ro
+    hostname: database
+    networks:
+      - cat-network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 100
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # CAT Application
+  # ---------------------------------------------------------------------------
+  cat-app:
+    container_name: cat-app
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      database-oracle-free:
+        condition: service_healthy
+    environment:
+      # Database connection (for DB mode)
+      # CAT uses CAT_DB_* and CAT_STORAGE_BACKEND env vars
+      - CAT_STORAGE_BACKEND=oracle
+      - CAT_DB_USER=${APP_SCHEMA_NAME:-cat_user}
+      - CAT_DB_PASSWORD=${APP_SCHEMA_PASSWORD}
+      - CAT_DB_DSN=database-oracle-free:1521/${DB_SERVICE_NAME:-FREEPDB1}
+      - CAT_DB_AUTO_BOOTSTRAP=true
+      
+      # Legacy env vars (for startup.sh compatibility)
+      - DB_HOST=database-oracle-free
+      - DB_PORT=1521
+      - DB_SERVICE_NAME=${DB_SERVICE_NAME:-FREEPDB1}
+      
+      # GCS/GDAL settings (for public bucket access)
+      - GS_NO_SIGN_REQUEST=YES
+      - GDAL_HTTP_MERGE_CONSECUTIVE_RANGES=YES
+      - GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR
+      - CPL_VSIL_CURL_ALLOWED_EXTENSIONS=.tif,.tiff
+      
+      # Application settings
+      - CAT_MODE=${CAT_MODE:-db}  # 'file' or 'db' (default: db)
+      - CAT_HOST=0.0.0.0
+      - CAT_PORT=8000
+      
+      # Auto-bootstrap: create tables and ingest reference data on startup
+      - CAT_AUTO_BOOTSTRAP=${CAT_AUTO_BOOTSTRAP:-true}
+      
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount data directory for COG files and exports
+      - ./data:/app/data
+      - ./exports:/app/exports
+      - cat-logs:/app/logs
+      
+      # Mount source code for live development (avoids rebuilds)
+      - ./cat:/app/cat
+      - ./main.py:/app/main.py
+      
+      # Mount reference data for ingestion
+      - ./cat/data/reference:/app/cat/data/reference:ro
+      
+      # Optional: mount config for overrides
+      # - ./cat/config.yaml:/app/cat/config.yaml:ro
+    networks:
+      - cat-network
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s  # Allow time for bootstrap
+
+  # ---------------------------------------------------------------------------
+  # ORDS (Optional - Oracle REST Data Services)
+  # ---------------------------------------------------------------------------
+  # Uncomment if you need ORDS for direct database access
+  # mission-app:
+  #   container_name: mission-app
+  #   ...
+
+# =============================================================================
+# Volumes
+# =============================================================================
+# Note: Oracle data uses bind mount at ./oracle-data (not a Docker volume)
+# This allows easy backup/restore and data inspection
+volumes:
+  # Application logs
+  cat-logs:
+    name: cat-logs
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  cat-network:
+    name: cat-network
+    driver: bridge
