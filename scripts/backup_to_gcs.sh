@@ -54,12 +54,12 @@ set -euo pipefail
 # ─── Configuration ───────────────────────────────────────────────────────────
 ORACLE_CONTAINER="database-oracle-free"
 CAT_CONTAINER="cat-app"
-SCHEMA_NAME="GISDAT"
+SCHEMA_NAME="cat_user"           # resolved from .env APP_SCHEMA_NAME or default CAT_USER
 DB_SERVICE="FREEPDB1"
 
 # ─── Defaults ────────────────────────────────────────────────────────────────
-GCS_BUCKET=""
-GCS_PREFIX="cat-backups"
+GCS_BUCKET="gs://nmfs-dev-uc1-pifsc"
+GCS_PREFIX="_backup/cat"
 BACKUP_ROOT=""
 SKIP_GCS=false
 SKIP_ORA_DATA=false
@@ -166,6 +166,17 @@ if [[ -z "$ORACLE_PASSWORD" ]]; then
 fi
 ok "Oracle password loaded"
 
+# Resolve schema name from .env APP_SCHEMA_NAME (fallback: CAT_USER)
+if [[ -z "$SCHEMA_NAME" ]]; then
+    if [[ -f "$ENV_FILE" ]]; then
+        SCHEMA_NAME=$(grep -E '^\s*APP_SCHEMA_NAME\s*=' "$ENV_FILE" | head -1 | sed "s/.*=\s*//" | tr -d "\"'" | tr '[:lower:]' '[:upper:]')
+    fi
+    if [[ -z "$SCHEMA_NAME" ]]; then
+        SCHEMA_NAME="CAT_USER"
+    fi
+fi
+info "Schema name  : $SCHEMA_NAME"
+
 # ─── Timestamp & paths ──────────────────────────────────────────────────────
 TIMESTAMP=$(date +"%Y-%m-%d_%H%M%S")
 BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
@@ -233,6 +244,12 @@ fi
 if [[ "$SKIP_ORA_DATA" == false ]]; then
     step "2/4  Copying oracle-data (raw datafiles)"
     ORA_DATA_SRC="$PROJECT_DIR/oracle-data"
+
+    # Fallback: check sibling of project dir (common on GCP Workstations)
+    if [[ ! -d "$ORA_DATA_SRC" && -d "$(dirname "$PROJECT_DIR")/oracle-data" ]]; then
+        ORA_DATA_SRC="$(dirname "$PROJECT_DIR")/oracle-data"
+        info "Using fallback oracle-data path: $ORA_DATA_SRC"
+    fi
 
     if [[ -d "$ORA_DATA_SRC" ]]; then
         info "Source: $ORA_DATA_SRC"
