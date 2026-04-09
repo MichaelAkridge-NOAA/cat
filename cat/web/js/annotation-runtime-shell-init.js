@@ -478,7 +478,108 @@
       // Clear last drawing tool when cancelled by user
       lastDrawingTool = null;
     });
-    
+
+    // ── Handle draw:created — the NORMAL (non-bulk) drawing handler ──
+    // In bulk mode v2-bulk.js handles this event; we skip here.
+    map.on(L.Draw.Event.CREATED, function(event) {
+      // Skip in bulk mode — v2-bulk.js handles it
+      if (window.v2BulkMode && window.v2BulkMode.enabled) return;
+
+      const layer = event.layer;
+      const type  = event.layerType;
+
+      console.log(`🎨 Draw created (normal mode): type=${type}`);
+
+      // Ensure the layer uses the annotations pane for proper z-index
+      if (layer.options) {
+        layer.options.pane = 'annotationsPane';
+      }
+
+      // SAM3 Smart Grid: rectangle + magic wand + grid mode
+      if (type === 'rectangle' && magicWandActive && typeof sam3Mode !== 'undefined' && sam3Mode === 'grid' && currentCOG) {
+        console.log('🎯 SAM3 Smart Grid triggered');
+        if (typeof window.runSAM3SmartGrid === 'function') {
+          window.runSAM3SmartGrid(layer);
+        }
+        return;
+      }
+
+      // SAM3 Box: rectangle + magic wand + box mode
+      if (type === 'rectangle' && magicWandActive && typeof sam3Mode !== 'undefined' && sam3Mode === 'box' && currentCOG) {
+        console.log('📦 SAM3 Box segmentation triggered');
+        if (typeof window.handleSAM3Box === 'function') {
+          window.handleSAM3Box(layer);
+          return;
+        }
+        // Fall through to normal drawing if SAM3 box handler unavailable
+      }
+
+      // ── Normal drawing flow ──
+
+      // Remove any previous unsaved annotation to prevent ghost shapes
+      if (currentAnnotation && currentAnnotation.layer && !currentAnnotation.layer.annotationData) {
+        console.log('🧹 Removing previous unsaved annotation');
+        drawnItems.removeLayer(currentAnnotation.layer);
+      }
+
+      // Add the new layer to the map
+      drawnItems.addLayer(layer);
+
+      // Store the current drawing with full-precision geometry
+      currentAnnotation = {
+        type: type,
+        layer: layer,
+        geometry: getFullPrecisionGeometry(layer)
+      };
+
+      // Auto-start / resume timer on first annotation draw
+      if (!timerState.isRunning) {
+        console.log('🎬 First annotation drawn — starting timer');
+        startTimer();
+      } else if (timerState.isPaused) {
+        console.log('▶️ Annotation drawn — resuming timer');
+        startTimer();
+      }
+
+      // Show the Discard button for easy cancel
+      const discardBtn = document.getElementById('discardAnnotationBtn');
+      if (discardBtn) discardBtn.style.display = '';
+
+      // Show status
+      showStatus('Draw created! Fill out the form and click Save.', 'info');
+
+      // Auto-focus on species field for quick data entry
+      const speciesField = document.getElementById('spcode');
+      if (speciesField) {
+        // Quick-repeat: pre-fill last species if field is empty
+        if (!speciesField.value && window._catLastSpcode) {
+          speciesField.value = window._catLastSpcode;
+          speciesField.style.background = 'linear-gradient(to right, #eff6ff 0%, #fff 100%)';
+          speciesField.style.borderColor = '#3b82f6';
+          speciesField.addEventListener('input', function() {
+            speciesField.style.background = '';
+            speciesField.style.borderColor = '';
+          }, { once: true });
+        }
+        setTimeout(() => {
+          speciesField.focus();
+          speciesField.select();
+          console.log('✅ Auto-focused on species field');
+        }, 100);
+      }
+
+      // Debug log
+      const bounds = layer.getBounds ? layer.getBounds() : null;
+      const center = bounds ? bounds.getCenter() : (layer.getLatLng ? layer.getLatLng() : null);
+      console.log('🖊️ Drew annotation:', {
+        type: type,
+        geometry: currentAnnotation.geometry,
+        coordinates: currentAnnotation.geometry.coordinates,
+        visualCenter: center,
+        layerType: layer.constructor.name
+      });
+    });
+
     // Monitor toolbar button clicks to detect deactivation
     // Leaflet Draw adds/removes 'leaflet-draw-toolbar-button-enabled' class
     setTimeout(() => {
