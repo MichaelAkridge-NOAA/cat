@@ -506,6 +506,10 @@ function loadProjectAnnotations() {
       };
     }
     normalizedAnn._displayIndex = idx + 1;
+    // Mark annotations with a DB ID as already synced to prevent needless re-sync
+    if (normalizedAnn._dbAnnotationId) {
+      normalizedAnn._syncStatus = 'synced';
+    }
 
     const layerStyle = typeof getAnnotationLayerStyle === 'function'
       ? getAnnotationLayerStyle(normalizedAnn)

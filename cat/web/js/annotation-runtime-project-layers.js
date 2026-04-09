@@ -52,6 +52,106 @@
       return storageBackend === 'oracle' && !!currentProject?.project_id;
     }
 
+    // ── Project annotation helpers (needed by autosave, undo, etc.) ──
+
+    function getDbAnnotationId(annotation) {
+      return annotation?._dbAnnotationId || annotation?.annotation_id || annotation?.id || null;
+    }
+
+    function normalizeDbAnnotationResponse(annotationRow) {
+      const feature = annotationRow?.feature;
+      const properties = annotationRow?.properties || {};
+      const geometry = feature?.geometry || annotationRow?.geometry || null;
+      return {
+        ...properties,
+        properties,
+        geometry,
+        id: annotationRow?.annotation_id,
+        _dbAnnotationId: annotationRow?.annotation_id,
+        _dbAnnotationVersion: annotationRow?.version ?? 1,
+        _syncStatus: 'synced'
+      };
+    }
+
+    async function syncAnnotationToDb(annotation, assetId = null) {
+      if (!isOracleProjectMode()) return annotation;
+      const projectId = currentProject.project_id;
+      const annotationId = getDbAnnotationId(annotation);
+      const payload = normalizeAnnotationForDb(annotation);
+      if (assetId) payload.asset_id = assetId;
+
+      if (annotationId) {
+        const putBody = {
+          feature: payload.feature,
+          properties: payload.properties,
+          created_by: payload.created_by
+        };
+        if (annotation._dbAnnotationVersion != null) putBody.version = annotation._dbAnnotationVersion;
+        const resp = await fetch(`${serverUrl}/api/db/projects/${projectId}/annotations/${annotationId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(putBody)
+        });
+        if (resp.status === 409) {
+          const conflictData = await resp.json().catch(() => ({}));
+          const err = new Error(`Conflict: annotation #${annotationId} was modified by another user`);
+          err.isConflict = true;
+          err.serverAnnotation = conflictData.current_annotation ? normalizeDbAnnotationResponse(conflictData.current_annotation) : null;
+          throw err;
+        }
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.detail || `Failed to update annotation #${annotationId}`);
+        }
+        const result = await resp.json();
+        return normalizeDbAnnotationResponse(result.annotation);
+      }
+
+      const resp = await fetch(`${serverUrl}/api/db/projects/${projectId}/annotations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!resp.ok) {
+        const e = await resp.json().catch(() => ({}));
+        throw new Error(e.detail || 'Failed to create annotation');
+      }
+      const result = await resp.json();
+      return normalizeDbAnnotationResponse(result.annotation);
+    }
+
+    function getProjectAnnotations() {
+      return projectAnnotations;
+    }
+
+    function removeAnnotationFromProject(index) {
+      projectAnnotations.splice(index, 1);
+    }
+
+    function updateAnnotationInProject(index, annotationData) {
+      if (index >= 0 && index < projectAnnotations.length) {
+        projectAnnotations[index] = annotationData;
+      }
+    }
+
+    function applySyncedAnnotation(index, syncedAnnotation) {
+      if (index < 0 || !syncedAnnotation) return;
+      const oldAnnotation = projectAnnotations[index];
+      updateAnnotationInProject(index, syncedAnnotation);
+      // Also update the parallel annotations array used by table/stats
+      if (index >= 0 && index < annotations.length && annotations[index] === oldAnnotation) {
+        annotations[index] = syncedAnnotation;
+      }
+      drawnItems.eachLayer(layer => {
+        if (!layer.annotationData) return;
+        if (layer.annotationData._displayIndex === index + 1 || layer.annotationData === oldAnnotation) {
+          layer.annotationData = syncedAnnotation;
+        }
+      });
+    }
+
+    // ── End project annotation helpers ──
+
     function normalizeDbGeoJsonFeature(feature) {
       const properties = feature?.properties || {};
       const geometryPayload = feature?.geometry || null;
@@ -95,6 +195,11 @@
       const snapshot = await response.json();
       currentProject = transformDbSnapshotToProject(snapshot);
       projectAnnotations = (snapshot.annotations || []).map((a) => {
+        // Use normalizeDbAnnotationResponse to preserve _dbAnnotationId / _dbAnnotationVersion
+        // so the change-polling knows which annotations are already local
+        if (a.annotation_id != null || a.version != null) {
+          return normalizeDbAnnotationResponse(a);
+        }
         if (a.properties && a.feature?.geometry) {
           return {
             ...a.properties,
@@ -475,6 +580,11 @@
             </div>
           </div>
           <div class="layer-details collapsed" id="shapefile_${safeId}_details">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+              <label style="font-size:11px; color:#aaa; display:flex; align-items:center; gap:3px; cursor:pointer;">
+                <input type="checkbox" class="shapefile-border-only" id="shapefile_${safeId}_borderOnly" data-shapefile-name="${shapefile.name}" data-safe-id="${safeId}" disabled> Border only
+              </label>
+            </div>
             <div class="opacity-control">
               <label>Opacity: <span id="shapefile_${safeId}_opacityValue">80</span>%</label>
               <input type="range" class="opacity-slider shapefile-opacity-slider" id="shapefile_${safeId}_opacity" min="0" max="100" value="80" disabled data-shapefile-name="${shapefile.name}" data-safe-id="${safeId}">
@@ -492,21 +602,31 @@
         // Add change listeners
         const checkbox = layerDiv.querySelector('.shapefile-checkbox');
         const opacitySlider = layerDiv.querySelector(`#shapefile_${safeId}_opacity`);
-        
+        const borderOnlyCheckbox = layerDiv.querySelector(`#shapefile_${safeId}_borderOnly`);
+
         // Opacity slider listener
         opacitySlider.addEventListener('input', (e) => {
           setShapefileOpacity(shapefile.name, e.target.value, safeId);
         });
-        
+
+        // Border-only toggle
+        if (borderOnlyCheckbox) {
+          borderOnlyCheckbox.addEventListener('change', () => {
+            toggleShapefileBorderOnly(shapefile.name, borderOnlyCheckbox.checked, safeId);
+          });
+        }
+
         checkbox.addEventListener('change', async (e) => {
           if (e.target.checked) {
             await loadShapefileLayer(shapefile, safeId);
-            // Enable opacity slider when shapefile is loaded
+            // Enable controls when shapefile is loaded
             if (opacitySlider) opacitySlider.disabled = false;
+            if (borderOnlyCheckbox) borderOnlyCheckbox.disabled = false;
           } else {
             removeShapefileLayer(shapefile.name);
-            // Disable opacity slider when shapefile is removed
+            // Disable controls when shapefile is removed
             if (opacitySlider) opacitySlider.disabled = true;
+            if (borderOnlyCheckbox) borderOnlyCheckbox.disabled = true;
           }
         });
       }
@@ -599,7 +719,7 @@
             console.log('💡 Tip: The shapefile loaded but might be in a different location.');
             
             // Ask if user wants to zoom to shapefile
-            if (confirm(`Shapefile "${shapefile.name}" loaded but is outside the current view.\n\nZoom to shapefile location?`)) {
+            if (await catConfirm(`Shapefile "${shapefile.name}" loaded but is outside the current view.\n\nZoom to shapefile location?`, { ok: 'Zoom' })) {
               map.fitBounds(bounds, { padding: [50, 50] });
             }
           }
@@ -995,13 +1115,14 @@
           pane: 'annotationsPane',  // Ensure annotations are in the top pane
           style: {
             color: '#3388ff',
-            weight: 7,  // Use 7px line weight for consistency
+            weight: 3,
             opacity: 0.8,
             fillOpacity: 0.3
           }
         }).getLayers()[0];
         
         // Normalize annotation format: if properties are nested, flatten them to root level
+        // Preserve DB tracking fields (_dbAnnotationId, _dbAnnotationVersion, _syncStatus)
         let normalizedAnn = {...ann};
         if (ann.properties && typeof ann.properties === 'object') {
           // Merge properties to root level for compatibility with existing code
@@ -1009,12 +1130,11 @@
             ...ann.properties,
             geometry: ann.geometry
           };
-          
-          // Debug: log first annotation's properties
-          if (idx === 0) {
-            console.log('📋 First annotation properties:', Object.keys(ann.properties));
-            console.log('📋 Sample values:', ann.properties);
-          }
+          // Carry over DB tracking fields from the parent object
+          if (ann._dbAnnotationId != null) normalizedAnn._dbAnnotationId = ann._dbAnnotationId;
+          if (ann._dbAnnotationVersion != null) normalizedAnn._dbAnnotationVersion = ann._dbAnnotationVersion;
+          if (ann._syncStatus) normalizedAnn._syncStatus = ann._syncStatus;
+          if (ann.id != null) normalizedAnn.id = ann.id;
         }
         
         // Add the array index as the display ID (for consistent referencing)

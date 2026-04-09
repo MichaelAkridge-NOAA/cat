@@ -24,16 +24,21 @@ function setupDrawingHandlers(map) {
   // Handle draw deleted
   map.on(L.Draw.Event.DELETED, handleDrawDeleted);
   
-  // Escape key: discard in-progress unsaved annotation and clear form (Fix 2c)
+  // Escape key: discard in-progress unsaved annotation and clear form
+  // Single-press: close any open dropdown AND discard in one action
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (!currentAnnotation || !currentAnnotation.layer || currentAnnotation.layer.annotationData) return;
-    // Only act if no modal or dropdown is open
+    // Skip if a modal is open
     if (document.getElementById('editModal')?.classList.contains('active')) return;
-    if (document.querySelector('.species-autocomplete-dropdown[style*="block"]')) return;
+    // Close any open autocomplete dropdown first (but don't bail — keep going)
+    const openDropdown = document.querySelector('.species-autocomplete-dropdown.active');
+    if (openDropdown) openDropdown.classList.remove('active');
+    // Discard unsaved annotation
+    if (!currentAnnotation || !currentAnnotation.layer || currentAnnotation.layer.annotationData) return;
     drawnItems.removeLayer(currentAnnotation.layer);
     currentAnnotation = null;
     if (typeof clearAnnotationForm === 'function') clearAnnotationForm();
+    hideDiscardButton();
     if (typeof showStatus === 'function') showStatus('Annotation discarded', 'info');
   });
 
@@ -45,10 +50,13 @@ function setupDrawingHandlers(map) {
  * @param {Object} event - Leaflet draw event
  */
 async function handleDrawCreated(event) {
+  // In bulk mode, v2-bulk.js handles everything — skip normal flow entirely
+  if (window.v2BulkMode && window.v2BulkMode.enabled) return;
+
   const layer = event.layer;
   const type = event.layerType;
   const drawnItems = getDrawnItems();
-  
+
   console.log(`🎨 Draw event: type=${type}`);
   
   // Set layer to use annotations pane for proper z-index
@@ -90,7 +98,7 @@ async function handleDrawCreated(event) {
  * @param {string} type - Layer type
  * @param {L.FeatureGroup} drawnItems - Feature group containing drawings
  */
-function handleNormalDrawing(layer, type, drawnItems) {
+async function handleNormalDrawing(layer, type, drawnItems) {
   // Guard: if there's an in-progress unsaved annotation with form data, confirm before discarding (Fix 2c)
   if (currentAnnotation && currentAnnotation.layer && !currentAnnotation.layer.annotationData) {
     const formHasContent = ['spcode', 'morph_code', 'transect', 'segment'].some(id => {
@@ -99,7 +107,7 @@ function handleNormalDrawing(layer, type, drawnItems) {
     });
 
     if (formHasContent) {
-      const discard = confirm('You have an annotation in progress with unsaved data.\n\nDiscard it and start a new one?');
+      const discard = await catConfirm('You have an annotation in progress with unsaved data.\n\nDiscard it and start a new one?', { danger: true, ok: 'Discard' });
       if (!discard) {
         // User chose to keep working — remove the just-drawn layer and abort
         drawnItems.removeLayer(layer);
@@ -135,9 +143,12 @@ function handleNormalDrawing(layer, type, drawnItems) {
     showStatus('Draw created! Fill out the form and click Save.', 'info');
   }
   
+  // Show Discard button for easy cancel
+  showDiscardButton();
+
   // Auto-focus on species field
   autoFocusSpeciesField();
-  
+
   // Log debug info
   logDrawingDebugInfo(layer, type);
 }
@@ -171,35 +182,15 @@ function autoStartTimer() {
 }
 
 /**
- * Calculate shape measurements and update form fields
+ * Calculate shape measurements (for display only — does NOT fill user fields).
+ * The auto-computed line_length_m is saved directly at save time in
+ * annotation-runtime-operations.js, so seglength/segwidth stay user-controlled.
  * @param {L.Layer} layer - Leaflet layer
  * @param {string} type - Layer type
  */
 function calculateShapeMeasurements(layer, type) {
-  const segLengthField = document.getElementById('seglength');
-  const segWidthField = document.getElementById('segwidth');
-  
-  if (type === 'polyline') {
-    const coords = layer.getLatLngs();
-    let length = 0;
-    for (let i = 0; i < coords.length - 1; i++) {
-      length += coords[i].distanceTo(coords[i + 1]);
-    }
-    if (segLengthField) {
-      segLengthField.value = length.toFixed(3);
-    }
-  } else if (type === 'rectangle' || type === 'polygon') {
-    const bounds = layer.getBounds();
-    const width = bounds.getNorthEast().distanceTo(bounds.getNorthWest());
-    const height = bounds.getNorthEast().distanceTo(bounds.getSouthEast());
-    
-    if (segLengthField) {
-      segLengthField.value = Math.max(width, height).toFixed(3);
-    }
-    if (segWidthField) {
-      segWidthField.value = Math.min(width, height).toFixed(3);
-    }
-  }
+  // No-op: seglength and segwidth are user-entered fields.
+  // line_length_m is computed at save time from the drawn geometry.
 }
 
 /**
@@ -208,8 +199,19 @@ function calculateShapeMeasurements(layer, type) {
 function autoFocusSpeciesField() {
   const speciesField = document.getElementById('spcode');
   if (speciesField) {
+    // Quick-repeat: pre-fill last species if field is empty
+    if (!speciesField.value && window._catLastSpcode) {
+      speciesField.value = window._catLastSpcode;
+      speciesField.style.background = 'linear-gradient(to right, #eff6ff 0%, #fff 100%)';
+      speciesField.style.borderColor = '#3b82f6';
+      speciesField.addEventListener('input', function () {
+        speciesField.style.background = '';
+        speciesField.style.borderColor = '';
+      }, { once: true });
+    }
     setTimeout(() => {
       speciesField.focus();
+      speciesField.select(); // Select so typing replaces the pre-filled value
       console.log('✅ Auto-focused on species field');
     }, 100);
   }
@@ -356,16 +358,72 @@ function updateDrawingToolVisualFeedback(tool) {
  * Enable last used drawing tool
  */
 function enableLastDrawingTool() {
-  if (lastDrawingTool) {
-    console.log('🔄 Re-enabling last drawing tool:', lastDrawingTool);
-    
-    const map = getMap();
-    if (!map) return;
-    
-    // Trigger appropriate drawing tool
-    // This would integrate with Leaflet Draw controls
-    updateDrawingToolVisualFeedback(lastDrawingTool);
+  if (!lastDrawingTool) return;
+  console.log('🔄 Re-enabling last drawing tool:', lastDrawingTool);
+
+  const map = getMap();
+  if (!map) return;
+
+  // Click the matching Leaflet Draw toolbar button to activate the tool
+  const toolClassMap = {
+    'polyline': '.leaflet-draw-draw-polyline',
+    'polygon': '.leaflet-draw-draw-polygon',
+    'rectangle': '.leaflet-draw-draw-rectangle'
+  };
+  const selector = toolClassMap[lastDrawingTool];
+  if (selector) {
+    const btn = document.querySelector(selector);
+    if (btn) btn.click();
   }
+  updateDrawingToolVisualFeedback(lastDrawingTool);
+}
+
+/**
+ * Show the Discard button (called when an unsaved annotation exists)
+ */
+function showDiscardButton() {
+  const btn = document.getElementById('discardAnnotationBtn');
+  if (btn) btn.style.display = '';
+}
+
+/**
+ * Hide the Discard button
+ */
+function hideDiscardButton() {
+  const btn = document.getElementById('discardAnnotationBtn');
+  if (btn) btn.style.display = 'none';
+}
+
+/**
+ * Discard the current unsaved annotation (called from Discard button)
+ */
+function discardCurrentAnnotation() {
+  const drawnItems = getDrawnItems();
+  if (currentAnnotation && currentAnnotation.layer && !currentAnnotation.layer.annotationData) {
+    drawnItems.removeLayer(currentAnnotation.layer);
+    currentAnnotation = null;
+    if (typeof clearAnnotationForm === 'function') clearAnnotationForm();
+    hideDiscardButton();
+    if (typeof showStatus === 'function') showStatus('Annotation discarded', 'info');
+  }
+}
+
+/**
+ * Show / hide the drawing hints bar overlay
+ * @param {string|null} toolType - e.g. 'polyline', 'polygon', 'rectangle', or null to hide
+ */
+function showDrawingHints(toolType) {
+  const bar = document.getElementById('drawingHintsBar');
+  if (!bar) return;
+  if (!toolType) {
+    bar.style.display = 'none';
+    return;
+  }
+  const finishHint = document.getElementById('drawingHintFinish');
+  if (finishHint) {
+    finishHint.textContent = toolType === 'rectangle' ? 'click & drag to draw' : 'double-click to finish';
+  }
+  bar.style.display = '';
 }
 
 // Export functions
@@ -381,6 +439,10 @@ if (typeof module !== 'undefined' && module.exports) {
     getLastDrawingTool,
     setLastDrawingTool,
     updateDrawingToolVisualFeedback,
-    enableLastDrawingTool
+    enableLastDrawingTool,
+    showDiscardButton,
+    hideDiscardButton,
+    discardCurrentAnnotation,
+    showDrawingHints
   };
 }

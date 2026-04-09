@@ -285,7 +285,7 @@ async function loadShapefileLayer(shapefile, safeId) {
       
       if (!shapefileVisible) {
         console.warn('⚠️ Shapefile is outside current map view!');
-        if (confirm(`Shapefile "${shapefile.name}" loaded but is outside the current view.\n\nZoom to shapefile location?`)) {
+        if (await catConfirm(`Shapefile "${shapefile.name}" loaded but is outside the current view.\n\nZoom to shapefile location?`, { ok: 'Zoom' })) {
           map.fitBounds(bounds, { padding: [50, 50] });
         }
       }
@@ -353,22 +353,33 @@ function setShapefileOpacity(shapefileName, value, safeId) {
       displayElement.textContent = value;
     }
   }
-  
+
   // Update layer opacity
   const shapefileData = shapefileLayers[shapefileName];
   if (shapefileData && shapefileData.layer) {
-    // Store the opacity value
     shapefileData.opacity = parseInt(value);
-    
-    // Update both stroke and fill opacity proportionally
+
     const opacityRatio = value / 100;
+    const borderOnly = shapefileData.borderOnly || false;
     shapefileData.layer.setStyle({
-      opacity: opacityRatio * 0.8,  // Stroke opacity (80% of slider value)
-      fillOpacity: opacityRatio * 0.15  // Fill opacity (15% of slider value)
+      opacity: opacityRatio * 0.8,
+      fillOpacity: borderOnly ? 0 : opacityRatio * 0.15
     });
-    
-    console.log(`Updated ${shapefileName} opacity to ${value}%`);
   }
+}
+
+/**
+ * Toggle border-only mode for a shapefile layer
+ */
+function toggleShapefileBorderOnly(shapefileName, borderOnly, safeId) {
+  const shapefileData = shapefileLayers[shapefileName];
+  if (!shapefileData || !shapefileData.layer) return;
+
+  shapefileData.borderOnly = borderOnly;
+  const opacityRatio = (shapefileData.opacity || 80) / 100;
+  shapefileData.layer.setStyle({
+    fillOpacity: borderOnly ? 0 : opacityRatio * 0.15
+  });
 }
 
 /**
@@ -621,6 +632,11 @@ function buildShapefileControls(shapefiles) {
         </div>
       </div>
       <div class="layer-details collapsed" id="shapefile_${safeId}_details">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+          <label style="font-size:11px; color:#aaa; display:flex; align-items:center; gap:3px; cursor:pointer;">
+            <input type="checkbox" class="shapefile-border-only" id="shapefile_${safeId}_borderOnly" data-shapefile-name="${shapefile.name}" data-safe-id="${safeId}"> Border only
+          </label>
+        </div>
         <div class="opacity-control">
           <label>Opacity: <span id="shapefile_${safeId}_opacityValue">80</span>%</label>
           <input type="range" class="opacity-slider shapefile-opacity-slider" id="shapefile_${safeId}_opacity" min="0" max="100" value="80" data-shapefile-name="${shapefile.name}" data-safe-id="${safeId}">
@@ -638,21 +654,31 @@ function buildShapefileControls(shapefiles) {
     // Add change listeners
     const checkbox = layerDiv.querySelector('.shapefile-checkbox');
     const opacitySlider = layerDiv.querySelector(`#shapefile_${safeId}_opacity`);
-    
+    const borderOnlyCheckbox = layerDiv.querySelector(`#shapefile_${safeId}_borderOnly`);
+
     // Opacity slider listener
     opacitySlider.addEventListener('input', (e) => {
       const value = e.target.value;
       setShapefileOpacity(shapefile.name, value, safeId);
     });
-    
+
+    // Border-only toggle
+    if (borderOnlyCheckbox) {
+      borderOnlyCheckbox.addEventListener('change', () => {
+        toggleShapefileBorderOnly(shapefile.name, borderOnlyCheckbox.checked, safeId);
+      });
+    }
+
     // Checkbox listener
     checkbox.addEventListener('change', async (e) => {
       if (e.target.checked) {
         await loadShapefileLayer(shapefile, safeId);
         if (opacitySlider) opacitySlider.disabled = false;
+        if (borderOnlyCheckbox) borderOnlyCheckbox.disabled = false;
       } else {
         removeShapefileLayer(shapefile.name);
         if (opacitySlider) opacitySlider.disabled = true;
+        if (borderOnlyCheckbox) borderOnlyCheckbox.disabled = true;
       }
     });
     

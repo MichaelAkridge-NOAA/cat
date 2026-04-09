@@ -10,7 +10,14 @@
   pointer-events: stroke;
 }
 
-/* Annotation Form Panel - Bottom Horizontal Layout */
+/* ─── Layout: Float (default) vs Dock-Right ─── */
+
+/* CSS custom property controlling panel width in dock mode */
+:root {
+  --panel-width: 420px;
+}
+
+/* Float mode (default): panel overlays map at bottom */
 .annotation-panel {
   position: absolute;
   bottom: 10px;
@@ -25,6 +32,89 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
+  transition: none;
+}
+
+/* ── Dock-Right mode ── */
+body.layout-docked #map {
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  right: var(--panel-width);
+  width: auto;
+  height: 100vh;
+}
+
+body.layout-docked .navbar {
+  right: calc(var(--panel-width) + 10px);
+}
+
+body.layout-docked .annotation-panel {
+  position: fixed;
+  top: 0; bottom: 0;
+  right: 0;
+  left: auto;
+  width: var(--panel-width);
+  max-height: 100vh;
+  height: 100vh;
+  border-radius: 0;
+  border-left: 2px solid #dee2e6;
+  box-shadow: -3px 0 12px rgba(0,0,0,0.15);
+  overflow-y: auto;
+  z-index: 1001;
+  padding: 8px;
+}
+
+/* Resize handle — only visible in dock mode */
+#layout-resize-handle {
+  display: none;
+  position: fixed;
+  top: 0; bottom: 0;
+  right: var(--panel-width);
+  width: 6px;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 1100;
+  transition: background 0.15s;
+}
+#layout-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 40px;
+  background: #bbb;
+  border-radius: 2px;
+}
+#layout-resize-handle:hover,
+#layout-resize-handle.dragging {
+  background: rgba(102, 126, 234, 0.15);
+}
+#layout-resize-handle:hover::after,
+#layout-resize-handle.dragging::after {
+  background: #667eea;
+}
+body.layout-docked #layout-resize-handle {
+  display: block;
+}
+
+/* Dock toggle button */
+#layoutToggleBtn {
+  background: none;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #495057;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+#layoutToggleBtn:hover {
+  background: #f0f4ff;
+  color: #667eea;
+  border-color: #c0caf0;
 }
 
 .annotation-panel h3 {

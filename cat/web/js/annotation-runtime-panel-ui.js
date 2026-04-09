@@ -99,7 +99,8 @@
 
         // Build a useful display label (e.g. "SSID #3" or "Line #3" if no species yet)
         if (!spcode) {
-          spcode = layer.annotationData.type === 'line' ? 'Line' : 'Ann';
+          const t = layer.annotationData.type;
+          spcode = (t === 'line' || t === 'polyline') ? 'Line' : 'Ann';
         }
       } else if (layer.feature && layer.feature.id) {
         // Database mode
@@ -130,20 +131,23 @@
         return; // Can't determine center
       }
       
+      // Color label background by species
+      const _labelColor = (typeof catSpeciesColor === 'function') ? catSpeciesColor(spcode) : '#667eea';
+
       // Create a custom div icon for the label with species and ID
       const labelIcon = L.divIcon({
         className: 'annotation-label',
         html: `<div style="
-          background: rgba(255, 255, 255, 0.9);
-          color: #000;
+          background: ${_labelColor};
+          color: #fff;
           padding: 2px 6px;
           border-radius: 3px;
-          border: 1px solid #333;
           font-size: 11px;
           font-weight: bold;
           white-space: nowrap;
           box-shadow: 0 1px 3px rgba(0,0,0,0.3);
           pointer-events: none;
+          text-shadow: 0 1px 2px rgba(0,0,0,0.4);
         ">${spcode} #${colonyId}</div>`,
         iconSize: null,
         iconAnchor: [0, 0]
@@ -219,34 +223,35 @@
         popupContent += '</div>';
       }
       
-      // Add action buttons if we found the annotation index
-      if (annotationIndex >= 0) {
-        popupContent += `
-          <div style="margin-top: 12px; padding-top: 8px; border-top: 2px solid #ddd; display: flex; gap: 6px; justify-content: center;">
-            <button onclick="map.closePopup(); openEditModal(${annotationIndex})" 
-                    style="padding: 6px 12px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 4px;"
-                    onmouseover="this.style.background='#1565c0'" 
-                    onmouseout="this.style.background='#1976d2'"
-                    title="Edit Fields">
-              ✏️ Edit
-            </button>
-            <button onclick="map.closePopup(); enableGeometryEdit(${annotationIndex})" 
-                    style="padding: 6px 12px; background: #388e3c; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 4px;"
-                    onmouseover="this.style.background='#2e7d32'" 
-                    onmouseout="this.style.background='#388e3c'"
-                    title="Edit Geometry">
-              📐 Shape
-            </button>
-            <button onclick="if(confirm('Delete this annotation?')) { map.closePopup(); deleteAnnotation(${annotationIndex}); }" 
-                    style="padding: 6px 12px; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 4px;"
-                    onmouseover="this.style.background='#c62828'" 
-                    onmouseout="this.style.background='#d32f2f'"
-                    title="Delete">
-              🗑️ Delete
-            </button>
-          </div>
-        `;
-      }
+      // Add action buttons — use a data attribute and resolve index at click time
+      // so the buttons stay correct even after annotations are deleted/reordered
+      const layerId = layer._leaflet_id;
+      const findIdx = `var lyr = drawnItems.getLayer(${layerId}); var ad = lyr && lyr.annotationData; var idx = annotations.findIndex(function(a){ return a === ad; });`;
+      popupContent += `
+        <div style="margin-top: 12px; padding-top: 8px; border-top: 2px solid #ddd; display: flex; gap: 6px; justify-content: center;">
+          <button onclick="map.closePopup(); (function(){ ${findIdx} if(idx>=0) openEditModal(idx); })()"
+                  style="padding: 6px 12px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 4px;"
+                  onmouseover="this.style.background='#1565c0'"
+                  onmouseout="this.style.background='#1976d2'"
+                  title="Edit Fields">
+            ✏️ Edit
+          </button>
+          <button onclick="map.closePopup(); (function(){ ${findIdx} if(idx>=0) enableGeometryEdit(idx); })()"
+                  style="padding: 6px 12px; background: #388e3c; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 4px;"
+                  onmouseover="this.style.background='#2e7d32'"
+                  onmouseout="this.style.background='#388e3c'"
+                  title="Edit Geometry">
+            📐 Shape
+          </button>
+          <button onclick="catConfirm('Delete this annotation?',{danger:true,ok:'Delete'}).then(ok=>{if(ok){map.closePopup();(function(){${findIdx} if(idx>=0) deleteAnnotation(idx);})()}})"
+                  style="padding: 6px 12px; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 4px;"
+                  onmouseover="this.style.background='#c62828'"
+                  onmouseout="this.style.background='#d32f2f'"
+                  title="Delete">
+            🗑️ Delete
+          </button>
+        </div>
+      `;
       
       popupContent += '</div>';
       

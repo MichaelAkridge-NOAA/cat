@@ -9,18 +9,19 @@
  * @param {string} type - Message type: 'success', 'error', or 'info'
  */
 function showStatus(message, type) {
+  // Delegate to global toast system if available
+  if (typeof window._catToast === 'function') {
+    window._catToast(message, type);
+    return;
+  }
+  // Fallback: inline banner
   const statusDiv = document.getElementById('statusMessage');
   if (!statusDiv) return;
-  
   statusDiv.className = 'status ' + type;
   statusDiv.textContent = message;
   statusDiv.style.display = 'block';
-  
-  // Auto-hide success messages after 3 seconds
   if (type === 'success') {
-    setTimeout(() => {
-      statusDiv.style.display = 'none';
-    }, 3000);
+    setTimeout(() => { statusDiv.style.display = 'none'; }, 3000);
   }
 }
 
@@ -448,7 +449,7 @@ async function refreshAnnotations() {
  * Clear all annotations with confirmation
  */
 async function clearAllAnnotations() {
-  if (!confirm('⚠️ Are you sure you want to delete ALL annotations? This cannot be undone!')) {
+  if (!await catConfirm('Are you sure you want to delete ALL annotations? This cannot be undone!', { danger: true, ok: 'Delete All' })) {
     return;
   }
 
@@ -649,7 +650,7 @@ function showAnnotationPopup(layer, latlng) {
                 title="Edit Geometry">
           📐 Shape
         </button>
-        <button onclick="if(confirm('Delete this annotation?')) { map.closePopup(); deleteAnnotation(${annotationIndex}); }" 
+        <button onclick="catConfirm('Delete this annotation?',{danger:true,ok:'Delete'}).then(ok=>{if(ok){map.closePopup();deleteAnnotation(${annotationIndex})}})" 
                 style="padding: 6px 12px; background: #d32f2f; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 4px;"
                 onmouseover="this.style.background='#c62828'" 
                 onmouseout="this.style.background='#d32f2f'"
@@ -762,21 +763,24 @@ function addLabelToAnnotation(layer) {
     }
   }
   
+  // Color label background by species
+  const _lblColor = (typeof catSpeciesColor === 'function') ? catSpeciesColor(spcode) : '#667eea';
+
   // Create new label marker
   const labelMarker = L.marker(center, {
     icon: L.divIcon({
       className: 'annotation-label',
       html: `<div style="
-        background: rgba(255, 255, 255, 0.9);
-        color: #000;
+        background: ${_lblColor};
+        color: #fff;
         padding: 2px 6px;
         border-radius: 3px;
-        border: 1px solid #333;
         font-size: 11px;
         font-weight: bold;
         white-space: nowrap;
         box-shadow: 0 1px 3px rgba(0,0,0,0.3);
         pointer-events: none;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.4);
       ">${labelText}</div>`,
       iconSize: null,
       iconAnchor: [0, 0]

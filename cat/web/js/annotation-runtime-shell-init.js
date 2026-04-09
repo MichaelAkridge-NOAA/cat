@@ -115,6 +115,45 @@
     document.addEventListener('DOMContentLoaded', async () => {
       await initializeStorageBackend();
 
+      // Show file-mode hint in autosave badge area so users know save = download
+      if (storageBackend !== 'oracle') {
+        const badge = document.getElementById('autoSaveBadge');
+        if (badge) {
+          badge.style.display = 'inline-block';
+          badge.style.background = 'rgba(102,126,234,0.08)';
+          badge.style.color = '#667eea';
+          badge.textContent = '💾 File mode — save to download';
+          badge.title = 'Click the Save button to download your annotations as JSON';
+        }
+      }
+
+      // ── Session field persistence ──────────────────────────────────────
+      // Auto-restore session fields from localStorage on page load,
+      // and auto-save them when the user changes them.
+      const SESSION_FIELDS = ['analyst', 'obs_year', 'mission_id', 'site'];
+      const SESSION_KEY = 'cat_session_fields';
+      try {
+        const saved = JSON.parse(localStorage.getItem(SESSION_KEY) || '{}');
+        SESSION_FIELDS.forEach(id => {
+          const el = document.getElementById(id);
+          if (el && saved[id] && !el.value) {
+            el.value = saved[id];
+          }
+        });
+      } catch (e) { /* ignore */ }
+      SESSION_FIELDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.addEventListener('change', () => {
+            try {
+              const saved = JSON.parse(localStorage.getItem(SESSION_KEY) || '{}');
+              saved[id] = el.value;
+              localStorage.setItem(SESSION_KEY, JSON.stringify(saved));
+            } catch (e) { /* ignore */ }
+          });
+        }
+      });
+
       const timerBadge = document.getElementById('annotationTimer');
       if (timerBadge) {
         timerBadge.addEventListener('click', () => {
@@ -410,6 +449,9 @@
 
         // Update drawing mode indicator badge (Fix 3e)
         updateDrawingModeIndicator(e.layerType);
+
+        // Show drawing hints bar
+        if (typeof showDrawingHints === 'function') showDrawingHints(e.layerType);
       }
     });
 
@@ -420,15 +462,19 @@
       updateDrawingToolVisualFeedback(null);
       // Clear the mode indicator when drawing finishes (Fix 3e)
       updateDrawingModeIndicator(null);
+      // Hide drawing hints bar
+      if (typeof showDrawingHints === 'function') showDrawingHints(null);
       // DON'T clear lastDrawingTool here - keep it so we can re-enable after save
       // Only clear it when explicitly cancelled by user
     });
-    
+
     // Also listen for draw:canceled event (triggered by ESC key or clicking cancel)
     map.on('draw:canceled', function(e) {
       console.log('❌ Drawing tool cancelled (ESC or Cancel button)');
       // Remove visual feedback when drawing is cancelled
       updateDrawingToolVisualFeedback(null);
+      // Hide drawing hints bar
+      if (typeof showDrawingHints === 'function') showDrawingHints(null);
       // Clear last drawing tool when cancelled by user
       lastDrawingTool = null;
     });
@@ -471,15 +517,53 @@
       }
     }, 500); // Delay to ensure toolbar is rendered
     
-    // Add global ESC key handler to ensure drawing tools can be cancelled
+    // Add global ESC key handler to cancel drawing tools AND discard unsaved annotations
     document.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape' && lastDrawingTool) {
+      if (e.key !== 'Escape') return;
+      // Skip if a modal is open
+      if (document.getElementById('editModal')?.classList.contains('active')) return;
+      if (document.getElementById('catConfirmOverlay')?.style.display === 'flex') return;
+
+      // Close any open autocomplete dropdown (but keep going — single-press discard)
+      const openDropdown = document.querySelector('.species-autocomplete-dropdown.active');
+      if (openDropdown) openDropdown.classList.remove('active');
+
+      // If a drawing tool is active mid-draw, cancel it
+      if (lastDrawingTool) {
         console.log('⌨️ ESC pressed - cancelling drawing tool');
-        // The draw:canceled event should fire automatically, but ensure cleanup
         updateDrawingToolVisualFeedback(null);
+        // Hide drawing hints bar
+        if (typeof showDrawingHints === 'function') showDrawingHints(null);
+        const hintsBar = document.getElementById('drawingHintsBar');
+        if (hintsBar) hintsBar.style.display = 'none';
         lastDrawingTool = null;
       }
+
+      // Discard unsaved (not yet saved) annotation
+      if (currentAnnotation && currentAnnotation.layer && !currentAnnotation.layer.annotationData) {
+        console.log('⌨️ ESC pressed - discarding unsaved annotation');
+        drawnItems.removeLayer(currentAnnotation.layer);
+        currentAnnotation = null;
+        // Clear form fields (preserve session fields)
+        ['transect','segment','seglength','segwidth','no_colony','spcode','juvenile',
+         'juv_substrate','remnant','morph_code','ex_bound','olddead',
+         'rdcause1','rd_1','rdcause2','rd_2','rdcause3','rd_3',
+         'con_1','extent_1','sev_1','con_2','extent_2','sev_2','con_3','extent_3','sev_3'
+        ].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+        // Reset numeric defaults
+        ['no_colony','juvenile','remnant','ex_bound'].forEach(id => {
+          const el = document.getElementById(id); if (el) el.value = '0';
+        });
+        // Hide discard button
+        const discardBtn = document.getElementById('discardAnnotationBtn');
+        if (discardBtn) discardBtn.style.display = 'none';
+        showStatus('Annotation discarded', 'info');
+      }
     });
+
+    // ── Minimap, map view persistence ──
+    if (typeof catMapSaveView === 'function') catMapSaveView(map);
+    if (typeof catInitMinimap === 'function') catInitMinimap(map);
     
     // ========================================
     // SAM3 Magic Wand Tool Integration
@@ -911,4 +995,88 @@
     let demLayer = null;
     let shapefileLayers = {}; // Object to store multiple shapefile layers by name
     
+    // ========== Panel Layout: Float / Dock-Right ==========
+
+    const LAYOUT_KEY = 'cat_layout_mode';
+    const PANEL_WIDTH_KEY = 'cat_panel_width';
+    const MIN_PANEL_WIDTH = 280;
+    const MAX_PANEL_WIDTH = 900;
+
+    function toggleLayoutMode() {
+      const isDocked = document.body.classList.contains('layout-docked');
+      isDocked ? _setLayoutFloat() : _setLayoutDocked();
+    }
+
+    function _setLayoutDocked() {
+      const savedWidth = parseInt(localStorage.getItem(PANEL_WIDTH_KEY)) || 420;
+      document.documentElement.style.setProperty('--panel-width', savedWidth + 'px');
+      document.body.classList.add('layout-docked');
+      const ltb = document.getElementById('layoutToggleBtn');
+      if (ltb) { ltb.textContent = '⬜ Float'; ltb.title = 'Switch to floating panel'; }
+      const ddlt = document.getElementById('ddLayoutToggle');
+      if (ddlt) ddlt.textContent = '⬜ Float Panel';
+      localStorage.setItem(LAYOUT_KEY, 'docked');
+      setTimeout(() => { if (typeof map !== 'undefined') map.invalidateSize(); }, 50);
+    }
+
+    function _setLayoutFloat() {
+      document.body.classList.remove('layout-docked');
+      const ltb2 = document.getElementById('layoutToggleBtn');
+      if (ltb2) { ltb2.textContent = '⬛ Dock Right'; ltb2.title = 'Dock panel to right side'; }
+      const ddlt2 = document.getElementById('ddLayoutToggle');
+      if (ddlt2) ddlt2.textContent = '⬛ Dock Right';
+      localStorage.setItem(LAYOUT_KEY, 'float');
+      setTimeout(() => { if (typeof map !== 'undefined') map.invalidateSize(); }, 50);
+    }
+
+    // Drag-to-resize the divider
+    (function initResizeHandle() {
+      const handle = document.getElementById('layout-resize-handle');
+      if (!handle) return;
+
+      let dragging = false;
+      let startX = 0;
+      let startWidth = 420;
+
+      handle.addEventListener('mousedown', (e) => {
+        if (!document.body.classList.contains('layout-docked')) return;
+        dragging = true;
+        startX = e.clientX;
+        startWidth = parseInt(getComputedStyle(document.documentElement)
+          .getPropertyValue('--panel-width')) || 420;
+        handle.classList.add('dragging');
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'col-resize';
+        e.preventDefault();
+      });
+
+      document.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        const delta = startX - e.clientX; // dragging left = wider panel
+        const newWidth = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, startWidth + delta));
+        document.documentElement.style.setProperty('--panel-width', newWidth + 'px');
+        if (typeof map !== 'undefined') map.invalidateSize();
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        handle.classList.remove('dragging');
+        document.body.style.userSelect = '';
+        document.body.style.cursor = '';
+        const finalWidth = parseInt(getComputedStyle(document.documentElement)
+          .getPropertyValue('--panel-width')) || 420;
+        localStorage.setItem(PANEL_WIDTH_KEY, finalWidth);
+      });
+    })();
+
+    // Restore layout preference on load
+    (function restoreLayout() {
+      if (localStorage.getItem(LAYOUT_KEY) === 'docked') {
+        _setLayoutDocked();
+      }
+    })();
+
+    // ========== End Panel Layout ==========
+
     // Layer control functions

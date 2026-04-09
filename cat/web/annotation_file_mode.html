@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="css/annotation-styles.css" />
   <link rel="stylesheet" href="css/annotation-panels.css" />
   <link rel="stylesheet" href="css/annotation-controls.css" />
+  <link rel="stylesheet" href="css/annotation-v2.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
   <!-- Phase 1: Externalized CSS files (legacy inline styles retained but disabled) -->
@@ -61,7 +62,7 @@
     .nav-links {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 6px;
       flex-wrap: nowrap;
       overflow-x: auto;
     }
@@ -1002,31 +1003,263 @@
       background: #555;
     }
   </style>
+  <!-- Active styles for navbar dropdowns, toasts, and annotation count badge -->
+  <style>
+    /* Override .nav-links overflow so dropdown menus can pop out */
+    .nav-links, .nav-menus {
+      overflow: visible !important;
+    }
+    /* Left group: logo + menus flush together */
+    .nav-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .nav-left h1 {
+      margin: 0;
+    }
+    /* Left-side menu bar */
+    .nav-menus {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .nav-menus .nav-dropdown-btn {
+      border: none;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #555;
+    }
+    .nav-menus .nav-dropdown-btn:hover,
+    .nav-menus .nav-dropdown-btn.open {
+      background: #e8eaff;
+    }
+    /* --- Navbar dropdown menus --- */
+    .nav-dropdown {
+      position: relative;
+      display: inline-block;
+    }
+    .nav-dropdown-btn {
+      background: none;
+      border: 1px solid #dee2e6;
+      border-radius: 5px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #495057;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .nav-dropdown-btn:hover, .nav-dropdown-btn.open {
+      background: #f0f1ff;
+      border-color: #667eea;
+      color: #667eea;
+    }
+    .nav-dropdown-btn .caret {
+      font-size: 8px;
+      opacity: 0.6;
+    }
+    .nav-dropdown-menu {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 0;
+      min-width: 180px;
+      background: white;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+      z-index: 9000;
+      padding: 4px 0;
+      animation: navDropIn 0.12s ease-out;
+    }
+    .nav-dropdown-menu.open { display: block; }
+    @keyframes navDropIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .nav-dropdown-menu .dd-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 14px;
+      font-size: 12px;
+      color: #333;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.1s;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+    }
+    .nav-dropdown-menu .dd-item:hover {
+      background: #f0f1ff;
+      color: #667eea;
+    }
+    .nav-dropdown-menu .dd-item.danger { color: #dc3545; }
+    .nav-dropdown-menu .dd-item.danger:hover { background: #fff0f0; color: #dc3545; }
+    .nav-dropdown-menu .dd-divider {
+      height: 1px;
+      background: #eee;
+      margin: 4px 0;
+    }
+    .nav-dropdown-menu .dd-label {
+      padding: 4px 14px 2px;
+      font-size: 10px;
+      font-weight: 700;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .nav-dropdown-menu kbd {
+      margin-left: auto;
+      font-size: 10px;
+      color: #aaa;
+      background: #f5f5f5;
+      padding: 1px 5px;
+      border-radius: 3px;
+      border: 1px solid #ddd;
+    }
+    /* Override .nav-links a for dropdown anchor items */
+    .nav-dropdown-menu a.dd-item {
+      text-decoration: none;
+      color: #333;
+      font-weight: normal;
+    }
+    .nav-dropdown-menu a.dd-item:hover {
+      color: #667eea;
+    }
+    /* --- Toast notifications --- */
+    #toastContainer {
+      position: fixed;
+      top: 56px;
+      right: 14px;
+      z-index: 11000;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      pointer-events: none;
+    }
+    .cat-toast {
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+      animation: toastIn 0.25s ease-out;
+      max-width: 340px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .cat-toast:hover { opacity: 0.85; }
+    .cat-toast.success { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
+    .cat-toast.error   { background: #fef2f2; color: #991b1b; border: 1px solid #fca5a5; }
+    .cat-toast.warning { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
+    .cat-toast.info    { background: #eff6ff; color: #1e40af; border: 1px solid #93c5fd; }
+    .cat-toast.exit    { animation: toastOut 0.2s ease-in forwards; }
+    @keyframes toastIn  { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
+    @keyframes toastOut { to   { opacity: 0; transform: translateX(30px); } }
+    /* Annotation count badge in navbar */
+    #navAnnotationCount {
+      padding: 3px 8px;
+      background: rgba(102,126,234,0.12);
+      color: #667eea;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      display: none;
+    }
+  </style>
 </head>
 <body>
   <nav class="navbar">
-    <h1>
-      <img src="/logo.png" alt="CAT">
-      <span class="cat-text">CAT:</span>
-      <span>Coral Annotation Tool</span>
-    </h1>
+    <!-- Left group: logo + menus together -->
+    <div class="nav-left">
+      <h1>
+        <img src="/logo.png" alt="CAT">
+        <span class="cat-text">CAT</span>
+      </h1>
+      <div class="nav-menus">
+        <div class="nav-dropdown" data-dropdown="file">
+          <button class="nav-dropdown-btn" onclick="toggleNavDropdown('file')">File <span class="caret">▾</span></button>
+          <div class="nav-dropdown-menu" id="dd-file" style="left:0;right:auto;">
+            <button class="dd-item" onclick="saveAnnotation(); closeNavDropdowns();">💾 Save Annotation <kbd>Ctrl+S</kbd></button>
+            <button class="dd-item" onclick="if(typeof saveProject==='function') saveProject(); closeNavDropdowns();">💾 Save Project</button>
+            <div class="dd-divider"></div>
+            <button class="dd-item" onclick="if(typeof exportGeoJSON==='function') exportGeoJSON(); closeNavDropdowns();">🌐 Export GeoJSON</button>
+            <button class="dd-item" onclick="if(typeof exportCSV==='function') exportCSV(); closeNavDropdowns();">📊 Export CSV</button>
+            <button class="dd-item" onclick="if(typeof exportShapefile==='function') exportShapefile(); closeNavDropdowns();">📦 Export Shapefile</button>
+            <div class="dd-divider"></div>
+            <button class="dd-item danger" onclick="if(typeof clearAllAnnotations==='function') clearAllAnnotations(); closeNavDropdowns();">🗑️ Clear All Annotations</button>
+          </div>
+        </div>
+        <div class="nav-dropdown" data-dropdown="view">
+          <button class="nav-dropdown-btn" onclick="toggleNavDropdown('view')">View <span class="caret">▾</span></button>
+          <div class="nav-dropdown-menu" id="dd-view" style="left:0;right:auto;">
+            <button class="dd-item" onclick="toggleLayoutMode(); closeNavDropdowns();" id="ddLayoutToggle">⬛ Dock Right</button>
+            <button class="dd-item" onclick="document.getElementById('toggleLabels').click(); closeNavDropdowns();">🏷️ Toggle Labels</button>
+            <button class="dd-item" onclick="if(typeof refreshAnnotations==='function') refreshAnnotations(); closeNavDropdowns();">🔄 Refresh Annotations</button>
+          </div>
+        </div>
+        <div class="nav-dropdown" data-dropdown="info">
+          <button class="nav-dropdown-btn" onclick="toggleNavDropdown('info')">Info <span class="caret">▾</span></button>
+          <div class="nav-dropdown-menu" id="dd-info" style="left:0;right:auto;">
+            <div class="dd-label">Session</div>
+            <div class="dd-item" style="cursor:default;">
+              <span>👤</span>
+              <span id="currentUserBadge" style="display:none;font-size:12px;color:#667eea;font-weight:500;"><span id="currentUsername"></span></span>
+              <span id="noUserPlaceholder" style="color:#999;font-size:11px;">No user set</span>
+            </div>
+            <div class="dd-item" style="cursor:default;">
+              <span>📊</span>
+              <span id="totalTimeDisplay" style="display:none;font-size:12px;color:#667eea;font-family:'Courier New',monospace;">Total: <span id="totalTime">0h 0m</span></span>
+              <span id="noTimePlaceholder" style="color:#999;font-size:11px;">No time tracked</span>
+            </div>
+            <div class="dd-divider"></div>
+            <button class="dd-item" onclick="if(typeof catShowShortcuts==='function') catShowShortcuts(); closeNavDropdowns();">⌨️ Keyboard Shortcuts <kbd>?</kbd></button>
+            <div class="dd-divider"></div>
+            <a class="dd-item" href="/project_creator.html">📁 Projects</a>
+            <a class="dd-item" href="/">🏠 Home</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right side: status items -->
     <div class="nav-links">
-      <span id="currentUserBadge" style="display: none; padding: 4px 8px; background: rgba(102, 126, 234, 0.1); color: #667eea; border-radius: 4px; font-size: 12px; font-weight: 500; white-space: nowrap;">
-        👤 <span id="currentUsername"></span>
-      </span>
-      <span id="annotationTimer" style="display: none; padding: 4px 8px; background: rgba(40, 167, 69, 0.1); color: #28a745; border-radius: 4px; font-size: 12px; font-weight: 500; font-family: 'Courier New', monospace; cursor: pointer; white-space: nowrap;" title="Click to pause/resume timer">
-        ⏱️ <span id="timerDisplay">00:00</span>
-      </span>
-      <span id="totalTimeDisplay" style="display: none; padding: 4px 8px; background: rgba(102, 126, 234, 0.05); color: #667eea; border-radius: 4px; font-size: 12px; font-weight: 500; font-family: 'Courier New', monospace; white-space: nowrap;" title="Total annotation time for this site">
-        📊 <span id="totalTime">0h 0m</span>
-      </span>
+      <span id="annotationTimer" style="display:none; padding: 4px 8px; background: rgba(40, 167, 69, 0.1); color: #28a745; border-radius: 4px; font-size: 12px; font-weight: 500; font-family: 'Courier New', monospace; cursor: pointer; white-space: nowrap;" title="Click to pause/resume timer">⏱️ <span id="timerDisplay">00:00</span></span>
+      <span id="navAnnotationCount" title="Annotations in this project">0</span>
       <span id="autoSaveBadge" style="display:none; padding: 4px 8px; background: rgba(40,167,69,0.1); color: #28a745; border-radius: 4px; font-size: 12px; font-weight: 500; white-space: nowrap;" title="Auto-save status">✅ Saved</span>
-      <button id="saveProjectBtn" class="btn btn-success" style="display:none; padding: 6px 12px; font-size: 13px; white-space: nowrap;">💾 Save</button>
-      <a href="/project_creator.html">📁 Projects</a>
-      <a href="/">Home</a>
+      <button id="undoBtn" onclick="undoLastAction()" disabled title="Undo (Ctrl+Z)" style="background:none;border:1px solid #dee2e6;border-radius:4px;padding:3px 6px;cursor:pointer;font-size:12px;color:#495057;opacity:0.5;" onmouseover="if(!this.disabled)this.style.opacity='1'" onmouseout="if(!this.disabled)this.style.opacity='0.85'">↩</button>
+      <button id="redoBtn" onclick="redoLastAction()" disabled title="Redo (Ctrl+Y)" style="background:none;border:1px solid #dee2e6;border-radius:4px;padding:3px 6px;cursor:pointer;font-size:12px;color:#495057;opacity:0.5;" onmouseover="if(!this.disabled)this.style.opacity='1'" onmouseout="if(!this.disabled)this.style.opacity='0.85'">↪</button>
+      <button id="saveProjectBtn" class="btn btn-success" style="display:none; padding: 5px 10px; font-size: 12px; white-space: nowrap;">💾 Save</button>
     </div>
   </nav>
-  
+
+  <div id="layout-resize-handle"></div>
+  <!-- Drawing hints bar — shown while actively placing vertices -->
+  <div id="drawingHintsBar" style="display:none; position:fixed; top:0; left:50%; transform:translateX(-50%); z-index:10000; padding:6px 18px; background:rgba(30,30,30,0.92); color:#fff; font-size:12px; border-radius:0 0 8px 8px; box-shadow:0 2px 8px rgba(0,0,0,0.3); pointer-events:none; white-space:nowrap;">
+    <kbd style="background:rgba(255,255,255,0.15);padding:1px 5px;border-radius:3px;font-size:11px;">Esc</kbd> cancel
+    &nbsp;&middot;&nbsp;
+    <kbd style="background:rgba(255,255,255,0.15);padding:1px 5px;border-radius:3px;font-size:11px;">Backspace</kbd> undo vertex
+    &nbsp;&middot;&nbsp;
+    <span id="drawingHintFinish">double-click to finish</span>
+  </div>
+  <div id="toastContainer"></div>
   <div id="map"></div>
   
   <!-- Full Screen Loading Overlay -->
@@ -1173,7 +1406,10 @@
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; padding: 6px 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;" onclick="toggleAnnotationSection('formSection')">
         <div style="display: flex; align-items: center; gap: 8px;">
           <h3 style="margin: 0; font-size: 15px;">✏️ Annotation Form</h3>
-          <div style="font-size: 9px; color: #6c757d;">Press <kbd style="background: white; padding: 1px 4px; border-radius: 2px; border: 1px solid #ccc; font-size: 9px;">Ctrl+S</kbd> to save</div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span id="drawingModeIndicator" style="display:none;font-size:9px;font-weight:600;padding:2px 6px;border-radius:10px;background:#667eea;color:white;"></span>
+            <div style="font-size: 9px; color: #6c757d;">Press <kbd style="background: white; padding: 1px 4px; border-radius: 2px; border: 1px solid #ccc; font-size: 9px;">Ctrl+S</kbd> to save</div>
+          </div>
         </div>
         <span class="section-collapse-icon" id="formSectionIcon">▼</span>
       </div>
@@ -1183,28 +1419,28 @@
       <!-- Core Fields -->
       <div class="form-group">
         <div class="form-section">
-          <label>Analyst *</label>
+          <label>Analyst * <span style="font-size:9px;color:#6c757d;font-weight:normal;">(session)</span></label>
           <input type="text" id="analyst" placeholder="NAME" maxlength="10" required />
         </div>
       </div>
       
       <div class="form-group">
         <div class="form-section">
-          <label>Year *</label>
+          <label>Year * <span style="font-size:9px;color:#6c757d;font-weight:normal;">(session)</span></label>
           <input type="number" id="obs_year" placeholder="2026" min="2000" max="2100" required />
         </div>
       </div>
       
       <div class="form-group">
         <div class="form-section">
-          <label>Mission ID *</label>
+          <label>Mission ID * <span style="font-size:9px;color:#6c757d;font-weight:normal;">(session)</span></label>
           <input type="text" id="mission_id" placeholder="CRUISEID" required />
         </div>
       </div>
       
       <div class="form-group wide">
         <div class="form-section">
-          <label>Site *</label>
+          <label>Site * <span style="font-size:9px;color:#6c757d;font-weight:normal;">(session)</span></label>
           <input type="text" id="site" placeholder="SITE" required />
         </div>
       </div>
@@ -1247,6 +1483,15 @@
         </div>
       </div>
       
+      <!-- Copy from last annotation -->
+      <div class="form-group">
+        <button type="button" id="copyLastBtn" onclick="copyFromLastAnnotation()"
+          title="Copy species & condition fields from the most recently saved annotation"
+          style="width:100%;padding:5px 10px;background:#f0f4ff;border:1px solid #c0caf0;border-radius:4px;cursor:pointer;font-size:12px;color:#3355aa;">
+          ⎘ Copy Last Annotation
+        </button>
+      </div>
+
       <!-- Species & Colony -->
       <div class="form-group">
         <div class="form-section">
@@ -1459,6 +1704,7 @@
       <div class="form-group" style="display: flex; gap: 5px; align-items: flex-end;">
         <button class="btn btn-primary" onclick="saveAnnotation()" style="padding: 6px 15px; font-size: 12px;">💾 Save</button>
         <button class="btn btn-secondary" onclick="clearForm()" style="padding: 6px 15px; font-size: 12px;">🔄 Clear Form</button>
+        <button class="btn btn-danger" id="discardAnnotationBtn" onclick="discardCurrentAnnotation()" style="padding: 6px 15px; font-size: 12px; display: none;">✖ Discard</button>
       </div>
     </div>
     
@@ -1469,44 +1715,64 @@
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; padding: 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;" onclick="toggleAnnotationSection('annotationsListSection')">
         <div style="display: flex; align-items: center; gap: 15px;">
           <h3 style="margin: 0; font-size: 15px;">📋 Annotations (<span id="annotationCount">0</span>)</h3>
-          <div style="display: flex; align-items: center; gap: 6px; padding: 3px 10px; background: #667eea; color: white; border-radius: 3px; font-size: 11px; font-weight: 600;">
-            
-          </div>
         </div>
         <span class="section-collapse-icon" id="annotationsListSectionIcon">▼</span>
       </div>
       
       <div id="annotationsListSectionContent" class="section-content">
-        <div style="display: flex; gap: 6px; margin-bottom: 2px; flex-wrap: wrap;">
-          <button class="btn btn-primary" onclick="saveAnnotation()" style="padding: 5px 12px; font-size: 11px;">💾 Save</button>
-          <button class="btn btn-primary" onclick="refreshAnnotations()" style="padding: 5px 12px; font-size: 11px;">🔄 Refresh</button>
-          <button class="btn btn-danger" onclick="clearAllAnnotations()" style="padding: 5px 12px; font-size: 11px;">🗑️ Clear All</button>
-          <button class="btn btn-success" onclick="exportShapefile()" style="padding: 5px 12px; font-size: 11px;">📦 Shapefile</button>
+        <div id="annotationStats" style="display:none;padding:4px 8px;margin-bottom:4px;background:linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%);border:1px solid #bae6fd;border-radius:4px;font-size:11px;color:#0c4a6e;"></div>
+
+        <div style="padding: 4px 0 6px 0;">
+          <input type="text" id="annotationTableFilter" placeholder="🔍 Filter by species, site, analyst…"
+            oninput="filterAnnotationTable(this.value)"
+            style="width:100%;padding:4px 8px;font-size:11px;border:1px solid #dee2e6;border-radius:4px;box-sizing:border-box;" />
         </div>
-        
+
         <div class="annotation-table-container">
           <table class="annotation-table" id="annotationTable">
         <thead>
           <tr>
             <th>ID</th>
-            <th style="display: none;">Type</th>
+            <th>Type</th>
             <th>Site</th>
             <th>Species</th>
             <th>Juvenile</th>
             <th>JUV_SUBSTRATE</th>
-            <th style="display: none;">Analyst</th>
-            <th style="display: none;">Year</th>
-            <th style="display: none;">Mission</th>
+            <th>Analyst</th>
+            <th>Year</th>
+            <th>Mission</th>
             <th>Segment</th>
             <th>Transect</th>
             <th>Morph</th>
-            <th style="display: none;">Old Dead %</th>
+            <th>Old Dead %</th>
+            <th>Remnant</th>
+            <th>Fragment</th>
+            <th>Ex Bound</th>
+            <th>No Colony</th>
+            <th>Seg Length</th>
+            <th>Seg Width</th>
+            <th>Line Length (m)</th>
+            <th>RD Cause 1</th>
+            <th>RD 1 %</th>
+            <th>RD Cause 2</th>
+            <th>RD 2 %</th>
+            <th>RD Cause 3</th>
+            <th>RD 3 %</th>
+            <th>Condition 1</th>
+            <th>Extent 1</th>
+            <th>Severity 1</th>
+            <th>Condition 2</th>
+            <th>Extent 2</th>
+            <th>Severity 2</th>
+            <th>Condition 3</th>
+            <th>Extent 3</th>
+            <th>Severity 3</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="annotationTableBody">
           <tr>
-            <td colspan="14" style="text-align: center; padding: 20px; color: #6c757d;">
+            <td colspan="35" style="text-align: center; padding: 20px; color: #6c757d;">
               No annotations yet - draw on the map to create one
             </td>
           </tr>
@@ -1568,6 +1834,96 @@
     </div>
   </div>
 
+  <script src="js/cat-ui-utils.js"></script>
+  <script>
+  // --- Navbar dropdown logic ---
+  function toggleNavDropdown(name) {
+    const menu = document.getElementById('dd-' + name);
+    const btn = menu?.previousElementSibling;
+    const wasOpen = menu?.classList.contains('open');
+    closeNavDropdowns();
+    if (!wasOpen && menu) {
+      menu.classList.add('open');
+      if (btn) btn.classList.add('open');
+    }
+  }
+  function closeNavDropdowns() {
+    document.querySelectorAll('.nav-dropdown-menu.open').forEach(m => m.classList.remove('open'));
+    document.querySelectorAll('.nav-dropdown-btn.open').forEach(b => b.classList.remove('open'));
+  }
+  // Close dropdowns on click outside
+  document.addEventListener('mousedown', function(e) {
+    if (!e.target.closest('.nav-dropdown')) closeNavDropdowns();
+  });
+
+  // --- Toast notification system (replaces inline showStatus) ---
+  (function() {
+    const TOAST_DURATION = { success: 2200, info: 3000, warning: 4000, error: 6000 };
+    // Expose as _catToast so runtime-operations.js local showStatus() can delegate
+    // Also set window.showStatus for scripts that call it directly
+    window._catToast = toastShowStatus;
+    window.showStatus = toastShowStatus;
+    function toastShowStatus(message, type) {
+      type = type || 'info';
+      // For routine success saves, just flash the autosave badge — no toast
+      if (type === 'success' && /annotation saved|saved!/i.test(message)) {
+        flashAutoSaveBadge(message);
+        return;
+      }
+      createToast(message, type);
+    };
+
+    function createToast(message, type) {
+      const container = document.getElementById('toastContainer');
+      if (!container) return;
+      const el = document.createElement('div');
+      el.className = 'cat-toast ' + type;
+      // Strip emoji prefix for cleaner look (keep if it's the whole message)
+      el.textContent = message;
+      el.onclick = () => dismissToast(el);
+      container.appendChild(el);
+      // Auto-dismiss
+      const dur = TOAST_DURATION[type] || 3000;
+      setTimeout(() => dismissToast(el), dur);
+      // Cap at 4 toasts visible
+      while (container.children.length > 4) {
+        dismissToast(container.firstElementChild);
+      }
+    }
+
+    function dismissToast(el) {
+      if (!el || el.classList.contains('exit')) return;
+      el.classList.add('exit');
+      setTimeout(() => el.remove(), 220);
+    }
+
+    function flashAutoSaveBadge(message) {
+      const badge = document.getElementById('autoSaveBadge');
+      if (!badge) return;
+      // Extract count if present (e.g. "Total: 12")
+      const countMatch = message.match(/Total:\s*(\d+)/i);
+      if (countMatch) updateNavAnnotationCount(parseInt(countMatch[1]));
+      badge.style.display = '';
+      badge.textContent = '✅ Saved';
+      badge.style.background = 'rgba(40,167,69,0.2)';
+      badge.style.transition = 'background 0.6s';
+      setTimeout(() => { badge.style.background = 'rgba(40,167,69,0.1)'; }, 600);
+    }
+
+    // Annotation count badge in navbar
+    window.updateNavAnnotationCount = function(count) {
+      const el = document.getElementById('navAnnotationCount');
+      if (!el) return;
+      if (count > 0) {
+        el.textContent = count + ' annotation' + (count !== 1 ? 's' : '');
+        el.style.display = '';
+      } else {
+        el.style.display = 'none';
+      }
+    };
+  })();
+  </script>
+  <script src="js/annotation-undo.js"></script>
   <script src="js/annotation-runtime-core.js"></script>
   <script src="js/annotation-runtime-autosave.js"></script>
   <script src="js/annotation-runtime-user.js"></script>
@@ -1580,6 +1936,9 @@
   <script src="js/annotation-runtime-inputs-init.js"></script>
   <script src="js/annotation-runtime-operations.js"></script>
   <script src="js/annotation-overlay-layers.js"></script>
-  <!-- Phase 2h: Runtime fully split into focused modules -->
+  <!-- Enhancement modules (merged from v2) -->
+  <script src="js/v2-bulk.js"></script>
+  <script src="js/v2-table.js"></script>
+  <script src="js/v2-defaults.js"></script>
 </body>
 </html>

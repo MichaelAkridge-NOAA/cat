@@ -478,6 +478,7 @@
       <div class="form-group" style="display: flex; gap: 5px; align-items: flex-end;">
         <button class="btn btn-primary" onclick="saveAnnotation()" style="padding: 6px 15px; font-size: 12px;">💾 Save</button>
         <button class="btn btn-secondary" onclick="clearForm()" style="padding: 6px 15px; font-size: 12px;">🔄 Clear Form</button>
+        <button class="btn btn-danger" id="discardAnnotationBtn" onclick="discardCurrentAnnotation()" style="padding: 6px 15px; font-size: 12px; display: none;">✖ Discard</button>
       </div>
     </div>
     
@@ -544,6 +545,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   
   <!-- CAT Application Modules (Order matters!) -->
+  <script src="js/cat-ui-utils.js"></script>
   <script src="js/annotation-utils.js"></script>
   <script src="js/annotation-timer.js"></script>
   <script src="js/annotation-map.js"></script>

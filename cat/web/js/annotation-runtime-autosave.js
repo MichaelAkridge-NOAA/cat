@@ -232,6 +232,7 @@
 
     async function pollForRemoteChanges() {
       if (!isOracleProjectMode || !isOracleProjectMode()) return;
+      if (autoSaveInProgress) return; // don't poll while auto-save is mid-sync
       const projectId = currentProject?.project_id;
       if (!projectId) return;
 
@@ -242,10 +243,19 @@
         const remoteAnns = data.annotations || [];
 
         // Build a map of local annotation id → version
+        // Check _dbAnnotationId (flat annotations) and .id (GeoJSON features after refresh)
         const localVersions = {};
+        let localUnsyncedCount = 0; // annotations not yet synced to DB
         const projectAnnotations = typeof getProjectAnnotations === 'function' ? getProjectAnnotations() : [];
-        projectAnnotations.forEach(a => {
-          if (a._dbAnnotationId) localVersions[a._dbAnnotationId] = a._dbAnnotationVersion ?? 1;
+        // Also check the annotations array (may differ from projectAnnotations after refresh)
+        const allLocalAnns = projectAnnotations.length > 0 ? projectAnnotations : (typeof annotations !== 'undefined' ? annotations : []);
+        allLocalAnns.forEach(a => {
+          const dbId = a._dbAnnotationId || a.annotation_id || a.id;
+          if (dbId) {
+            localVersions[dbId] = a._dbAnnotationVersion ?? a.version ?? 1;
+          } else {
+            localUnsyncedCount++;
+          }
         });
 
         let newCount = 0;
@@ -259,6 +269,11 @@
             updatedCount++;
           }
         });
+
+        // Subtract unsynced local annotations from "new" count — they're likely
+        // our own annotations that auto-save just pushed to DB but haven't been
+        // acknowledged locally yet (race between sync and poll).
+        newCount = Math.max(0, newCount - localUnsyncedCount);
 
         if (newCount > 0 || updatedCount > 0) {
           _showRemoteChangeBanner(newCount, updatedCount);

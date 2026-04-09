@@ -9,45 +9,87 @@
       if (countSpan) {
         countSpan.textContent = annotations.length;
       }
-      
+      if (typeof window.updateNavAnnotationCount === 'function') window.updateNavAnnotationCount(annotations.length);
+
+      // Update stats bar
+      const statsDiv = document.getElementById('annotationStats');
+      if (statsDiv && annotations.length > 0) {
+        const species = new Set(annotations.map(a => a.spcode || a.species_code || a.SPCODE).filter(Boolean));
+        const withSpecies = annotations.filter(a => a.spcode || a.species_code || a.SPCODE).length;
+        const pct = Math.round((withSpecies / annotations.length) * 100);
+        statsDiv.style.display = 'block';
+        statsDiv.innerHTML =
+          `<strong>${annotations.length}</strong> annotations · ` +
+          `<strong>${species.size}</strong> species · ` +
+          `<span style="color:${pct === 100 ? '#059669' : '#d97706'}">${pct}% with species</span>` +
+          (pct < 100 ? ` · <span style="color:#d97706">${annotations.length - withSpecies} missing</span>` : '');
+      } else if (statsDiv) {
+        statsDiv.style.display = 'none';
+      }
+
       // Clear table
       tbody.innerHTML = '';
       
       if (annotations.length === 0) {
         tbody.innerHTML = `
           <tr>
-            <td colspan="12" style="text-align: center; padding: 20px; color: #6c757d;">
+            <td colspan="35" style="text-align: center; padding: 20px; color: #6c757d;">
               No annotations yet - draw on the map to create one
             </td>
           </tr>
         `;
         return;
       }
-      
+
+      // Helper to format yes/no/-1/0 fields
+      const fmtBool = (v) => v == -1 ? 'Yes' : (v == 0 ? 'No' : '-');
+      const fmtPct = (v) => (v !== undefined && v !== null && v !== '') ? v + '%' : '-';
+      const fmtVal = (v) => (v !== undefined && v !== null && v !== '') ? v : '-';
+
       // Populate table with annotations
       annotations.forEach((ann, index) => {
         const row = document.createElement('tr');
         row.dataset.index = index;
-        
 
-        
         // Get the colony ID (try multiple field name variations, fallback to row number)
-        const colonyId = ann.colony_id || ann.COLONY_ID || ann.id || ann.ID || ann.no_colony || (index + 1);
-        
+        const colonyId = ann.colony_id || ann.COLONY_ID || ann.id || ann.ID || (index + 1);
+
         row.innerHTML = `
           <td><strong>${colonyId}</strong></td>
-          <td style="display: none;">${ann.geometry.type || 'Polygon'}</td>
-          <td class="editable" data-field="site" data-index="${index}">${ann.site || '-'}</td>
-          <td class="editable" data-field="spcode" data-index="${index}">${ann.spcode || ann.species_code || ann.SPCODE || ann.SPECIES_CODE || '-'}</td>
-          <td class="editable" data-field="juvenile" data-index="${index}">${ann.juvenile == -1 ? 'Yes' : (ann.juvenile == 0 ? 'No' : '-')}</td>
-          <td class="editable" data-field="juv_substrate" data-index="${index}">${ann.juv_substrate || '-'}</td>
-          <td class="editable" data-field="analyst" data-index="${index}" style="display: none;">${ann.analyst || '-'}</td>
-          <td class="editable" data-field="obs_year" data-index="${index}" style="display: none;">${ann.obs_year || '-'}</td>
-          <td class="editable" data-field="mission_id" data-index="${index}" style="display: none;">${ann.mission_id || '-'}</td>
-          <td class="editable" data-field="segment" data-index="${index}">${ann.segment || '-'}</td>
-          <td class="editable" data-field="transect" data-index="${index}">${ann.transect || '-'}</td>
-          <td class="editable" data-field="morph_code" data-index="${index}">${ann.morph_code || '-'}</td>
-          <td class="editable" data-field="old_dead" data-index="${index}" style="display: none;">${ann.old_dead !== undefined ? ann.old_dead + '%' : '-'}</td>
+          <td>${(ann.geometry && ann.geometry.type) || ann.type || 'Polygon'}</td>
+          <td class="editable" data-field="site" data-index="${index}">${fmtVal(ann.site)}</td>
+          <td class="editable" data-field="spcode" data-index="${index}">${fmtVal(ann.spcode || ann.species_code || ann.SPCODE || ann.SPECIES_CODE)}</td>
+          <td class="editable" data-field="juvenile" data-index="${index}">${fmtBool(ann.juvenile)}</td>
+          <td class="editable" data-field="juv_substrate" data-index="${index}">${fmtVal(ann.juv_substrate)}</td>
+          <td class="editable" data-field="analyst" data-index="${index}">${fmtVal(ann.analyst)}</td>
+          <td class="editable" data-field="obs_year" data-index="${index}">${fmtVal(ann.obs_year)}</td>
+          <td class="editable" data-field="mission_id" data-index="${index}">${fmtVal(ann.mission_id)}</td>
+          <td class="editable" data-field="segment" data-index="${index}">${fmtVal(ann.segment)}</td>
+          <td class="editable" data-field="transect" data-index="${index}">${fmtVal(ann.transect)}</td>
+          <td class="editable" data-field="morph_code" data-index="${index}">${fmtVal(ann.morph_code)}</td>
+          <td class="editable" data-field="old_dead" data-index="${index}">${fmtPct(ann.old_dead)}</td>
+          <td class="editable" data-field="remnant" data-index="${index}">${fmtBool(ann.remnant)}</td>
+          <td class="editable" data-field="fragment" data-index="${index}">${fmtBool(ann.fragment)}</td>
+          <td class="editable" data-field="ex_bound" data-index="${index}">${fmtBool(ann.ex_bound)}</td>
+          <td class="editable" data-field="no_colony" data-index="${index}">${fmtBool(ann.no_colony)}</td>
+          <td class="editable" data-field="seglength" data-index="${index}">${fmtVal(ann.seglength)}</td>
+          <td class="editable" data-field="segwidth" data-index="${index}">${fmtVal(ann.segwidth)}</td>
+          <td data-field="line_length_m" data-index="${index}" style="color:#555;font-style:italic;">${ann.line_length_m != null ? ann.line_length_m + ' m' : ''}</td>
+          <td class="editable" data-field="rdcause1" data-index="${index}">${fmtVal(ann.rdcause1)}</td>
+          <td class="editable" data-field="rd_1" data-index="${index}">${fmtPct(ann.rd_1)}</td>
+          <td class="editable" data-field="rdcause2" data-index="${index}">${fmtVal(ann.rdcause2)}</td>
+          <td class="editable" data-field="rd_2" data-index="${index}">${fmtPct(ann.rd_2)}</td>
+          <td class="editable" data-field="rdcause3" data-index="${index}">${fmtVal(ann.rdcause3)}</td>
+          <td class="editable" data-field="rd_3" data-index="${index}">${fmtPct(ann.rd_3)}</td>
+          <td class="editable" data-field="con_1" data-index="${index}">${fmtVal(ann.con_1)}</td>
+          <td class="editable" data-field="extent_1" data-index="${index}">${fmtPct(ann.extent_1)}</td>
+          <td class="editable" data-field="sev_1" data-index="${index}">${fmtVal(ann.sev_1)}</td>
+          <td class="editable" data-field="con_2" data-index="${index}">${fmtVal(ann.con_2)}</td>
+          <td class="editable" data-field="extent_2" data-index="${index}">${fmtPct(ann.extent_2)}</td>
+          <td class="editable" data-field="sev_2" data-index="${index}">${fmtVal(ann.sev_2)}</td>
+          <td class="editable" data-field="con_3" data-index="${index}">${fmtVal(ann.con_3)}</td>
+          <td class="editable" data-field="extent_3" data-index="${index}">${fmtPct(ann.extent_3)}</td>
+          <td class="editable" data-field="sev_3" data-index="${index}">${fmtVal(ann.sev_3)}</td>
           <td>
             <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); openEditModal(${index})" title="Edit Fields">✏️</button>
             <button class="btn btn-sm btn-success" onclick="event.stopPropagation(); enableGeometryEdit(${index})" title="Edit Geometry">📐</button>
@@ -229,21 +271,44 @@
         inputElement.min = '2000';
         inputElement.max = '2100';
         inputElement.value = currentValue;
-      } else if (field === 'old_dead') {
-        // Number input for percentage
+      } else if (field === 'old_dead' || field === 'rd_1' || field === 'rd_2' || field === 'rd_3' ||
+                 field === 'extent_1' || field === 'extent_2' || field === 'extent_3') {
+        // Number input for percentage fields (0-100)
         inputElement = document.createElement('input');
         inputElement.type = 'number';
         inputElement.min = '0';
         inputElement.max = '100';
         inputElement.value = currentValue;
+      } else if (field === 'sev_1' || field === 'sev_2' || field === 'sev_3') {
+        // Number input for severity (1-5)
+        inputElement = document.createElement('input');
+        inputElement.type = 'number';
+        inputElement.min = '1';
+        inputElement.max = '5';
+        inputElement.value = currentValue;
+      } else if (field === 'seglength' || field === 'segwidth') {
+        // Float input for segment dimensions
+        inputElement = document.createElement('input');
+        inputElement.type = 'number';
+        inputElement.step = '0.1';
+        inputElement.value = currentValue;
+      } else if (field === 'remnant' || field === 'fragment' || field === 'ex_bound' || field === 'no_colony') {
+        // Yes/No dropdown for boolean fields (0 = No, -1 = Yes)
+        inputElement = document.createElement('select');
+        inputElement.innerHTML = `
+          <option value="0">0 (No)</option>
+          <option value="-1">-1 (Yes)</option>
+        `;
+        inputElement.value = currentValue;
       } else {
-        // Text input for other fields
+        // Text input for other fields (rdcause1-3, con_1-3, analyst, site, etc.)
         inputElement = document.createElement('input');
         inputElement.type = 'text';
         inputElement.value = currentValue;
-        
+
         // Set max length for specific fields
-        if (field === 'analyst' || field === 'spcode') {
+        if (field === 'analyst' || field === 'spcode' || field === 'rdcause1' || field === 'rdcause2' ||
+            field === 'rdcause3' || field === 'con_1' || field === 'con_2' || field === 'con_3') {
           inputElement.maxLength = 10;
         }
       }
@@ -258,21 +323,33 @@
         inputElement.select();
       }
       
+      // Fields that should be stored as numbers
+      const numericFields = ['obs_year', 'old_dead', 'segment', 'juvenile', 'remnant', 'fragment',
+        'ex_bound', 'no_colony', 'rd_1', 'rd_2', 'rd_3', 'extent_1', 'extent_2', 'extent_3',
+        'sev_1', 'sev_2', 'sev_3', 'seglength', 'segwidth'];
+      // Fields displayed as Yes/No
+      const boolFields = ['juvenile', 'remnant', 'fragment', 'ex_bound', 'no_colony'];
+      // Fields displayed with % suffix
+      const pctFields = ['old_dead', 'rd_1', 'rd_2', 'rd_3', 'extent_1', 'extent_2', 'extent_3'];
+
       // Save function
       const saveEdit = () => {
+        // Snapshot for undo
+        const prevAnnotation = { ...annotation };
+
         let newValue = inputElement.value.trim();
-        
+
         // Convert empty string to appropriate default
         if (newValue === '' || newValue === '-') {
           newValue = '';
         }
-        
+
         // Convert to number for numeric fields
-        if (field === 'obs_year' || field === 'old_dead' || field === 'segment' || field === 'juvenile') {
+        if (numericFields.includes(field)) {
           const num = parseFloat(newValue);
           newValue = isNaN(num) ? '' : num;
         }
-        
+
         // Update annotation (flat top-level field)
         if (newValue === '') {
           delete annotation[field];
@@ -287,24 +364,36 @@
             annotation.properties[field] = newValue;
           }
         }
-        
+
+        // Push to undo stack
+        if (typeof undoPushEdit === 'function') {
+          undoPushEdit(index, prevAnnotation, { ...annotation });
+        }
+
         // Remove editing class
         cell.classList.remove('editing');
-        
+
         // Update cell display
-        if (field === 'old_dead' && newValue !== '') {
+        if (pctFields.includes(field) && newValue !== '') {
           cell.textContent = newValue + '%';
-        } else if (field === 'juvenile') {
+        } else if (boolFields.includes(field)) {
           cell.textContent = newValue == -1 ? 'Yes' : (newValue == 0 ? 'No' : '-');
         } else if (newValue === '') {
           cell.textContent = '-';
         } else {
           cell.textContent = newValue;
         }
-        
+
+        // Refresh map label if species changed
+        if (field === 'spcode' && labelsVisible && typeof addLabelToAnnotation === 'function') {
+          drawnItems.eachLayer(l => {
+            if (l.annotationData === annotation) addLabelToAnnotation(l);
+          });
+        }
+
         // Save to project
         saveProject();
-        
+
         console.log(`✅ Updated ${field} for annotation ${index} to: ${newValue}`);
       };
       
@@ -470,8 +559,11 @@
         }
       };
       
-      // Save function
+      // Save function (guarded to prevent double-fire from autocomplete mousedown + blur)
+      let _editSaved = false;
       const saveTableEdit = () => {
+        if (_editSaved) return;
+        _editSaved = true;
         const newValue = input.value.trim();
         
         if (newValue === '' || newValue === '-') {
@@ -598,81 +690,81 @@
       
       document.getElementById('editModalId').textContent = index + 1;
       
+      // Helpers for building form fields
+      const a = annotation;
+      const esc = (v) => String(v ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const inp = (id, label, val, type='text', extra='') =>
+        `<div class="modal-form-field">
+          <label style="font-weight:600;display:block;margin-bottom:4px;font-size:12px;">${label}</label>
+          <input type="${type}" id="${id}" value="${esc(val)}" ${extra} style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;" />
+        </div>`;
+      const sel = (id, label, val, options) =>
+        `<div class="modal-form-field">
+          <label style="font-weight:600;display:block;margin-bottom:4px;font-size:12px;">${label}</label>
+          <select id="${id}" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+            ${options.map(o => `<option value="${o.v}" ${String(val) === String(o.v) ? 'selected' : ''}>${o.l}</option>`).join('')}
+          </select>
+        </div>`;
+      const boolOpts = [{v:'0',l:'No'},{v:'-1',l:'Yes'}];
+      const segOpts = [{v:'',l:'-'},{v:'0',l:'0'},{v:'5',l:'5'},{v:'10',l:'10'},{v:'15',l:'15'}];
+      const transOpts = [{v:'',l:'-'},{v:'A',l:'A'},{v:'B',l:'B'}];
+      const morphOpts = [{v:'',l:'-'},{v:'BR',l:'BR - Branching'},{v:'CO',l:'CO - Columnar'},{v:'EN',l:'EN - Encrusting'},
+        {v:'FO',l:'FO - Foliaceous'},{v:'FL',l:'FL - Free-living'},{v:'LA',l:'LA - Laminar'},{v:'MD',l:'MD - Mounding'},
+        {v:'MA',l:'MA - Massive'},{v:'PL',l:'PL - Plating'},{v:'SM',l:'SM - Submassive'},{v:'SO',l:'SO - Solitary'},{v:'TB',l:'TB - Tabular'}];
+
       // Build the form HTML
       const formHTML = `
-        <div class="modal-form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-height: 60vh; overflow-y: auto;">
-          <div class="modal-form-field">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">Analyst *</label>
-            <input type="text" id="edit_analyst" value="${annotation.analyst || ''}" maxlength="10" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
+        <div style="max-height:65vh;overflow-y:auto;padding-right:4px;">
+          <div style="font-size:11px;font-weight:600;color:#667eea;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Session Fields</div>
+          <div class="modal-form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+            ${inp('edit_analyst','Analyst *',a.analyst,'text','maxlength="10" required')}
+            ${inp('edit_obs_year','Year *',a.obs_year,'number','min="2000" max="2100" required')}
+            ${inp('edit_mission_id','Mission ID *',a.mission_id,'text','required')}
+            ${inp('edit_site','Site *',a.site)}
           </div>
-          <div class="modal-form-field">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">Year *</label>
-            <input type="number" id="edit_obs_year" value="${annotation.obs_year || ''}" min="2000" max="2100" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
+          <div style="font-size:11px;font-weight:600;color:#667eea;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Core Fields</div>
+          <div class="modal-form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+            <div class="modal-form-field" style="position:relative;">
+              <label style="font-weight:600;display:block;margin-bottom:4px;font-size:12px;">Species Code</label>
+              <input type="text" id="edit_spcode" value="${esc(a.spcode)}" maxlength="10" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;" autocomplete="off" />
+              <div id="edit-species-autocomplete" class="species-autocomplete-dropdown" style="position:absolute;z-index:10000;display:none;background:white;border:1px solid #ddd;border-radius:4px;max-height:200px;overflow-y:auto;width:100%;box-shadow:0 2px 8px rgba(0,0,0,0.15);"></div>
+            </div>
+            ${sel('edit_morph_code','Morphology',a.morph_code,morphOpts)}
+            ${sel('edit_transect','Transect',a.transect,transOpts)}
+            ${sel('edit_segment','Segment',a.segment,segOpts)}
+            ${inp('edit_seglength','Seg Length',a.seglength,'number','step="0.1"')}
+            ${inp('edit_segwidth','Seg Width',a.segwidth,'number','step="0.1"')}
+            ${sel('edit_juvenile','Juvenile',a.juvenile || 0,boolOpts)}
+            ${inp('edit_juv_substrate','JUV_SUBSTRATE',a.juv_substrate)}
+            ${sel('edit_no_colony','No Colony',a.no_colony || 0,boolOpts)}
+            ${sel('edit_remnant','Remnant',a.remnant || 0,boolOpts)}
+            ${sel('edit_fragment','Fragment',a.fragment || 0,boolOpts)}
+            ${sel('edit_ex_bound','Ex. Bound',a.ex_bound || 0,boolOpts)}
+            ${inp('edit_old_dead','Old Dead %',a.old_dead,'number','min="0" max="100"')}
           </div>
-          <div class="modal-form-field">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">Mission ID *</label>
-            <input type="text" id="edit_mission_id" value="${annotation.mission_id || ''}" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
+          <div style="font-size:11px;font-weight:600;color:#667eea;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Recent Dead</div>
+          <div class="modal-form-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px;">
+            ${inp('edit_rdcause1','RD Cause 1',a.rdcause1,'text','maxlength="10"')}
+            ${inp('edit_rd_1','RD 1 %',a.rd_1,'number','min="0" max="100"')}
+            <div></div>
+            ${inp('edit_rdcause2','RD Cause 2',a.rdcause2,'text','maxlength="10"')}
+            ${inp('edit_rd_2','RD 2 %',a.rd_2,'number','min="0" max="100"')}
+            <div></div>
+            ${inp('edit_rdcause3','RD Cause 3',a.rdcause3,'text','maxlength="10"')}
+            ${inp('edit_rd_3','RD 3 %',a.rd_3,'number','min="0" max="100"')}
+            <div></div>
           </div>
-          <div class="modal-form-field">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">Site *</label>
-            <input type="text" id="edit_site" value="${annotation.site || ''}" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
-          </div>
-          <div class="modal-form-field">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">Transect</label>
-            <select id="edit_transect" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-              <option value="">-</option>
-              <option value="A" ${annotation.transect === 'A' ? 'selected' : ''}>A</option>
-              <option value="B" ${annotation.transect === 'B' ? 'selected' : ''}>B</option>
-            </select>
-          </div>
-          <div class="modal-form-field">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">Segment</label>
-            <select id="edit_segment" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-              <option value="">-</option>
-              <option value="0" ${annotation.segment == 0 ? 'selected' : ''}>0</option>
-              <option value="5" ${annotation.segment == 5 ? 'selected' : ''}>5</option>
-              <option value="10" ${annotation.segment == 10 ? 'selected' : ''}>10</option>
-              <option value="15" ${annotation.segment == 15 ? 'selected' : ''}>15</option>
-            </select>
-          </div>
-          <div class="modal-form-field" style="position: relative;">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">Species Code</label>
-            <input type="text" id="edit_spcode" value="${annotation.spcode || ''}" maxlength="10" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" autocomplete="off" />
-            <div id="edit-species-autocomplete" class="species-autocomplete-dropdown" style="position: absolute; z-index: 10000; display: none; background: white; border: 1px solid #ddd; border-radius: 4px; max-height: 200px; overflow-y: auto; width: 100%; box-shadow: 0 2px 8px rgba(0,0,0,0.15);"></div>
-          </div>
-          <div class="modal-form-field">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">Morphology Code</label>
-            <select id="edit_morph_code" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-              <option value="">-</option>
-              <option value="BR" ${annotation.morph_code === 'BR' ? 'selected' : ''}>BR - Branching</option>
-              <option value="CO" ${annotation.morph_code === 'CO' ? 'selected' : ''}>CO - Columnar</option>
-              <option value="EN" ${annotation.morph_code === 'EN' ? 'selected' : ''}>EN - Encrusting</option>
-              <option value="FO" ${annotation.morph_code === 'FO' ? 'selected' : ''}>FO - Foliaceous</option>
-              <option value="FL" ${annotation.morph_code === 'FL' ? 'selected' : ''}>FL - Free-living</option>
-              <option value="LA" ${annotation.morph_code === 'LA' ? 'selected' : ''}>LA - Laminar</option>
-              <option value="MD" ${annotation.morph_code === 'MD' ? 'selected' : ''}>MD - Mounding</option>
-              <option value="MA" ${annotation.morph_code === 'MA' ? 'selected' : ''}>MA - Massive</option>
-              <option value="PL" ${annotation.morph_code === 'PL' ? 'selected' : ''}>PL - Plating</option>
-              <option value="SM" ${annotation.morph_code === 'SM' ? 'selected' : ''}>SM - Submassive</option>
-              <option value="SO" ${annotation.morph_code === 'SO' ? 'selected' : ''}>SO - Solitary</option>
-              <option value="TB" ${annotation.morph_code === 'TB' ? 'selected' : ''}>TB - Tabular</option>
-            </select>
-          </div>
-          <div class="modal-form-field">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">Old Dead %</label>
-            <input type="number" id="edit_old_dead" value="${annotation.old_dead || ''}" min="0" max="100" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
-          </div>
-          <div class="modal-form-field">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">Juvenile</label>
-            <input type="number" id="edit_juvenile" value="${annotation.juvenile || 0}" min="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
-          </div>
-          <div class="modal-form-field">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">JUV_SUBSTRATE</label>
-            <input type="text" id="edit_juv_substrate" value="${annotation.juv_substrate || ''}" maxlength="50" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
-          </div>
-          <div class="modal-form-field">
-            <label style="font-weight: bold; display: block; margin-bottom: 5px;">Remnant</label>
-            <input type="number" id="edit_remnant" value="${annotation.remnant || 0}" min="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
+          <div style="font-size:11px;font-weight:600;color:#667eea;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Condition</div>
+          <div class="modal-form-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+            ${inp('edit_con_1','Condition 1',a.con_1,'text','maxlength="10"')}
+            ${inp('edit_extent_1','Extent 1 %',a.extent_1,'number','min="0" max="100"')}
+            ${inp('edit_sev_1','Severity 1',a.sev_1,'number','min="1" max="5"')}
+            ${inp('edit_con_2','Condition 2',a.con_2,'text','maxlength="10"')}
+            ${inp('edit_extent_2','Extent 2 %',a.extent_2,'number','min="0" max="100"')}
+            ${inp('edit_sev_2','Severity 2',a.sev_2,'number','min="1" max="5"')}
+            ${inp('edit_con_3','Condition 3',a.con_3,'text','maxlength="10"')}
+            ${inp('edit_extent_3','Extent 3 %',a.extent_3,'number','min="0" max="100"')}
+            ${inp('edit_sev_3','Severity 3',a.sev_3,'number','min="1" max="5"')}
           </div>
         </div>
       `;
@@ -855,20 +947,48 @@
       }
       
       const annotation = annotations[index];
-      
-      // Update annotation with form values
-      annotation.analyst = document.getElementById('edit_analyst').value;
-      annotation.obs_year = parseInt(document.getElementById('edit_obs_year').value);
-      annotation.mission_id = document.getElementById('edit_mission_id').value;
-      annotation.site = document.getElementById('edit_site').value;
-      annotation.transect = document.getElementById('edit_transect').value;
-      annotation.segment = document.getElementById('edit_segment').value;
-      annotation.spcode = document.getElementById('edit_spcode').value;
-      annotation.morph_code = document.getElementById('edit_morph_code').value;
-      annotation.old_dead = document.getElementById('edit_old_dead').value;
-      annotation.juvenile = parseInt(document.getElementById('edit_juvenile').value) || 0;
-      annotation.juv_substrate = document.getElementById('edit_juv_substrate').value;
-      annotation.remnant = parseInt(document.getElementById('edit_remnant').value) || 0;
+
+      // Snapshot for undo before applying changes
+      const prevAnnotation = { ...annotation };
+
+      // Helper to safely read a modal field value
+      const getVal = (id) => { const el = document.getElementById(id); return el ? el.value : null; };
+      const getInt = (id) => { const v = getVal(id); return (v !== null && v !== '') ? parseInt(v) : null; };
+      const getFloat = (id) => { const v = getVal(id); return (v !== null && v !== '') ? parseFloat(v) : null; };
+
+      // Update annotation with all form values
+      annotation.analyst = getVal('edit_analyst');
+      annotation.obs_year = getInt('edit_obs_year');
+      annotation.mission_id = getVal('edit_mission_id');
+      annotation.site = getVal('edit_site');
+      annotation.transect = getVal('edit_transect') || null;
+      annotation.segment = getVal('edit_segment') || null;
+      annotation.seglength = getFloat('edit_seglength');
+      annotation.segwidth = getFloat('edit_segwidth');
+      annotation.spcode = getVal('edit_spcode') || null;
+      annotation.morph_code = getVal('edit_morph_code') || null;
+      annotation.juvenile = getInt('edit_juvenile') || 0;
+      annotation.juv_substrate = getVal('edit_juv_substrate') || null;
+      annotation.no_colony = getInt('edit_no_colony') || 0;
+      annotation.remnant = getInt('edit_remnant') || 0;
+      annotation.fragment = getInt('edit_fragment') || 0;
+      annotation.ex_bound = getInt('edit_ex_bound') || 0;
+      annotation.old_dead = getInt('edit_old_dead');
+      annotation.rdcause1 = getVal('edit_rdcause1') || null;
+      annotation.rd_1 = getInt('edit_rd_1');
+      annotation.rdcause2 = getVal('edit_rdcause2') || null;
+      annotation.rd_2 = getInt('edit_rd_2');
+      annotation.rdcause3 = getVal('edit_rdcause3') || null;
+      annotation.rd_3 = getInt('edit_rd_3');
+      annotation.con_1 = getVal('edit_con_1') || null;
+      annotation.extent_1 = getInt('edit_extent_1');
+      annotation.sev_1 = getInt('edit_sev_1');
+      annotation.con_2 = getVal('edit_con_2') || null;
+      annotation.extent_2 = getInt('edit_extent_2');
+      annotation.sev_2 = getInt('edit_sev_2');
+      annotation.con_3 = getVal('edit_con_3') || null;
+      annotation.extent_3 = getInt('edit_extent_3');
+      annotation.sev_3 = getInt('edit_sev_3');
       
       // Update the layer's annotationData
       drawnItems.eachLayer(layer => {
@@ -888,12 +1008,32 @@
         }
       });
       
+      // Push to undo stack
+      if (typeof undoPushEdit === 'function') {
+        undoPushEdit(index, prevAnnotation, { ...annotation });
+      }
+
+      // Refresh map labels if visible
+      if (labelsVisible && typeof addLabelToAnnotation === 'function') {
+        drawnItems.eachLayer(layer => {
+          if (layer.annotationData === annotation) {
+            addLabelToAnnotation(layer);
+          }
+        });
+      }
+
       // Update the annotation table
       updateAnnotationTable();
-      
+
+      // Mark unsaved and trigger save/sync
+      hasUnsavedChanges = true;
+      if (typeof isOracleProjectMode === 'function' && isOracleProjectMode()) {
+        if (typeof saveProject === 'function') saveProject();
+      }
+
       // Close modal (this will also hide geometry edit buttons)
       closeEditModal();
-      
+
       showStatus('✅ Annotation updated', 'success');
       console.log('✅ Saved annotation', index, annotation);
     }
@@ -1012,11 +1152,12 @@
       // Capture reference before cleanup
       const layerToSave = currentEditingLayer;
       
-      // Disable editing
+      // Disable editing and clean up handles
       if (layerToSave.editing) {
         layerToSave.editing.disable();
+        if (typeof _removeStaleEditHandles === 'function') _removeStaleEditHandles(layerToSave);
       }
-      
+
       // Update the annotation's geometry with new coordinates
       const ann = annotations[index];
       if (ann) {
@@ -1112,11 +1253,12 @@
         console.log('↩️ Restored original geometry with full precision');
       }
       
-      // Disable editing without saving
+      // Disable editing without saving, clean up handles
       if (currentEditingLayer.editing) {
         currentEditingLayer.editing.disable();
+        if (typeof _removeStaleEditHandles === 'function') _removeStaleEditHandles(currentEditingLayer);
       }
-      
+
       // Reset style (preserve 7px line weight for consistency)
       if (currentEditingLayer.setStyle) {
         currentEditingLayer.setStyle({
@@ -1141,8 +1283,8 @@
       showStatus('↩️ Geometry edit cancelled - changes discarded', 'info');
     }
     
-    function deleteAnnotation(index) {
-      if (!confirm('Delete this annotation?')) return;
+    async function deleteAnnotation(index) {
+      if (!await catConfirm('Delete this annotation?', { danger: true, ok: 'Delete' })) return;
       
       const ann = annotations[index];
       if (!ann) return;
@@ -1161,15 +1303,26 @@
         removeAnnotationLabel(layerId);
       }
       
-      // Remove from annotations array
+      // Remove from annotations array (and projectAnnotations for poll sync)
+      const removedAnn = annotations[index];
       annotations.splice(index, 1);
-      
+      if (typeof getProjectAnnotations === 'function') {
+        const pa = getProjectAnnotations();
+        if (pa && pa !== annotations) {
+          const pi = pa.indexOf(removedAnn);
+          if (pi !== -1) pa.splice(pi, 1);
+        }
+      }
+
       // Update table
       updateAnnotationTable();
       
       showStatus('🗑️ Annotation deleted', 'success');
       hasUnsavedChanges = true;
-      if (isOracleProjectMode()) setAutoSaveBadge('pending', '🔵 Unsaved changes');
+      if (typeof isOracleProjectMode === 'function' && isOracleProjectMode()) {
+        setAutoSaveBadge('pending', '🔵 Unsaved changes');
+        if (typeof saveProject === 'function') saveProject();
+      }
     }
     
     // Auto-save logic extracted to js/annotation-runtime-autosave.js

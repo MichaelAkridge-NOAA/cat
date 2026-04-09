@@ -900,20 +900,8 @@
       }
       
       // Calculate shape length for the form
-      if (type === 'polyline') {
-        const coords = layer.getLatLngs();
-        let length = 0;
-        for (let i = 0; i < coords.length - 1; i++) {
-          length += coords[i].distanceTo(coords[i + 1]);
-        }
-        document.getElementById('seglength').value = (length).toFixed(3);
-      } else if (type === 'rectangle' || type === 'polygon') {
-        const bounds = layer.getBounds();
-        const width = bounds.getNorthEast().distanceTo(bounds.getNorthWest());
-        const height = bounds.getNorthEast().distanceTo(bounds.getSouthEast());
-        document.getElementById('seglength').value = Math.max(width, height).toFixed(3);
-        document.getElementById('segwidth').value = Math.min(width, height).toFixed(3);
-      }
+      // seglength/segwidth are user-entered fields — don't auto-fill them.
+      // line_length_m is computed at save time from the drawn geometry.
       
       // Auto-focus on species field for quick data entry
       const speciesField = document.getElementById('spcode');

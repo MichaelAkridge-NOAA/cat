@@ -347,17 +347,16 @@ async function saveAnnotation() {
     return;
   }
   
-  // Validate required fields
+  // Validate required fields with visual feedback
   const requiredFields = ['analyst', 'obs_year', 'mission_id', 'site'];
-  const missingFields = [];
-  
-  for (const fieldId of requiredFields) {
-    const field = document.getElementById(fieldId);
-    if (!field || !field.value.trim()) {
-      missingFields.push(fieldId);
-    }
+  if (typeof catValidateRequired === 'function' && !catValidateRequired(requiredFields)) {
+    showStatus('Please fill in all required fields (highlighted in red)', 'error');
+    return;
   }
-  
+  const missingFields = requiredFields.filter(id => {
+    const f = document.getElementById(id);
+    return !f || !f.value.trim();
+  });
   if (missingFields.length > 0) {
     showStatus('Please fill in all required fields (marked with *)', 'error');
     return;
@@ -413,7 +412,8 @@ async function saveAnnotation() {
     // Clear form and reset state
     clearAnnotationForm();
     setCurrentAnnotation(null);
-    
+    if (typeof hideDiscardButton === 'function') hideDiscardButton();
+
     // Increment count and reset timer
     incrementAnnotationCount();
     resetAnnotationTimer();
@@ -881,7 +881,7 @@ function selectAnnotationForEdit(index) {
  * @param {number} index - Annotation index
  */
 async function deleteAnnotation(index) {
-  if (!confirm('Delete this annotation?')) return;
+  if (!await catConfirm('Delete this annotation?', { danger: true, ok: 'Delete' })) return;
 
   const projectAnnotations = getProjectAnnotations();
   const ann = projectAnnotations[index];
@@ -1721,11 +1721,12 @@ function enableGeometryEdit(index) {
 async function saveGeometryEdit(index) {
   if (!currentEditingLayer) return;
   
-  // Disable editing
+  // Disable editing and clean up handles
   if (currentEditingLayer.editing) {
     currentEditingLayer.editing.disable();
+    if (typeof _removeStaleEditHandles === 'function') _removeStaleEditHandles(currentEditingLayer);
   }
-  
+
   // Update the annotation's geometry with new coordinates
   const projectAnnotations = getProjectAnnotations();
   const ann = projectAnnotations[index];
@@ -1818,11 +1819,12 @@ function cancelGeometryEdit() {
     }
   }
   
-  // Disable editing
+  // Disable editing and clean up handles
   if (currentEditingLayer.editing) {
     currentEditingLayer.editing.disable();
+    if (typeof _removeStaleEditHandles === 'function') _removeStaleEditHandles(currentEditingLayer);
   }
-  
+
   // Reset style
   if (currentEditingLayer.setStyle) {
     currentEditingLayer.setStyle({
@@ -1832,18 +1834,18 @@ function cancelGeometryEdit() {
       fillOpacity: 0.3
     });
   }
-  
+
   // Remove button container
   const buttonContainer = document.getElementById('geometryEditButtons');
   if (buttonContainer) {
     buttonContainer.remove();
   }
-  
+
   // Clean up
   delete currentEditingLayer.originalLatLngs;
   delete currentEditingLayer.editingIndex;
   currentEditingLayer = null;
-  
+
   showStatus('↩️ Geometry edit cancelled - changes discarded', 'info');
 }
 

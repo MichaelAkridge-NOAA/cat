@@ -323,11 +323,12 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00') {
             L.DomEvent.stop(e);
             if (layer.editing && layer.editing.enabled()) {
               layer.editing.disable();
+              _removeStaleEditHandles(layer);
               layer.setStyle({ color: layerColor, dashArray: null });
             } else if (layer.editing) {
               layer.editing.enable();
               layer.setStyle({ color: '#ff9800', dashArray: '6,4' });
-              showStatus('✏️ Editing vertices — drag handles, then click elsewhere to save', 'info');
+              showStatus('✏️ Editing vertices — drag handles, then double-click to finish', 'info');
             }
           });
 
@@ -343,6 +344,7 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00') {
               updated
             );
             layer.editing.disable();
+            _removeStaleEditHandles(layer);
             layer.setStyle({ color: layerColor, dashArray: null });
           });
         }
@@ -401,6 +403,9 @@ function addOverlayLayerToUI(layerId, layerName, featureCount = 0, color = '#00f
           <input type="color" value="${color}" id="${safeId}_color"
                  onchange="changeOverlayColor(${layerId}, this.value)"
                  style="width:28px;height:22px;border:none;padding:0;cursor:pointer;background:transparent;">
+          <label style="font-size:11px; color:#aaa; display:flex; align-items:center; gap:3px; cursor:pointer;">
+            <input type="checkbox" id="${safeId}_borderOnly" onchange="toggleOverlayBorderOnly(${layerId})"> Border only
+          </label>
           <button class="btn btn-sm" onclick="zoomToOverlayLayer(${layerId})"
                   style="font-size:11px;padding:2px 8px;background:#444;" title="Zoom to layer extent">
             🔍 Zoom
@@ -408,8 +413,8 @@ function addOverlayLayerToUI(layerId, layerName, featureCount = 0, color = '#00f
         </div>
         <div class="opacity-control">
           <label>Opacity: <span id="${safeId}_opacityValue">80</span>%</label>
-          <input type="range" class="opacity-slider" id="${safeId}_opacity" 
-                 min="0" max="100" value="80" 
+          <input type="range" class="opacity-slider" id="${safeId}_opacity"
+                 min="0" max="100" value="80"
                  oninput="setOverlayOpacity(${layerId}, this.value)">
         </div>
         <button class="btn btn-sm btn-danger" onclick="removeOverlayLayer(${layerId})" 
@@ -427,6 +432,22 @@ function addOverlayLayerToUI(layerId, layerName, featureCount = 0, color = '#00f
   const icon = document.getElementById(`${safeId}_detailsIcon`);
   if (details) details.classList.add('collapsed');
   if (icon) icon.textContent = '▶';
+
+  // Restore saved opacity/visibility from localStorage
+  if (typeof catGetOverlayState === 'function') {
+    const saved = catGetOverlayState(layerId);
+    if (saved) {
+      if (saved.opacity !== undefined && saved.opacity !== 80) {
+        setOverlayOpacity(layerId, saved.opacity);
+        const slider = document.getElementById(`${safeId}_opacity`);
+        if (slider) slider.value = saved.opacity;
+      }
+      if (saved.visible === false) {
+        const checkbox = document.getElementById(`overlay_${layerId}_toggle`);
+        if (checkbox) { checkbox.checked = false; toggleOverlayLayer(layerId); }
+      }
+    }
+  }
 }
 
 /**
@@ -446,6 +467,7 @@ function toggleOverlayLayer(layerId) {
   }
 
   layerData.visible = visible;
+  if (typeof catSaveOverlayState === 'function') catSaveOverlayState(layerId, layerData.opacity || 80, visible);
 }
 
 /**
@@ -458,19 +480,38 @@ function setOverlayOpacity(layerId, value) {
   document.getElementById(`overlay_${layerId}_opacityValue`).textContent = value;
 
   const opacityRatio = value / 100;
+  const borderOnly = layerData.borderOnly || false;
   layerData.layerGroup.setStyle({
     opacity: opacityRatio * 0.8,
-    fillOpacity: opacityRatio * 0.2
+    fillOpacity: borderOnly ? 0 : opacityRatio * 0.2
   });
 
   layerData.opacity = parseInt(value);
+  if (typeof catSaveOverlayState === 'function') catSaveOverlayState(layerId, parseInt(value), layerData.visible !== false);
+}
+
+/**
+ * Toggle border-only mode for an overlay layer (hide fill, keep stroke)
+ */
+function toggleOverlayBorderOnly(layerId) {
+  const layerData = overlayLayers[layerId];
+  if (!layerData) return;
+
+  const checkbox = document.getElementById(`overlay_${layerId}_borderOnly`);
+  const borderOnly = checkbox ? checkbox.checked : false;
+  layerData.borderOnly = borderOnly;
+
+  const opacityRatio = (layerData.opacity || 80) / 100;
+  layerData.layerGroup.setStyle({
+    fillOpacity: borderOnly ? 0 : opacityRatio * 0.2
+  });
 }
 
 /**
  * Remove overlay layer (deletes from both map and database)
  */
 async function removeOverlayLayer(layerId) {
-  if (!confirm('Remove this overlay layer and all its features? This cannot be undone.')) return;
+  if (!await catConfirm('Remove this overlay layer and all its features? This cannot be undone.', { danger: true, ok: 'Remove' })) return;
 
   const layerData = overlayLayers[layerId];
   if (!layerData) return;
@@ -717,6 +758,29 @@ function _onTransformEnd() {
   _transformState = null;
 }
 
+// ── Edit handle cleanup ──
+// Leaflet.Draw's editing.disable() doesn't always remove handle DOM elements.
+// Force-remove them so white squares don't linger on the map.
+function _removeStaleEditHandles(layer) {
+  if (layer._map) {
+    // Leaflet.Draw stores edit markers in layer.editing._markerGroup
+    const mg = layer.editing && layer.editing._markerGroup;
+    if (mg) {
+      mg.clearLayers();
+      if (layer._map.hasLayer(mg)) layer._map.removeLayer(mg);
+    }
+    // Also remove any leftover resize/move marker groups
+    if (layer.editing && layer.editing._verticesHandlers) {
+      layer.editing._verticesHandlers.forEach(function(h) {
+        if (h._markerGroup) {
+          h._markerGroup.clearLayers();
+          if (layer._map.hasLayer(h._markerGroup)) layer._map.removeLayer(h._markerGroup);
+        }
+      });
+    }
+  }
+}
+
 // ── Geometry helpers ──
 
 function _offsetLayer(layer, dLat, dLng) {
@@ -929,7 +993,7 @@ function toggleLayerActive(layerId) {
  * Delete layer from management
  */
 async function deleteLayerFromManagement(layerId) {
-  if (!confirm('Are you sure? This will permanently delete the layer and all its features.')) {
+  if (!await catConfirm('Are you sure? This will permanently delete the layer and all its features.', { danger: true, ok: 'Delete' })) {
     return;
   }
 

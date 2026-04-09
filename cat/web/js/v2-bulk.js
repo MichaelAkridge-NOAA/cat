@@ -16,6 +16,7 @@
   let bulkIdCounter = 0;           // monotonic counter for colony_id (never decremented)
   let bulkSessionAnnotationIndices = []; // indices of annotations added in current bulk session
   const UNDO_TOAST_MS = 1800;
+  let _tableUpdateTimer = null;   // debounce timer for table rebuilds during rapid drawing
 
   // ── Expose to global so other modules can query ──
   window.v2BulkMode = {
@@ -186,7 +187,7 @@
         // Flatten properties to top level (matching v1 saveAnnotation format)
         // so table rendering and label generation find fields directly on ann.*
         const blankAnnotation = {
-          type: type === 'polyline' ? 'line' : type,
+          type: type,
           geometry: geometry,
           ...props,
           properties: props
@@ -224,10 +225,11 @@
           bulkSessionAnnotationIndices.push(annotationIndex);
         }
 
-        // Update table
-        if (typeof updateAnnotationTable === 'function') {
-          updateAnnotationTable();
-        }
+        // Debounced table update — avoid rebuilding 35-col table on every rapid draw
+        clearTimeout(_tableUpdateTimer);
+        _tableUpdateTimer = setTimeout(() => {
+          if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
+        }, 300);
 
         // Mark changes
         if (typeof hasUnsavedChanges !== 'undefined') {
@@ -275,31 +277,23 @@
       return el ? el.value.trim() : '';
     };
 
-    // Calculate seglength/segwidth from the drawn geometry
-    let seglength = getValue('seglength');
-    let segwidth  = getValue('segwidth');
+    // seglength/segwidth are sticky form fields (analyst-entered transect measurements),
+    // not computed from drawn geometry
+    const seglength = getValue('seglength');
+    const segwidth  = getValue('segwidth');
 
+    // Compute drawn line length in meters (polylines only)
+    let line_length_m = null;
     try {
       if (type === 'polyline' && layer.getLatLngs) {
         const latlngs = layer.getLatLngs();
-        if (latlngs.length >= 2) {
-          // Line length in meters
-          const meters = latlngs[0].distanceTo(latlngs[latlngs.length - 1]);
-          seglength = meters.toFixed(3);
+        let meters = 0;
+        for (let i = 0; i < latlngs.length - 1; i++) {
+          meters += latlngs[i].distanceTo(latlngs[i + 1]);
         }
-      } else if ((type === 'rectangle' || type === 'polygon') && layer.getBounds) {
-        const bounds = layer.getBounds();
-        const sw = bounds.getSouthWest();
-        const ne = bounds.getNorthEast();
-        const se = L.latLng(sw.lat, ne.lng);
-        const width  = sw.distanceTo(se);   // east-west
-        const height = sw.distanceTo(L.latLng(ne.lat, sw.lng)); // north-south
-        seglength = Math.max(width, height).toFixed(3);
-        segwidth  = Math.min(width, height).toFixed(3);
+        line_length_m = parseFloat(meters.toFixed(3));
       }
-    } catch (e) {
-      console.warn('v2: measurement calc error:', e);
-    }
+    } catch (e) { /* ignore */ }
 
     return {
       // ID for table display
@@ -313,6 +307,7 @@
       segment:    getValue('segment'),
       seglength:  seglength,
       segwidth:   segwidth,
+      line_length_m: line_length_m,  // Auto-computed from drawn polyline
       // Per-annotation fields — left blank for table entry
       spcode:     '',
       morph_code: '',
@@ -321,7 +316,7 @@
       juv_substrate: '',
       remnant:    0,
       ex_bound:   0,
-      olddead:    '',
+      old_dead:   '',
       rdcause1:   '', rd_1: '', rdcause2: '', rd_2: '', rdcause3: '', rd_3: '',
       con_1: '', extent_1: '', sev_1: '',
       con_2: '', extent_2: '', sev_2: '',
@@ -489,13 +484,14 @@
   // ===================================================================
   function initKeyboardShortcuts() {
     document.addEventListener('keydown', function (e) {
-      // Ctrl+Z — undo
+      // Ctrl+Z — undo (only in bulk mode; otherwise let annotation-undo.js handle it)
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-        // Don't intercept if user is typing in an input/textarea
-        const tag = document.activeElement.tagName;
+        if (!bulkModeEnabled) return; // defer to annotation-undo.js
+        const tag = document.activeElement?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
         e.preventDefault();
+        e.stopImmediatePropagation(); // prevent annotation-undo.js from also firing
         undoLastDraw();
       }
     });

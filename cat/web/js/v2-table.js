@@ -8,8 +8,9 @@
   'use strict';
 
   // ── State ──
-  let sortColumn = null;
-  let sortDirection = 'asc';    // 'asc' | 'desc'
+  const _savedSort = (typeof catGetTableSort === 'function') ? catGetTableSort() : null;
+  let sortColumn = _savedSort ? _savedSort.column : null;
+  let sortDirection = _savedSort ? _savedSort.direction : 'asc';
   let kbRow = -1;               // keyboard-nav row index
   let kbCol = -1;               // keyboard-nav col index
   let tableSizeMode = 'md';     // 'sm' | 'md' | 'lg' | 'xl'
@@ -25,7 +26,7 @@
 
   // Column definitions — field name → header display name
   // Order matches the <th> elements in the HTML
-  const COLUMNS = [
+  const DEFAULT_COLUMNS = [
     { field: 'id',            label: 'ID',            sortable: true,  batchFill: false, visible: true  },
     { field: 'type',          label: 'Type',          sortable: true,  batchFill: false, visible: false },
     { field: 'site',          label: 'Site',          sortable: true,  batchFill: true,  visible: true  },
@@ -38,9 +39,54 @@
     { field: 'segment',       label: 'Segment',       sortable: true,  batchFill: true,  visible: true  },
     { field: 'transect',      label: 'Transect',      sortable: true,  batchFill: true,  visible: true  },
     { field: 'morph_code',    label: 'Morph',         sortable: true,  batchFill: true,  visible: true  },
-    { field: 'olddead',       label: 'Old Dead %',    sortable: true,  batchFill: true,  visible: false },
+    { field: 'old_dead',      label: 'Old Dead %',    sortable: true,  batchFill: true,  visible: false },
+    { field: 'remnant',       label: 'Remnant',       sortable: true,  batchFill: true,  visible: false },
+    { field: 'fragment',      label: 'Fragment',      sortable: true,  batchFill: true,  visible: false },
+    { field: 'ex_bound',      label: 'Ex Bound',      sortable: true,  batchFill: true,  visible: false },
+    { field: 'no_colony',     label: 'No Colony',     sortable: true,  batchFill: true,  visible: false },
+    { field: 'seglength',     label: 'Seg Length',     sortable: true,  batchFill: true,  visible: false },
+    { field: 'segwidth',      label: 'Seg Width',      sortable: true,  batchFill: true,  visible: false },
+    { field: 'line_length_m', label: 'Line Length (m)', sortable: true, batchFill: false, visible: false },
+    { field: 'rdcause1',      label: 'RD Cause 1',    sortable: true,  batchFill: true,  visible: false },
+    { field: 'rd_1',          label: 'RD 1 %',        sortable: true,  batchFill: true,  visible: false },
+    { field: 'rdcause2',      label: 'RD Cause 2',    sortable: true,  batchFill: true,  visible: false },
+    { field: 'rd_2',          label: 'RD 2 %',        sortable: true,  batchFill: true,  visible: false },
+    { field: 'rdcause3',      label: 'RD Cause 3',    sortable: true,  batchFill: true,  visible: false },
+    { field: 'rd_3',          label: 'RD 3 %',        sortable: true,  batchFill: true,  visible: false },
+    { field: 'con_1',         label: 'Condition 1',    sortable: true,  batchFill: true,  visible: false },
+    { field: 'extent_1',      label: 'Extent 1',      sortable: true,  batchFill: true,  visible: false },
+    { field: 'sev_1',         label: 'Severity 1',    sortable: true,  batchFill: true,  visible: false },
+    { field: 'con_2',         label: 'Condition 2',    sortable: true,  batchFill: true,  visible: false },
+    { field: 'extent_2',      label: 'Extent 2',      sortable: true,  batchFill: true,  visible: false },
+    { field: 'sev_2',         label: 'Severity 2',    sortable: true,  batchFill: true,  visible: false },
+    { field: 'con_3',         label: 'Condition 3',    sortable: true,  batchFill: true,  visible: false },
+    { field: 'extent_3',      label: 'Extent 3',      sortable: true,  batchFill: true,  visible: false },
+    { field: 'sev_3',         label: 'Severity 3',    sortable: true,  batchFill: true,  visible: false },
     { field: 'actions',       label: 'Actions',       sortable: false, batchFill: false, visible: true  }
   ];
+
+  // Load saved visibility from localStorage, falling back to defaults
+  const COL_VIS_KEY = 'cat_column_visibility';
+  const COLUMNS = DEFAULT_COLUMNS.map(col => {
+    const saved = loadColumnVisibility();
+    if (saved && col.field in saved) {
+      return { ...col, visible: saved[col.field] };
+    }
+    return { ...col };
+  });
+
+  function loadColumnVisibility() {
+    try {
+      const raw = localStorage.getItem(COL_VIS_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  function saveColumnVisibility() {
+    const vis = {};
+    COLUMNS.forEach(c => { vis[c.field] = c.visible; });
+    try { localStorage.setItem(COL_VIS_KEY, JSON.stringify(vis)); } catch (e) { /* ignore */ }
+  }
 
   // ===================================================================
   //  SORT — click header to sort annotation table
@@ -51,6 +97,7 @@
     if (typeof origUpdate === 'function') {
       window.updateAnnotationTable = function () {
         origUpdate.apply(this, arguments);
+        applyColumnVisibility();
         applySortableHeaders();
         applyTableSize();
         if (sortColumn) {
@@ -102,6 +149,7 @@
           sortDirection = 'asc';
         }
         sortTableByColumn(sortColumn, sortDirection, true);
+        if (typeof catSaveTableSort === 'function') catSaveTableSort(sortColumn, sortDirection);
       };
     });
   }
@@ -213,6 +261,132 @@
       container.style.maxHeight = TABLE_SIZES[tableSizeMode] + 'px';
       container.style.minHeight = Math.min(80, TABLE_SIZES[tableSizeMode]) + 'px';
     }
+  }
+
+  // ===================================================================
+  //  COLUMN VISIBILITY — show/hide columns, persisted to localStorage
+  // ===================================================================
+  function applyColumnVisibility() {
+    const table = document.getElementById('annotationTable');
+    if (!table) return;
+
+    const headers = table.querySelectorAll('thead th');
+    const rows = table.querySelectorAll('tbody tr');
+
+    COLUMNS.forEach((col, idx) => {
+      const display = col.visible ? '' : 'none';
+      if (headers[idx]) headers[idx].style.display = display;
+      rows.forEach(row => {
+        if (row.cells[idx]) row.cells[idx].style.display = display;
+      });
+    });
+  }
+
+  function injectColumnPicker() {
+    const waitForPanel = setInterval(() => {
+      const listHeader = document.querySelector('#annotationsListSectionContent')?.previousElementSibling;
+      if (!listHeader) return;
+      clearInterval(waitForPanel);
+
+      if (document.getElementById('v2ColPickerBtn')) return;
+
+      // Gear button
+      const btn = document.createElement('button');
+      btn.id = 'v2ColPickerBtn';
+      btn.className = 'v2-tool-btn';
+      btn.title = 'Show/hide table columns';
+      btn.textContent = '⚙ Columns';
+      btn.style.cssText = 'margin-left:8px;padding:3px 8px;font-size:11px;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;font-weight:600;color:#475569;';
+
+      // Dropdown
+      const dropdown = document.createElement('div');
+      dropdown.id = 'v2ColPickerDropdown';
+      dropdown.style.cssText = 'display:none;position:absolute;right:0;top:100%;z-index:5000;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.15);padding:8px 0;min-width:200px;max-height:400px;overflow-y:auto;';
+
+      // Title row
+      dropdown.innerHTML = '<div style="padding:4px 12px 8px;font-size:12px;font-weight:700;color:#1e293b;border-bottom:1px solid #e2e8f0;">Visible Columns</div>';
+
+      // Preset buttons row
+      const presets = document.createElement('div');
+      presets.style.cssText = 'display:flex;gap:4px;padding:6px 12px;border-bottom:1px solid #e2e8f0;';
+      presets.innerHTML = `
+        <button class="col-preset-btn" data-preset="core" style="flex:1;padding:3px 6px;font-size:10px;font-weight:600;border:1px solid #cbd5e1;border-radius:3px;background:#f1f5f9;cursor:pointer;color:#475569;">Core</button>
+        <button class="col-preset-btn" data-preset="all" style="flex:1;padding:3px 6px;font-size:10px;font-weight:600;border:1px solid #cbd5e1;border-radius:3px;background:#f1f5f9;cursor:pointer;color:#475569;">All</button>
+        <button class="col-preset-btn" data-preset="minimal" style="flex:1;padding:3px 6px;font-size:10px;font-weight:600;border:1px solid #cbd5e1;border-radius:3px;background:#f1f5f9;cursor:pointer;color:#475569;">Minimal</button>
+      `;
+      dropdown.appendChild(presets);
+
+      // Column checkboxes
+      COLUMNS.forEach((col, idx) => {
+        if (col.field === 'actions') return; // always visible
+        const item = document.createElement('label');
+        item.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 12px;font-size:12px;color:#374151;cursor:pointer;';
+        item.onmouseover = () => item.style.background = '#f3f4f6';
+        item.onmouseout = () => item.style.background = '';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = col.visible;
+        cb.dataset.colIdx = idx;
+        cb.addEventListener('change', () => {
+          COLUMNS[idx].visible = cb.checked;
+          saveColumnVisibility();
+          applyColumnVisibility();
+        });
+        item.appendChild(cb);
+        item.appendChild(document.createTextNode(col.label));
+        dropdown.appendChild(item);
+      });
+
+      // Wrap in relative container
+      const wrapper = document.createElement('div');
+      wrapper.style.cssText = 'position:relative;display:inline-block;';
+      wrapper.appendChild(btn);
+      wrapper.appendChild(dropdown);
+
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = dropdown.style.display !== 'none';
+        dropdown.style.display = isOpen ? 'none' : 'block';
+      });
+
+      // Close on outside click
+      document.addEventListener('click', (e) => {
+        if (!wrapper.contains(e.target)) {
+          dropdown.style.display = 'none';
+        }
+      });
+
+      // Preset handlers
+      presets.addEventListener('click', (e) => {
+        const presetBtn = e.target.closest('.col-preset-btn');
+        if (!presetBtn) return;
+        const preset = presetBtn.dataset.preset;
+
+        const coreFields = ['id', 'site', 'spcode', 'juvenile', 'juv_substrate', 'segment', 'transect', 'morph_code', 'actions'];
+        const minimalFields = ['id', 'site', 'spcode', 'morph_code', 'actions'];
+
+        COLUMNS.forEach((col, idx) => {
+          if (col.field === 'actions') { col.visible = true; return; }
+          if (preset === 'all') col.visible = true;
+          else if (preset === 'core') col.visible = coreFields.includes(col.field);
+          else if (preset === 'minimal') col.visible = minimalFields.includes(col.field);
+          // Update checkbox
+          const cb = dropdown.querySelector(`input[data-col-idx="${idx}"]`);
+          if (cb) cb.checked = col.visible;
+        });
+        saveColumnVisibility();
+        applyColumnVisibility();
+      });
+
+      // Insert after size controls or into header
+      const sizeControls = document.getElementById('v2TableSizeControls');
+      if (sizeControls) {
+        sizeControls.parentElement.appendChild(wrapper);
+      } else {
+        const h3 = listHeader.querySelector('h3') || listHeader.querySelector('div');
+        if (h3) h3.parentElement.appendChild(wrapper);
+      }
+    }, 300);
   }
 
   // ===================================================================
@@ -757,11 +931,14 @@
   function init() {
     initSortableHeaders();
     injectTableSizeControls();
+    injectColumnPicker();
     initArrowKeyNav();
     initClipboardEvents();
     injectBatchFillModal();
-    injectKeyboardHelpHint();
-    console.log('🔧 v2-table.js loaded — Sort, Resize, Arrow Keys, Copy/Paste, Batch Fill');
+    // Keyboard shortcuts hint removed — now in Info > Keyboard Shortcuts popup
+    // Apply initial column visibility
+    setTimeout(applyColumnVisibility, 150);
+    console.log('🔧 v2-table.js loaded — Sort, Resize, Column Picker, Arrow Keys, Copy/Paste, Batch Fill');
   }
 
   if (document.readyState === 'loading') {

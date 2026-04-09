@@ -8,7 +8,12 @@
       if (geometryType === 'LineString') {
         coordinates = layer.getLatLngs().map(latlng => [latlng.lng, latlng.lat]);
       } else if (geometryType === 'Polygon') {
-        coordinates = [layer.getLatLngs()[0].map(latlng => [latlng.lng, latlng.lat])];
+        const ring = layer.getLatLngs()[0].map(latlng => [latlng.lng, latlng.lat]);
+        // Close the ring per GeoJSON spec (first point == last point)
+        if (ring.length > 0 && (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1])) {
+          ring.push([...ring[0]]);
+        }
+        coordinates = [ring];
       } else if (geometryType === 'Point') {
         const latlng = layer.getLatLng();
         coordinates = [latlng.lng, latlng.lat];
@@ -45,17 +50,21 @@
       });
     });
     
-    // Status messages
+    // Status messages — delegate to global toast system (defined in HTML <script>)
     function showStatus(message, type) {
+      // Use the global toast-based showStatus if available
+      if (typeof window._catToast === 'function') {
+        window._catToast(message, type);
+        return;
+      }
+      // Fallback: inline banner
       const statusDiv = document.getElementById('statusMessage');
+      if (!statusDiv) return;
       statusDiv.className = 'status ' + type;
       statusDiv.textContent = message;
       statusDiv.style.display = 'block';
-      
       if (type === 'success') {
-        setTimeout(() => {
-          statusDiv.style.display = 'none';
-        }, 3000);
+        setTimeout(() => { statusDiv.style.display = 'none'; }, 3000);
       }
     }
     
@@ -396,72 +405,70 @@
         console.log('No previous drawing tool to re-enable');
         return;
       }
-      
+
       console.log('🔄 Re-enabling drawing tool:', lastDrawingTool);
-      
-      // Use a longer delay to ensure focus has been set on species field first
-      // The species field focus happens at 100ms, so we wait 250ms to avoid stealing focus
+
+      // Click the matching Leaflet Draw toolbar button to activate the tool.
+      // This avoids referencing drawControl (which is scoped inside the
+      // DOMContentLoaded callback in shell-init.js and not globally accessible).
+      const toolClassMap = {
+        'polyline': '.leaflet-draw-draw-polyline',
+        'polygon': '.leaflet-draw-draw-polygon',
+        'rectangle': '.leaflet-draw-draw-rectangle'
+      };
+      const selector = toolClassMap[lastDrawingTool];
+      if (!selector) {
+        console.log('Unknown tool type:', lastDrawingTool);
+        return;
+      }
+
+      // Delay to let species field focus happen first (at 100ms)
       setTimeout(() => {
-        // Store the currently focused element
         const activeElement = document.activeElement;
-        
-        // Get the appropriate draw handler based on tool type
-        let drawHandler;
-        let buttonClass;
-        
-        switch(lastDrawingTool) {
-          case 'polyline':
-            drawHandler = new L.Draw.Polyline(map, drawControl.options.draw.polyline);
-            buttonClass = '.leaflet-draw-draw-polyline';
-            break;
-          case 'polygon':
-            drawHandler = new L.Draw.Polygon(map, drawControl.options.draw.polygon);
-            buttonClass = '.leaflet-draw-draw-polygon';
-            break;
-          case 'rectangle':
-            drawHandler = new L.Draw.Rectangle(map, drawControl.options.draw.rectangle);
-            buttonClass = '.leaflet-draw-draw-rectangle';
-            break;
-          default:
-            console.log('Unknown tool type:', lastDrawingTool);
-            return;
+
+        const btn = document.querySelector(selector);
+        if (btn) {
+          btn.click();
+          console.log('✅ Drawing tool re-enabled:', lastDrawingTool);
+        } else {
+          console.warn('Drawing toolbar button not found:', selector);
         }
-        
-        // Enable the drawing handler
-        drawHandler.enable();
-        
-        // Add visual feedback - highlight the active button
-        updateDrawingToolVisualFeedback(buttonClass);
-        
-        console.log('✅ Drawing tool re-enabled:', lastDrawingTool);
-        
+
         // Restore focus to the species field if it was focused
         if (activeElement && activeElement.id === 'spcode') {
-          // Use a tiny delay to ensure the drawing handler is fully enabled
           setTimeout(() => {
             activeElement.focus();
             console.log('🔍 Focus restored to species field');
           }, 10);
         }
-        
-      }, 250); // Longer delay to ensure species field gets focus first
+      }, 250);
     }
     
     // Save annotation (File Mode - no database)
+    let _isSaving = false;
     async function saveAnnotation() {
+      if (_isSaving) return;
       if (!currentAnnotation) {
         showStatus('Please draw a shape first', 'error');
         return;
       }
+      _isSaving = true;
       
-      // Validate required fields
+      // Validate required fields with visual feedback
+      const requiredFields = ['analyst', 'obs_year', 'mission_id', 'site'];
+      if (typeof catValidateRequired === 'function' && !catValidateRequired(requiredFields)) {
+        showStatus('Please fill in all required fields (highlighted in red)', 'error');
+        _isSaving = false;
+        return;
+      }
       const analyst = document.getElementById('analyst').value.trim();
       const obs_year = document.getElementById('obs_year').value;
       const mission_id = document.getElementById('mission_id').value.trim();
       const site = document.getElementById('site').value.trim();
-      
+
       if (!analyst || !obs_year || !mission_id || !site) {
         showStatus('Please fill in all required fields (marked with *)', 'error');
+        _isSaving = false;
         return;
       }
       
@@ -470,6 +477,20 @@
       // Leaflet's toGeoJSON() truncates to 6 decimals, causing ~1m precision loss
       const layer = currentAnnotation.layer || currentAnnotation;
       const geometry = getFullPrecisionGeometry(layer);
+
+      // Compute drawn line length in meters (polylines only)
+      let line_length_m = null;
+      try {
+        const annType = currentAnnotation.type || 'polygon';
+        if ((annType === 'polyline' || annType === 'line') && layer.getLatLngs) {
+          const latlngs = layer.getLatLngs();
+          let meters = 0;
+          for (let i = 0; i < latlngs.length - 1; i++) {
+            meters += latlngs[i].distanceTo(latlngs[i + 1]);
+          }
+          line_length_m = parseFloat(meters.toFixed(3));
+        }
+      } catch (e) { /* ignore */ }
       
       // Get time spent on this annotation
       const annotationTimeSeconds = getAnnotationTime();
@@ -501,7 +522,6 @@
         juvenile: parseInt(getFieldValue('juvenile')) || 0,
         juv_substrate: getFieldValue('juv_substrate') || null,
         remnant: parseInt(getFieldValue('remnant')) || 0,
-        fragment: parseInt(getFieldValue('fragment')) || 0,
         morph_code: getFieldValue('morph_code') || null,
         ex_bound: parseInt(getFieldValue('ex_bound')) || 0,
         old_dead: parseInt(getFieldValue('olddead')) || null,
@@ -520,6 +540,7 @@
         con_3: getFieldValue('con_3') || null,
         extent_3: parseInt(getFieldValue('extent_3')) || null,
         sev_3: parseInt(getFieldValue('sev_3')) || null,
+        line_length_m: line_length_m,       // Auto-computed from drawn geometry (polylines only)
         created_at: new Date().toISOString(),
         annotation_time_seconds: annotationTimeSeconds // Time spent on this annotation
       };
@@ -528,10 +549,24 @@
       try {
         // Attach annotation data to the layer
         layer.annotationData = annotationData;
-        
-        // Add to annotations array
+
+        // Style saved annotation with uniform line color
+        if (layer.setStyle) {
+          layer.setStyle({ color: '#3388ff', weight: 3, opacity: 0.8, fillOpacity: 0.3 });
+        }
+
+        // Add to annotations array (and projectAnnotations for autosave/poll sync)
         annotations.push(annotationData);
-        
+        if (typeof getProjectAnnotations === 'function') {
+          const pa = getProjectAnnotations();
+          if (pa && pa !== annotations) pa.push(annotationData);
+        }
+
+        // Push to undo stack so Ctrl+Z can revert
+        if (typeof undoPushAdd === 'function') {
+          undoPushAdd(annotationData, layer);
+        }
+
         // Update table
         updateAnnotationTable();
         
@@ -563,11 +598,12 @@
         clearField('seglength');
         clearField('segwidth');
         clearField('no_colony', '0');
-        clearField('spcode'); // Clear species field
+        // Remember last species for quick-repeat, then clear
+        const _lastSpcode = document.getElementById('spcode')?.value || '';
+        clearField('spcode');
         clearField('juvenile', '0');
         clearField('juv_substrate'); // Clear substrate field
         clearField('remnant', '0');
-        clearField('fragment', '0');
         clearField('morph_code');
         clearField('ex_bound', '0');
         clearField('olddead');
@@ -589,15 +625,19 @@
 
         
         currentAnnotation = null;
-        
+        if (typeof hideDiscardButton === 'function') hideDiscardButton();
+
         // Increment annotation count and reset timer for next annotation
         incrementAnnotationCount();
         resetAnnotationTimer();
-        
+
         // Mark as having unsaved changes
         hasUnsavedChanges = true;
         if (isOracleProjectMode()) setAutoSaveBadge('pending', '🔵 Unsaved changes');
         
+        // Quick-repeat: remember last species for rapid annotation of the same coral
+        window._catLastSpcode = _lastSpcode;
+
         // Focus back on species field for quick data entry
         const speciesField = document.getElementById('spcode');
         if (speciesField) {
@@ -619,6 +659,8 @@
       } catch (error) {
         console.error('Error saving annotation:', error);
         showStatus(`❌ Error: ${error.message}`, 'error');
+      } finally {
+        _isSaving = false;
       }
     }
     
@@ -698,14 +740,14 @@
           const layer = L.geoJSON(feature, {
             pane: 'annotationsPane',  // Use custom pane for proper z-index
             style: {
-              color: feature.properties.SHAPE === 'Polyline' ? '#f357a1' : 
-                     feature.properties.SHAPE === 'Rectangle' ? '#f59e0b' : '#667eea',
-              weight: 2,
+              color: '#3388ff',
+              weight: 3,
+              opacity: 0.8,
               fillOpacity: 0.3
             },
             objectId: feature.id
           });
-          
+
           layer.eachLayer(l => {
             l.options.objectId = feature.id;
             l.feature = feature;  // Store feature data on layer
@@ -742,7 +784,7 @@
         updateStatistics();
         
         // Update annotation list
-        updateAnnotationList();
+        updateAnnotationTable();
         
       } catch (error) {
         console.error('Error loading annotations:', error);
@@ -782,11 +824,15 @@
         // Clear all labels
         hideAllAnnotationLabels();
         
-        // Update annotations array
+        // Update annotations array (and keep projectAnnotations in sync for poll)
         annotations = isOracleProjectMode()
           ? (geojson.features || []).map(normalizeDbGeoJsonFeature)
           : (geojson.features || []);
-        
+        if (typeof getProjectAnnotations === 'function') {
+          const pa = getProjectAnnotations();
+          if (pa) { pa.length = 0; annotations.forEach(a => pa.push(a)); }
+        }
+
         console.log(`✅ Refreshed: ${annotations.length} annotations from database`);
         
         // Add all annotations to map
@@ -812,14 +858,14 @@
           const layer = L.geoJSON(feature, {
             pane: 'annotationsPane',
             style: {
-              color: feature.properties.SHAPE === 'Polyline' ? '#f357a1' : 
-                     feature.properties.SHAPE === 'Rectangle' ? '#f59e0b' : '#667eea',
-              weight: 2,
+              color: '#3388ff',
+              weight: 3,
+              opacity: 0.8,
               fillOpacity: 0.3
             },
             objectId: feature.id
           });
-          
+
           layer.eachLayer(l => {
             l.options.objectId = feature.id;
             l.feature = feature;
@@ -856,7 +902,7 @@
         
         // Update UI
         updateStatistics();
-        updateAnnotationList();
+        updateAnnotationTable();
         
         // IMPORTANT: Restore the previous map view to prevent jumping
         map.setView(currentCenter, currentZoom, { animate: false });
@@ -869,6 +915,9 @@
       }
     }
     
+    // Expose for the multi-user poll banner's Refresh button (autosave.js)
+    window.refreshAnnotationsFromDb = refreshAnnotations;
+
     // Clear all annotations
     async function clearAllAnnotations() {
       if (!currentCOG && !isOracleProjectMode()) {
@@ -884,7 +933,7 @@
       const siteName = selectedSiteData?.SITE_NAME || 'current site';
       const count = annotations.length;
       
-      if (!confirm(`⚠️ Delete all ${count} annotations for ${siteName}?\n\nThis action cannot be undone!`)) {
+      if (!await catConfirm(`Delete all ${count} annotations for ${siteName}?\n\nThis action cannot be undone!`, { danger: true, ok: 'Delete All' })) {
         return;
       }
       
@@ -916,7 +965,7 @@
             hideAllAnnotationLabels();
           }
           
-          updateAnnotationList();
+          updateAnnotationTable();
           updateStatistics();
           showStatus('✅ Cleared all project annotations', 'success');
           return;
@@ -961,7 +1010,7 @@
         }
         
         // Update UI
-        updateAnnotationList();
+        updateAnnotationTable();
         updateStatistics();
         
         if (failedCount === 0) {
@@ -988,9 +1037,10 @@
       };
       
       annotations.forEach(ann => {
-        if (ann.properties.SHAPE === 'Polyline') stats.lines++;
-        else if (ann.properties.SHAPE === 'Rectangle') stats.boxes++;
-        else if (ann.properties.SHAPE === 'Polygon') stats.polygons++;
+        const shape = ann.properties?.SHAPE || ann.type || (ann.geometry && ann.geometry.type) || '';
+        if (shape === 'Polyline' || shape === 'LineString' || shape === 'polyline') stats.lines++;
+        else if (shape === 'Rectangle' || shape === 'rectangle') stats.boxes++;
+        else if (shape === 'Polygon' || shape === 'polygon') stats.polygons++;
       });
       
       document.getElementById('statTotal').textContent = stats.total;
@@ -998,59 +1048,56 @@
       document.getElementById('statBoxes').textContent = stats.boxes;
       document.getElementById('statPolygons').textContent = stats.polygons;
       document.getElementById('annotationCount').textContent = stats.total;
+      if (typeof window.updateNavAnnotationCount === 'function') window.updateNavAnnotationCount(stats.total);
+
+      // Species breakdown
+      const speciesCounts = {};
+      annotations.forEach(ann => {
+        const p = ann.properties || ann;
+        const sp = p.SPCODE || p.spcode || p.species_code || p.SPECIES_CODE || '';
+        if (sp) speciesCounts[sp] = (speciesCounts[sp] || 0) + 1;
+      });
+      renderSpeciesBreakdown(speciesCounts, stats.total);
     }
-    
-    // Update annotation table
-    function updateAnnotationList() {
-      const tbody = document.getElementById('annotationTableBody');
-      
-      if (annotations.length === 0) {
-        tbody.innerHTML = `
-          <tr>
-            <td colspan="12" style="text-align: center; padding: 20px; color: #6c757d;">
-              No annotations yet - draw on the map to create one
-            </td>
-          </tr>
-        `;
+
+    // Render species breakdown into stats panel
+    function renderSpeciesBreakdown(speciesCounts, total) {
+      let el = document.getElementById('speciesBreakdown');
+      if (!el) {
+        // Create it inside stats panel
+        const statsPanel = document.getElementById('statsPanel');
+        if (!statsPanel) return;
+        el = document.createElement('div');
+        el.id = 'speciesBreakdown';
+        el.style.cssText = 'margin-top:8px;border-top:1px solid #dee2e6;padding-top:6px;';
+        statsPanel.appendChild(el);
+      }
+
+      const entries = Object.entries(speciesCounts).sort((a, b) => b[1] - a[1]);
+      if (entries.length === 0) {
+        el.innerHTML = '<div style="font-size:11px;color:#999;">No species data</div>';
         return;
       }
-      
-      tbody.innerHTML = '';
-      
-      annotations.forEach(ann => {
-        const row = document.createElement('tr');
-        row.dataset.id = ann.id;
-        row.onclick = (e) => {
-          if (!e.target.closest('button')) {
-            document.querySelectorAll('.annotation-table tbody tr').forEach(r => r.classList.remove('selected'));
-            row.classList.add('selected');
-            selectAnnotationForEdit(ann.id);
-          }
-        };
-        
-        row.innerHTML = `
-          <td><strong>${ann.id}</strong></td>
-          <td>${ann.properties.SHAPE || '-'}</td>
-          <td>${ann.properties.SPCODE || '-'}</td>
-          <td>${ann.properties.ANALYST || '-'}</td>
-          <td>${ann.properties.SITE || '-'}</td>
-          <td>${ann.properties.OBS_YEAR || '-'}</td>
-          <td>${ann.properties.MISSION_ID || '-'}</td>
-          <td>${ann.properties.SEGMENT || '-'}</td>
-          <td>${ann.properties.TRANSECT || '-'}</td>
-          <td>${ann.properties.MORPH_CODE || '-'}</td>
-          <td>${ann.properties.OLDDEAD || '-'}</td>
-          <td>
-            <div class="actions">
-              <button class="btn-sm btn-edit" onclick="event.stopPropagation(); openEditModal(${ann.id})">Edit</button>
-              <button class="btn-sm btn-delete" onclick="event.stopPropagation(); deleteAnnotation(${ann.id})">Del</button>
-            </div>
-          </td>
-        `;
-        
-        tbody.appendChild(row);
-      });
+
+      const getColor = (typeof catSpeciesColor === 'function') ? catSpeciesColor : () => '#667eea';
+      const rows = entries.map(([sp, count]) => {
+        const pct = Math.round((count / total) * 100);
+        const color = getColor(sp);
+        return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0;"></span>
+          <span style="font-size:11px;font-weight:600;color:#333;min-width:50px;">${sp}</span>
+          <div style="flex:1;background:#eee;border-radius:2px;height:6px;overflow:hidden;">
+            <div style="width:${pct}%;background:${color};height:100%;border-radius:2px;"></div>
+          </div>
+          <span style="font-size:10px;color:#666;min-width:24px;text-align:right;">${count}</span>
+        </div>`;
+      }).join('');
+
+      el.innerHTML = `<div style="font-size:10px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Species (${entries.length})</div>${rows}`;
     }
+    
+    // updateAnnotationList removed — all callers now use updateAnnotationTable()
+    // (defined in annotation-runtime-annotations.js with full 35-column rendering)
     
     // Zoom to annotation
     function zoomToAnnotation(objectId) {
@@ -1065,7 +1112,7 @@
     // Delete annotation
     // Database mode delete function (not used in file mode, kept for compatibility)
     async function deleteAnnotationDB(objectId) {
-      if (!confirm('Delete this annotation?')) return;
+      if (!await catConfirm('Delete this annotation?', { danger: true, ok: 'Delete' })) return;
       
       await deleteAnnotationFromDB(objectId);
     }
@@ -1098,15 +1145,22 @@
           // Remove label if exists
           removeAnnotationLabel(objectId);
           
-          // Remove from annotations array
+          // Remove from annotations array (and projectAnnotations for poll sync)
           const index = annotations.findIndex(ann => ann.id === objectId);
           if (index !== -1) {
             annotations.splice(index, 1);
           }
+          if (typeof getProjectAnnotations === 'function') {
+            const pa = getProjectAnnotations();
+            if (pa && pa !== annotations) {
+              const pi = pa.findIndex(a => (a._dbAnnotationId || a.id) === objectId);
+              if (pi !== -1) pa.splice(pi, 1);
+            }
+          }
           
           // Update UI
           updateStatistics();
-          updateAnnotationList();
+          updateAnnotationTable();
           
           console.log(`✅ Annotation ${objectId} deleted from map and database`);
         } else {
@@ -1187,7 +1241,6 @@
       document.getElementById('spcode').value = '';
       document.getElementById('juvenile').value = '0';
       document.getElementById('remnant').value = '0';
-      document.getElementById('fragment').value = '0';
       document.getElementById('morph_code').value = '';
       document.getElementById('ex_bound').value = '0';
       document.getElementById('olddead').value = '';
@@ -1281,7 +1334,7 @@
       });
       
       if (annotationsToExport.length === 0) {
-        alert('No annotations to export. Please draw and save some annotations first.');
+        showStatus('No annotations to export. Please draw and save some annotations first.', 'error');
         return;
       }
       
@@ -1319,11 +1372,124 @@
         
       } catch (error) {
         console.error('Error exporting shapefile:', error);
-        alert(`Error exporting shapefile: ${error.message}`);
+        showStatus(`Error exporting shapefile: ${error.message}`, 'error');
         showStatus('Error exporting shapefile', 'error');
       }
     }
     
+    // ── GeoJSON Export (client-side) ────────────────────────────────────────────
+    function exportGeoJSON() {
+      if (annotations.length === 0) {
+        showStatus('No annotations to export.', 'error');
+        return;
+      }
+
+      const features = annotations.map((ann, i) => ({
+        type: 'Feature',
+        id: i + 1,
+        geometry: ann.geometry,
+        properties: Object.fromEntries(
+          Object.entries(ann).filter(([k]) => k !== 'geometry' && !k.startsWith('_'))
+        )
+      }));
+
+      const geojson = { type: 'FeatureCollection', features };
+      const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: 'application/geo+json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${currentProject?.project_name || 'annotations'}.geojson`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showStatus(`✅ Exported ${features.length} annotations as GeoJSON`, 'success');
+    }
+
+    // ── CSV Export (client-side) ─────────────────────────────────────────────────
+    function exportCSV() {
+      if (annotations.length === 0) {
+        showStatus('No annotations to export.', 'error');
+        return;
+      }
+
+      // Collect all unique keys across annotations (excluding geometry and internals)
+      const excludeKeys = new Set(['geometry', '_displayIndex', '_dbAnnotationId', '_localId', '_syncStatus', '_dbAnnotationVersion', 'properties', 'feature']);
+      const allKeys = new Set();
+      annotations.forEach(ann => {
+        Object.keys(ann).forEach(k => { if (!excludeKeys.has(k) && !k.startsWith('_')) allKeys.add(k); });
+      });
+      const columns = ['id', ...Array.from(allKeys).filter(k => k !== 'id')];
+
+      // Build CSV
+      const escape = (v) => {
+        if (v === null || v === undefined) return '';
+        const s = String(v);
+        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const rows = [columns.map(escape).join(',')];
+      annotations.forEach((ann, i) => {
+        const row = columns.map(col => {
+          if (col === 'id') return i + 1;
+          return escape(ann[col]);
+        });
+        rows.push(row.join(','));
+      });
+
+      const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${currentProject?.project_name || 'annotations'}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showStatus(`✅ Exported ${annotations.length} annotations as CSV`, 'success');
+    }
+
+    // ── Copy from last annotation ──
+    // Fills per-annotation form fields (species, morph, conditions) from the most
+    // recently saved annotation. Session fields (analyst, obs_year, site, etc.) are
+    // left alone since they're already sticky.
+    function copyFromLastAnnotation() {
+      const src = annotations.length > 0 ? annotations[annotations.length - 1] : null;
+      if (!src) {
+        showStatus('No previous annotation to copy from', 'info');
+        return;
+      }
+
+      const setField = (id, value) => {
+        const el = document.getElementById(id);
+        if (el && value != null && value !== '') el.value = value;
+      };
+
+      setField('spcode',       src.spcode || src.SPCODE || '');
+      setField('morph_code',   src.morph_code || '');
+      setField('juvenile',     src.juvenile ?? 0);
+      setField('juv_substrate', src.juv_substrate || '');
+      setField('remnant',      src.remnant ?? 0);
+      setField('ex_bound',     src.ex_bound ?? 0);
+      setField('olddead',      src.old_dead ?? '');
+      setField('rdcause1',     src.rdcause1 || '');
+      setField('rd_1',         src.rd_1 ?? '');
+      setField('rdcause2',     src.rdcause2 || '');
+      setField('rd_2',         src.rd_2 ?? '');
+      setField('rdcause3',     src.rdcause3 || '');
+      setField('rd_3',         src.rd_3 ?? '');
+      setField('con_1',        src.con_1 || '');
+      setField('extent_1',     src.extent_1 ?? '');
+      setField('sev_1',        src.sev_1 ?? '');
+      setField('con_2',        src.con_2 || '');
+      setField('extent_2',     src.extent_2 ?? '');
+      setField('sev_2',        src.sev_2 ?? '');
+      setField('con_3',        src.con_3 || '');
+      setField('extent_3',     src.extent_3 ?? '');
+      setField('sev_3',        src.sev_3 ?? '');
+
+      showStatus(`⎘ Copied from annotation #${annotations.length}`, 'success');
+    }
+
     // Database mode functions removed - file mode uses index-based versions defined earlier
     
     // Auto-set current year
@@ -1348,8 +1514,30 @@
           }
         }
       }
+
+      // Drawing tool hotkeys: D = line, P = polygon, R = rectangle
+      // Only when no input is focused and no modifier keys
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        const tag = (e.target.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+
+        const toolMap = {
+          'd': '.leaflet-draw-draw-polyline',
+          'p': '.leaflet-draw-draw-polygon',
+          'r': '.leaflet-draw-draw-rectangle',
+        };
+        const selector = toolMap[e.key.toLowerCase()];
+        if (selector) {
+          e.preventDefault();
+          const btn = document.querySelector(selector);
+          if (btn) {
+            btn.click();
+            lastDrawingTool = { d: 'polyline', p: 'polygon', r: 'rectangle' }[e.key.toLowerCase()];
+          }
+        }
+      }
     });
-    
+
     // Initialize
     // =========================================================================
     // SPECIES AUTOCOMPLETE

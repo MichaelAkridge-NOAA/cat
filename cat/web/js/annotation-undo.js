@@ -211,6 +211,27 @@ function _updateUndoRedoUI() {
   }
 }
 
+// ── Keyboard shortcuts ───────────────────────────────────────────────────────
+
+document.addEventListener('keydown', function (e) {
+  // Skip when user is typing in a form field
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  // Ctrl+Z / Cmd+Z → undo
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+    e.preventDefault();
+    undoLastAction();
+    return;
+  }
+  // Ctrl+Y / Cmd+Y or Ctrl+Shift+Z / Cmd+Shift+Z → redo
+  if ((e.ctrlKey || e.metaKey) && e.key === 'y' ||
+      (e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z') {
+    e.preventDefault();
+    redoLastAction();
+  }
+});
+
 // ── Expose globally ───────────────────────────────────────────────────────────
 
 window.undoPushAdd = undoPushAdd;

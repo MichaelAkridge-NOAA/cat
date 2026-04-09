@@ -543,20 +543,20 @@ def read_file_annotation_refactored():
         return file_annotation_file.read_text(encoding="utf-8")
     return "<h1>Refactored Annotation not found</h1>"
 
-# Serve the v2 dev-preview annotation page
+# Serve the unified annotation page (v2 features merged into v1)
 @app.get("/annotate/v2", response_class=HTMLResponse)
 def read_annotation_v2():
-    v2_file = BASE_DIR / "web" / "annotation_v2.html"
-    if v2_file.exists():
-        return v2_file.read_text(encoding="utf-8")
-    return "<h1>v2 Dev Preview not found</h1>"
+    file_annotation_file = BASE_DIR / "web" / "annotation_file_mode.html"
+    if file_annotation_file.exists():
+        return file_annotation_file.read_text(encoding="utf-8")
+    return "<h1>Annotation not found</h1>"
 
 @app.get("/annotation_v2.html", response_class=HTMLResponse)
 def read_annotation_v2_alt():
-    v2_file = BASE_DIR / "web" / "annotation_v2.html"
-    if v2_file.exists():
-        return v2_file.read_text(encoding="utf-8")
-    return "<h1>v2 Dev Preview not found</h1>"
+    file_annotation_file = BASE_DIR / "web" / "annotation_file_mode.html"
+    if file_annotation_file.exists():
+        return file_annotation_file.read_text(encoding="utf-8")
+    return "<h1>Annotation not found</h1>"
 
 # Serve the project creator page
 @app.get("/project_creator.html", response_class=HTMLResponse)

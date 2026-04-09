@@ -140,22 +140,32 @@
     function setShapefileOpacity(shapefileName, value, safeId) {
       // Update display value
       document.getElementById(`shapefile_${safeId}_opacityValue`).textContent = value;
-      
+
       // Update layer opacity
       const shapefileData = shapefileLayers[shapefileName];
       if (shapefileData && shapefileData.layer) {
         // Store the opacity value
         shapefileData.opacity = parseInt(value);
-        
+
         // Update both stroke and fill opacity proportionally
         const opacityRatio = value / 100;
+        const borderOnly = shapefileData.borderOnly || false;
         shapefileData.layer.setStyle({
-          opacity: opacityRatio * 0.8,  // Stroke opacity (80% of slider value)
-          fillOpacity: opacityRatio * 0.15  // Fill opacity (15% of slider value)
+          opacity: opacityRatio * 0.8,
+          fillOpacity: borderOnly ? 0 : opacityRatio * 0.15
         });
-        
-        console.log(`Updated ${shapefileName} opacity to ${value}%`);
       }
+    }
+
+    function toggleShapefileBorderOnly(shapefileName, borderOnly, safeId) {
+      const shapefileData = shapefileLayers[shapefileName];
+      if (!shapefileData || !shapefileData.layer) return;
+
+      shapefileData.borderOnly = borderOnly;
+      const opacityRatio = (shapefileData.opacity || 80) / 100;
+      shapefileData.layer.setStyle({
+        fillOpacity: borderOnly ? 0 : opacityRatio * 0.15
+      });
     }
     
     async function updateTifColormap(tif, safeId) {
@@ -525,16 +535,16 @@
       layer._editMarkers = markers;
     }
     
-    function deleteSelectedFeatures(layerName) {
+    async function deleteSelectedFeatures(layerName) {
       const state = shapefileEditState[layerName];
       const layerData = shapefileLayers[layerName];
-      
+
       if (!state || !layerData || state.selectedFeatures.length === 0) {
-        alert('No features selected');
+        if (typeof showStatus === 'function') showStatus('No features selected', 'error');
         return;
       }
-      
-      if (!confirm(`Delete ${state.selectedFeatures.length} selected feature(s)?`)) {
+
+      if (!await catConfirm(`Delete ${state.selectedFeatures.length} selected feature(s)?`, { danger: true, ok: 'Delete' })) {
         return;
       }
       
@@ -547,7 +557,7 @@
       state.hasChanges = true;
       
       console.log(`🗑️ Deleted ${state.selectedFeatures.length} features`);
-      alert('Features deleted. Click "Save Changes" to persist.');
+      if (typeof showStatus === 'function') showStatus('Features deleted. Click "Save Changes" to persist.', 'info');
     }
     
     function disableEditingForLayer(layerName) {
@@ -585,16 +595,16 @@
       const layerData = shapefileLayers[layerName];
       
       if (!state || !layerData) {
-        alert('No edit state found');
+        if (typeof showStatus === 'function') showStatus('No edit state found', 'error');
         return;
       }
       
       if (!state.hasChanges) {
-        alert('No changes to save');
+        if (typeof showStatus === 'function') showStatus('No changes to save', 'info');
         return;
       }
       
-      if (!confirm('Save changes to shapefile layer?')) {
+      if (!await catConfirm('Save changes to shapefile layer?', { ok: 'Save' })) {
         return;
       }
       
@@ -629,7 +639,7 @@
         
       } catch (error) {
         console.error('Error saving shapefile edits:', error);
-        alert('❌ Error saving changes: ' + error.message);
+        if (typeof showStatus === 'function') showStatus('Error saving changes: ' + error.message, 'error');
       }
     }
     

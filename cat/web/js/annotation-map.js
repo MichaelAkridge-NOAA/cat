@@ -43,9 +43,15 @@ function initializeMap() {
   
   // Override distance display for better precision
   overrideDistanceDisplay();
-  
+
+  // Persist map view across page reloads
+  if (typeof catMapSaveView === 'function') catMapSaveView(map);
+
+  // Initialize minimap for orientation
+  if (typeof catInitMinimap === 'function') catInitMinimap(map);
+
   console.log('✅ Map initialized');
-  
+
   return map;
 }
 
@@ -230,9 +236,16 @@ function getMapZoom() {
  * @param {L.LatLngBounds} bounds - Bounds to fit
  * @param {Object} options - Leaflet fitBounds options
  */
+let _mapViewRestored = false;
 function fitMapToBounds(bounds, options = {}) {
   if (map && bounds) {
     map.fitBounds(bounds, options);
+    // On first fitBounds (initial COG load), try restoring saved view
+    if (!_mapViewRestored && typeof catMapRestoreView === 'function') {
+      _mapViewRestored = true;
+      // Delay so fitBounds completes first, then override with saved view
+      setTimeout(() => { catMapRestoreView(map); }, 300);
+    }
   }
 }
 
