@@ -1204,6 +1204,10 @@
             <button class="dd-item" onclick="if(typeof exportCSV==='function') exportCSV(); closeNavDropdowns();">📊 Export CSV</button>
             <button class="dd-item" onclick="if(typeof exportShapefile==='function') exportShapefile(); closeNavDropdowns();">📦 Export Shapefile</button>
             <div class="dd-divider"></div>
+            <div class="dd-label">Layers</div>
+            <button class="dd-item" onclick="if(typeof v2OpenLayerManagement==='function') v2OpenLayerManagement(); closeNavDropdowns();">🗂️ Manage Overlay Layers</button>
+            <button class="dd-item" onclick="if(typeof v2UploadShapefile==='function') v2UploadShapefile(); closeNavDropdowns();">📤 Upload Shapefile Overlay</button>
+            <div class="dd-divider"></div>
             <button class="dd-item danger" onclick="if(typeof clearAllAnnotations==='function') clearAllAnnotations(); closeNavDropdowns();">🗑️ Clear All Annotations</button>
           </div>
         </div>
@@ -1245,6 +1249,9 @@
             <div class="dd-label">Application</div>
             <button class="dd-item" onclick="openAutoSaveSettings(); closeNavDropdowns();">💾 Auto-save Preferences</button>
             <button class="dd-item" onclick="openTimerSettings(); closeNavDropdowns();">⏱️ Timer</button>
+            <div class="dd-divider"></div>
+            <div class="dd-label">Display</div>
+            <button class="dd-item" id="ddCentroidToggle" onclick="if(typeof v2ToggleCentroids==='function') v2ToggleCentroids(); closeNavDropdowns();">◉ Centroids</button>
             <button class="dd-item disabled" style="opacity:0.5;cursor:default;" title="Coming soon">🤖 SAM / AI Model</button>
             <button class="dd-item disabled" style="opacity:0.5;cursor:default;" title="Coming soon">🗺️ Map &amp; Display</button>
             <button class="dd-item disabled" style="opacity:0.5;cursor:default;" title="Coming soon">📊 Export Defaults</button>

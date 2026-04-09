@@ -20,6 +20,8 @@
   let _tableUpdateTimer = null;   // debounce timer for table rebuilds during rapid drawing
   let _activeDrawHandler = null;  // track the current L.Draw.Polyline handler so we can disable before re-enabling
   let _bulkDrawInProgress = false; // re-entrancy guard: prevent duplicate draw:created handling
+  let _activateTimeout = null;    // debounce timer for activatePolylineTool — prevents stacked timeouts
+  let _drawCount = 0;             // diagnostic counter for bulk draws in current session
 
   // ── Expose to global so other modules can query ──
   window.v2BulkMode = {
@@ -50,16 +52,6 @@
       <button class="v2-tool-btn v2-tool-btn-undo" id="v2UndoBtn" title="Undo last drawn line (Ctrl+Z)">
         ↩
       </button>
-      <button class="v2-tool-btn v2-tool-btn-centroid" id="v2CentroidToggle" title="Show/hide centroid dots on annotations">
-        ◉
-      </button>
-      <span class="v2-toolbar-sep"></span>
-      <button class="v2-tool-btn v2-tool-btn-layers" id="v2ManageLayers" title="Manage overlay layers (reorder, toggle, delete)">
-        🗂️
-      </button>
-      <button class="v2-tool-btn v2-tool-btn-upload" id="v2UploadShp" title="Upload a shapefile overlay (.zip or .shp)">
-        📤
-      </button>
     `;
     
     // Insert at the beginning of nav-links
@@ -67,21 +59,6 @@
 
     document.getElementById('v2BulkToggle').addEventListener('click', toggleBulkMode);
     document.getElementById('v2UndoBtn').addEventListener('click', undoLastDraw);
-    document.getElementById('v2CentroidToggle').addEventListener('click', toggleCentroids);
-    document.getElementById('v2ManageLayers').addEventListener('click', () => {
-      if (typeof openLayerManagementModal === 'function') {
-        openLayerManagementModal();
-      } else {
-        showUndoToast('Layer management not available yet');
-      }
-    });
-    document.getElementById('v2UploadShp').addEventListener('click', () => {
-      if (typeof triggerOverlayUpload === 'function') {
-        triggerOverlayUpload();
-      } else {
-        showUndoToast('Upload not available — load a DB project first');
-      }
-    });
   }
 
   // ===================================================================
@@ -124,11 +101,23 @@
       bulkDrawHistory = [];
       bulkSessionAnnotationIndices = [];
       bulkSessionAnnotations = [];
+      _drawCount = 0;
+      _bulkDrawInProgress = false; // ensure guard is cleared on fresh session
       updateBulkBannerCount();
       // Auto-activate the polyline (line) drawing tool
       activatePolylineTool();
     } else {
       showUndoToast('Bulk Draw OFF — normal mode');
+      // Cancel any pending tool activation
+      if (_activateTimeout) {
+        clearTimeout(_activateTimeout);
+        _activateTimeout = null;
+      }
+      // Disable our manually-created handler so it doesn't conflict
+      if (_activeDrawHandler) {
+        try { _activeDrawHandler.disable(); } catch (_) {}
+        _activeDrawHandler = null;
+      }
       // Keep the session indices until next bulk mode is ON (so Apply can use them)
     }
   }
@@ -137,26 +126,45 @@
   //  TOOL ACTIVATION — activate the polyline tool programmatically
   // ===================================================================
   function activatePolylineTool() {
-    setTimeout(() => {
+    // ── FIX: cancel any pending activation timeout to prevent stacking ──
+    // Without this, rapid draws queue up multiple setTimeout callbacks,
+    // each creating a handler — only the last one should win.
+    if (_activateTimeout) {
+      clearTimeout(_activateTimeout);
+      _activateTimeout = null;
+    }
+
+    _activateTimeout = setTimeout(() => {
+      _activateTimeout = null;
       try {
-        if (typeof drawControl !== 'undefined') {
-          // ── FIX: disable the previous handler before creating a new one ──
-          // Without this, each draw creates an additional handler that
-          // never gets cleaned up, leading to exponential draw:created
-          // events (2^N) and an eventual browser crash.
-          if (_activeDrawHandler) {
-            try { _activeDrawHandler.disable(); } catch (_) { /* already disabled */ }
-            _activeDrawHandler = null;
+        if (typeof drawControl === 'undefined') return;
+
+        // ── FIX: disable any active toolbar handler first ──
+        // The toolbar's own L.Draw.Polyline could still be active if the
+        // user clicked the toolbar button before entering bulk mode.
+        // Two simultaneous handlers = two draw:created events per draw.
+        try {
+          if (drawControl._toolbars && drawControl._toolbars.draw) {
+            drawControl._toolbars.draw.disable();
           }
-          // Create a fresh polyline handler and enable it
-          _activeDrawHandler = new L.Draw.Polyline(map, drawControl.options.draw.polyline);
-          _activeDrawHandler.enable();
-          // Update visual feedback
-          if (typeof updateDrawingToolVisualFeedback === 'function') {
-            updateDrawingToolVisualFeedback('.leaflet-draw-draw-polyline');
-          }
-          console.log('v2: Polyline tool auto-activated for bulk draw');
+        } catch (_) { /* toolbar already inactive */ }
+
+        // ── FIX: disable the previous handler before creating a new one ──
+        // Without this, each draw creates an additional handler that
+        // never gets cleaned up, leading to exponential draw:created
+        // events (2^N) and an eventual browser crash.
+        if (_activeDrawHandler) {
+          try { _activeDrawHandler.disable(); } catch (_) { /* already disabled */ }
+          _activeDrawHandler = null;
         }
+        // Create a fresh polyline handler and enable it
+        _activeDrawHandler = new L.Draw.Polyline(map, drawControl.options.draw.polyline);
+        _activeDrawHandler.enable();
+        // Update visual feedback
+        if (typeof updateDrawingToolVisualFeedback === 'function') {
+          updateDrawingToolVisualFeedback('.leaflet-draw-draw-polyline');
+        }
+        console.log('v2: Polyline tool auto-activated for bulk draw');
       } catch (e) {
         console.warn('v2: Could not activate polyline tool:', e);
       }
@@ -174,8 +182,12 @@
       if (typeof map === 'undefined' || typeof drawnItems === 'undefined') return;
       clearInterval(waitForMap);
 
-      // Store reference to the original CREATED handler
-      const originalHandlers = map._events && map._events['draw:created'];
+      // ── FIX: snapshot existing handler COUNT before adding ours ──
+      // map._events['draw:created'] is a live array.  If we capture the
+      // reference and then push our handler, the ref includes our handler
+      // too.  Instead, snapshot the count so we only patch pre-existing ones.
+      const existingHandlers = map._events && map._events['draw:created'];
+      const existingCount = existingHandlers ? existingHandlers.length : 0;
 
       // Add our own EARLY handler (prepend)
       map.on('draw:created', function (event) {
@@ -190,107 +202,131 @@
         }
         _bulkDrawInProgress = true;
 
-        const layer = event.layer;
-        const type = event.layerType;
+        // ── FIX: wrap in try/finally so the re-entrancy guard is ALWAYS
+        // released, even if an intermediate function throws.  Without this,
+        // a single error permanently blocks all subsequent draws. ──
+        try {
+          const layer = event.layer;
+          const type = event.layerType;
 
-        // ── Add layer to the map immediately ──
-        drawnItems.addLayer(layer);
+          // ── Add layer to the map immediately ──
+          drawnItems.addLayer(layer);
 
-        // ── Build a minimal blank annotation ──
-        const geometry = (typeof getFullPrecisionGeometry === 'function')
-          ? getFullPrecisionGeometry(layer)
-          : layer.toGeoJSON().geometry;
+          // ── Build a minimal blank annotation ──
+          const geometry = (typeof getFullPrecisionGeometry === 'function')
+            ? getFullPrecisionGeometry(layer)
+            : layer.toGeoJSON().geometry;
 
-        // Assign a sequential colony_id via monotonic counter (survives undo)
-        bulkIdCounter++;
-        const nextId = bulkIdCounter;
+          // Assign a sequential colony_id via monotonic counter (survives undo)
+          bulkIdCounter++;
+          const nextId = bulkIdCounter;
 
-        const props = buildBulkAnnotationProperties(layer, type, nextId);
-        // Flatten properties to top level (matching v1 saveAnnotation format)
-        // so table rendering and label generation find fields directly on ann.*
-        const blankAnnotation = {
-          type: type,
-          geometry: geometry,
-          ...props,
-          properties: props
-        };
+          const props = buildBulkAnnotationProperties(layer, type, nextId);
+          // Flatten properties to top level (matching v1 saveAnnotation format)
+          // so table rendering and label generation find fields directly on ann.*
+          const blankAnnotation = {
+            type: type,
+            geometry: geometry,
+            ...props,
+            properties: props
+          };
 
-        // Attach to the layer (same contract as v1 saveAnnotation)
-        layer.annotationData = blankAnnotation;
+          // Attach to the layer (same contract as v1 saveAnnotation)
+          layer.annotationData = blankAnnotation;
 
-        // Style it as a "pending-data" annotation (orange-ish)
-        if (layer.setStyle) {
-          layer.setStyle({
-            color: '#f59e0b',
-            weight: 7,
-            opacity: 0.85,
-            fillOpacity: 0.25,
-            dashArray: '8 4'
-          });
+          // Style it as a "pending-data" annotation (orange-ish)
+          if (layer.setStyle) {
+            layer.setStyle({
+              color: '#f59e0b',
+              weight: 7,
+              opacity: 0.85,
+              fillOpacity: 0.25,
+              dashArray: '8 4'
+            });
+          }
+
+          // Add to project annotations array
+          let annotationIndex = -1;
+          if (typeof annotations !== 'undefined') {
+            annotationIndex = annotations.length;
+            annotations.push(blankAnnotation);
+          }
+          // Push to currentProject.annotations for save/persistence
+          // (this is a separate array from annotations — verified in loadProjectAnnotations)
+          if (typeof currentProject !== 'undefined' && currentProject && currentProject.annotations) {
+            currentProject.annotations.push(blankAnnotation);
+          }
+
+          // Track in bulk history for undo
+          bulkDrawHistory.push({ layer, annotation: blankAnnotation });
+
+          // Track in current bulk session for batch apply defaults
+          if (annotationIndex >= 0) {
+            bulkSessionAnnotationIndices.push(annotationIndex);
+            bulkSessionAnnotations.push(blankAnnotation);
+          }
+
+          // Debounced table update — avoid rebuilding 35-col table on every rapid draw
+          clearTimeout(_tableUpdateTimer);
+          _tableUpdateTimer = setTimeout(() => {
+            if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
+          }, 300);
+
+          // Mark changes
+          if (typeof hasUnsavedChanges !== 'undefined') {
+            hasUnsavedChanges = true;
+          }
+
+          // Add label (just the index) if labels are on — wrapped in try/catch
+          // so a labeling error can't lock up the draw pipeline
+          try {
+            if (typeof labelsVisible !== 'undefined' && labelsVisible && typeof addLabelToAnnotation === 'function') {
+              addLabelToAnnotation(layer);
+            }
+          } catch (labelErr) {
+            console.warn('v2: label error (non-fatal):', labelErr);
+          }
+
+          // Update centroid if toggle is on — wrapped in try/catch
+          try {
+            if (centroidsVisible) {
+              addCentroidForLayer(layer);
+            }
+          } catch (centroidErr) {
+            console.warn('v2: centroid error (non-fatal):', centroidErr);
+          }
+
+          // Re-enable the drawing tool so user can keep drawing
+          reEnableDrawingTool();
+
+          _drawCount++;
+          updateBulkBannerCount();
+          showUndoToast(`Line #${nextId} added — keep drawing`);
+
+        } catch (err) {
+          console.error('v2: Error in bulk draw:created handler:', err);
+          showUndoToast('⚠️ Draw error — try again');
+        } finally {
+          // ── IMPORTANT: prevent original handler from running ──
+          event._v2BulkHandled = true;
+          // ── FIX: release re-entrancy guard in finally block ──
+          // Using synchronous release instead of setTimeout(0) so the
+          // guard is guaranteed to be cleared even after an error.
+          _bulkDrawInProgress = false;
         }
-
-        // Add to project annotations array
-        let annotationIndex = -1;
-        if (typeof annotations !== 'undefined') {
-          annotationIndex = annotations.length;
-          annotations.push(blankAnnotation);
-        }
-        if (typeof currentProject !== 'undefined' && currentProject && currentProject.annotations) {
-          currentProject.annotations.push(blankAnnotation);
-        }
-
-        // Track in bulk history for undo
-        bulkDrawHistory.push({ layer, annotation: blankAnnotation });
-
-        // Track in current bulk session for batch apply defaults
-        if (annotationIndex >= 0) {
-          bulkSessionAnnotationIndices.push(annotationIndex);
-          bulkSessionAnnotations.push(blankAnnotation);
-        }
-
-        // Debounced table update — avoid rebuilding 35-col table on every rapid draw
-        clearTimeout(_tableUpdateTimer);
-        _tableUpdateTimer = setTimeout(() => {
-          if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
-        }, 300);
-
-        // Mark changes
-        if (typeof hasUnsavedChanges !== 'undefined') {
-          hasUnsavedChanges = true;
-        }
-
-        // Add label (just the index) if labels are on
-        if (typeof labelsVisible !== 'undefined' && labelsVisible && typeof addLabelToAnnotation === 'function') {
-          addLabelToAnnotation(layer);
-        }
-
-        // Update centroid if toggle is on
-        if (centroidsVisible) {
-          addCentroidForLayer(layer);
-        }
-
-        // Re-enable the drawing tool so user can keep drawing
-        reEnableDrawingTool();
-
-        updateBulkBannerCount();
-        showUndoToast(`Line #${nextId} added — keep drawing`);
-
-        // ── IMPORTANT: prevent original handler from running ──
-        event._v2BulkHandled = true;
-
-        // ── FIX: release re-entrancy guard after current event loop tick ──
-        setTimeout(() => { _bulkDrawInProgress = false; }, 0);
       });
 
       // Patch existing CREATED handlers to skip when bulk-handled
-      if (originalHandlers) {
-        originalHandlers.forEach(h => {
+      // ── FIX: only patch handlers that existed BEFORE we added ours ──
+      if (existingHandlers && existingCount > 0) {
+        for (let i = 0; i < existingCount; i++) {
+          const h = existingHandlers[i];
           const origFn = h.fn;
           h.fn = function (event) {
             if (event._v2BulkHandled) return; // skip, bulk mode handled it
             origFn.call(this, event);
           };
-        });
+        }
       }
 
     }, 200);
@@ -431,9 +467,13 @@
   // ===================================================================
   function toggleCentroids() {
     centroidsVisible = !centroidsVisible;
-    const btn = document.getElementById('v2CentroidToggle');
-    btn.classList.toggle('active', centroidsVisible);
-    btn.textContent = centroidsVisible ? '◉ Centroids ON' : '◉ Centroids';
+
+    // Update the dropdown item text if it exists
+    const ddItem = document.getElementById('ddCentroidToggle');
+    if (ddItem) {
+      ddItem.textContent = centroidsVisible ? '◉ Centroids ON' : '◉ Centroids';
+      ddItem.style.color = centroidsVisible ? '#f59e0b' : '';
+    }
 
     if (centroidsVisible) {
       showAllCentroids();
@@ -441,6 +481,23 @@
       clearAllCentroids();
     }
   }
+
+  // ── Expose functions globally so navbar dropdowns can call them ──
+  window.v2ToggleCentroids = function () { toggleCentroids(); };
+  window.v2OpenLayerManagement = function () {
+    if (typeof openLayerManagementModal === 'function') {
+      openLayerManagementModal();
+    } else {
+      showUndoToast('Layer management not available yet');
+    }
+  };
+  window.v2UploadShapefile = function () {
+    if (typeof triggerOverlayUpload === 'function') {
+      triggerOverlayUpload();
+    } else {
+      showUndoToast('Upload not available — load a DB project first');
+    }
+  };
 
   function getCentroid(layer) {
     try {
