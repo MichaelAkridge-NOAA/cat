@@ -619,6 +619,9 @@
     
     // Handle drawing events
     map.on(L.Draw.Event.CREATED, async function (event) {
+      // In bulk mode, v2-bulk.js handles everything — skip normal flow
+      if (window.v2BulkMode && window.v2BulkMode.enabled) return;
+
       const layer = event.layer;
       const type = event.layerType;
       

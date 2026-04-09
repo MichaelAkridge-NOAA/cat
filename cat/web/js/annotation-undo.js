@@ -218,8 +218,9 @@ document.addEventListener('keydown', function (e) {
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-  // Ctrl+Z / Cmd+Z → undo
+  // Ctrl+Z / Cmd+Z → undo (defer to v2-bulk.js in bulk mode)
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+    if (window.v2BulkMode && window.v2BulkMode.enabled) return;
     e.preventDefault();
     undoLastAction();
     return;

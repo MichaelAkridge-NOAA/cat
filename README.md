@@ -54,7 +54,7 @@ On first startup the system auto-bootstraps: Oracle init scripts create the sche
 ### 1. Clone & Configure
 
 ```bash
-git clone -b cat_db_v3 https://github.com/MichaelAkridge-NOAA/cat.git
+git clone -b cat_db_v4 https://github.com/MichaelAkridge-NOAA/cat.git
 cd cat
 
 # Create your .env from the template and set passwords

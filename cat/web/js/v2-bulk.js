@@ -209,9 +209,6 @@
           const layer = event.layer;
           const type = event.layerType;
 
-          // ── Add layer to the map immediately ──
-          drawnItems.addLayer(layer);
-
           // ── Build a minimal blank annotation ──
           const geometry = (typeof getFullPrecisionGeometry === 'function')
             ? getFullPrecisionGeometry(layer)
@@ -233,6 +230,10 @@
 
           // Attach to the layer (same contract as v1 saveAnnotation)
           layer.annotationData = blankAnnotation;
+
+          // ── Add layer to the map AFTER annotation is built ──
+          // (avoids orphan layers if annotation construction throws)
+          drawnItems.addLayer(layer);
 
           // Style it as a "pending-data" annotation (orange-ish)
           if (layer.setStyle) {
@@ -305,6 +306,8 @@
 
         } catch (err) {
           console.error('v2: Error in bulk draw:created handler:', err);
+          // Clean up layer if it was added to the map but not fully tracked
+          try { drawnItems.removeLayer(event.layer); } catch (_) {}
           showUndoToast('⚠️ Draw error — try again');
         } finally {
           // ── IMPORTANT: prevent original handler from running ──
@@ -447,6 +450,15 @@
     if (annotationToRemove && typeof currentProject !== 'undefined' && currentProject && currentProject.annotations) {
       const idx = currentProject.annotations.indexOf(annotationToRemove);
       if (idx !== -1) currentProject.annotations.splice(idx, 1);
+    }
+
+    // Remove from bulk session tracking so batch-apply stays accurate
+    if (annotationToRemove) {
+      const sIdx = bulkSessionAnnotations.indexOf(annotationToRemove);
+      if (sIdx !== -1) {
+        bulkSessionAnnotations.splice(sIdx, 1);
+        bulkSessionAnnotationIndices.splice(sIdx, 1);
+      }
     }
 
     // Update table

@@ -16,12 +16,15 @@
   let tableSizeMode = 'md';     // 'sm' | 'md' | 'lg' | 'xl'
   let clipboard = null;         // copy/paste buffer
   let selectedCells = [];       // multi-select cells {row, col, value}
+  let selectedRows = new Set(); // multi-row selection for bulk update
+  let _lastCheckedIdx = -1;    // for shift+click range selection
 
   const TABLE_SIZES = {
     sm: 120,
     md: 200,
     lg: 350,
-    xl: 500
+    xl: 550,
+    max: 900
   };
 
   // Column definitions — field name → header display name
@@ -29,7 +32,7 @@
   const DEFAULT_COLUMNS = [
     { field: 'id',            label: 'ID',            sortable: true,  batchFill: false, visible: true  },
     { field: 'type',          label: 'Type',          sortable: true,  batchFill: false, visible: false },
-    { field: 'site',          label: 'Site',          sortable: true,  batchFill: true,  visible: true  },
+    { field: 'site',          label: 'Site',          sortable: true,  batchFill: false, visible: true  },
     { field: 'spcode',        label: 'Species',       sortable: true,  batchFill: true,  visible: true  },
     { field: 'juvenile',      label: 'Juvenile',      sortable: true,  batchFill: true,  visible: true  },
     { field: 'juv_substrate', label: 'JUV_SUBSTRATE', sortable: true,  batchFill: true,  visible: true  },
@@ -88,6 +91,13 @@
     try { localStorage.setItem(COL_VIS_KEY, JSON.stringify(vis)); } catch (e) { /* ignore */ }
   }
 
+  // ── Checkbox column offset helper ──
+  // Returns 1 when the row-select checkbox column has been injected, 0 otherwise.
+  // All positional column logic (visibility, sort, headers) must add this offset.
+  function _cbOff() {
+    return document.querySelector('#annotationTable thead .row-select-th') ? 1 : 0;
+  }
+
   // ===================================================================
   //  SORT — click header to sort annotation table
   // ===================================================================
@@ -97,12 +107,14 @@
     if (typeof origUpdate === 'function') {
       window.updateAnnotationTable = function () {
         origUpdate.apply(this, arguments);
+        injectRowCheckboxes();          // add checkbox column (must be first)
         applyColumnVisibility();
         applySortableHeaders();
         applyTableSize();
         if (sortColumn) {
-          sortTableByColumn(sortColumn, sortDirection, false); // re-sort without re-rendering
+          sortTableByColumn(sortColumn, sortDirection, false);
         }
+        updateSelectionUI();
       };
     }
   }
@@ -111,9 +123,10 @@
     const table = document.getElementById('annotationTable');
     if (!table) return;
     const headers = table.querySelectorAll('thead th');
+    const off = _cbOff();
 
     headers.forEach((th, idx) => {
-      const col = COLUMNS[idx];
+      const col = COLUMNS[idx - off];
       if (!col || !col.sortable) return;
 
       th.classList.add('sortable');
@@ -166,8 +179,9 @@
     rows.sort((a, b) => {
       const colIdx = COLUMNS.findIndex(c => c.field === field);
       if (colIdx === -1) return 0;
-      const aText = (a.cells[colIdx]?.textContent || '').trim();
-      const bText = (b.cells[colIdx]?.textContent || '').trim();
+      const cellIdx = colIdx + _cbOff();
+      const aText = (a.cells[cellIdx]?.textContent || '').trim();
+      const bText = (b.cells[cellIdx]?.textContent || '').trim();
 
       // Try numeric sort
       const aNum = parseFloat(aText);
@@ -204,6 +218,7 @@
         <button class="table-size-btn active" data-size="md" title="Medium table">M</button>
         <button class="table-size-btn" data-size="lg" title="Large table">L</button>
         <button class="table-size-btn" data-size="xl" title="Extra-large table">XL</button>
+        <button class="table-size-btn" data-size="max" title="Maximum table">MAX</button>
       `;
 
       // Append next to the h3
@@ -272,12 +287,14 @@
 
     const headers = table.querySelectorAll('thead th');
     const rows = table.querySelectorAll('tbody tr');
+    const off = _cbOff();
 
     COLUMNS.forEach((col, idx) => {
       const display = col.visible ? '' : 'none';
-      if (headers[idx]) headers[idx].style.display = display;
+      const cellIdx = idx + off;
+      if (headers[cellIdx]) headers[cellIdx].style.display = display;
       rows.forEach(row => {
-        if (row.cells[idx]) row.cells[idx].style.display = display;
+        if (row.cells[cellIdx]) row.cells[cellIdx].style.display = display;
       });
     });
   }
@@ -337,9 +354,12 @@
         dropdown.appendChild(item);
       });
 
-      // Wrap in relative container
+      // Wrap in relative container — stop propagation so clicks inside
+      // the picker don't bubble to the section header's onclick (which
+      // would collapse the annotations list and hide the table).
       const wrapper = document.createElement('div');
       wrapper.style.cssText = 'position:relative;display:inline-block;';
+      wrapper.addEventListener('click', (e) => e.stopPropagation());
       wrapper.appendChild(btn);
       wrapper.appendChild(dropdown);
 
@@ -926,19 +946,343 @@
   }
 
   // ===================================================================
+  //  ROW CHECKBOXES — multi-select for bulk update
+  // ===================================================================
+  function injectRowCheckboxes() {
+    const table = document.getElementById('annotationTable');
+    if (!table) return;
+    const thead = table.querySelector('thead tr');
+    if (!thead) return;
+
+    // ── Header checkbox (only inject once — thead survives tbody rebuilds) ──
+    if (!thead.querySelector('.row-select-th')) {
+      const th = document.createElement('th');
+      th.className = 'row-select-th';
+      th.style.cssText = 'width:30px; min-width:30px; text-align:center; padding:4px;';
+      const selectAllCb = document.createElement('input');
+      selectAllCb.type = 'checkbox';
+      selectAllCb.title = 'Select all rows';
+      selectAllCb.style.cursor = 'pointer';
+      selectAllCb.addEventListener('change', () => {
+        const rows = table.querySelectorAll('tbody tr[data-index]');
+        rows.forEach(row => {
+          const idx = parseInt(row.dataset.index);
+          const cb = row.querySelector('.row-select-cb');
+          if (isNaN(idx) || !cb) return;
+          cb.checked = selectAllCb.checked;
+          if (selectAllCb.checked) { selectedRows.add(idx); row.classList.add('bulk-selected'); }
+          else { selectedRows.delete(idx); row.classList.remove('bulk-selected'); }
+        });
+        updateSelectionUI();
+      });
+      th.appendChild(selectAllCb);
+      thead.insertBefore(th, thead.firstChild);
+    }
+
+    // ── Body checkboxes (always re-inject — tbody is rebuilt each time) ──
+    table.querySelectorAll('tbody tr[data-index]').forEach(row => {
+      const idx = parseInt(row.dataset.index);
+      if (isNaN(idx)) return;
+      const td = document.createElement('td');
+      td.style.cssText = 'text-align:center; padding:2px 4px;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'row-select-cb';
+      cb.dataset.index = idx;
+      cb.checked = selectedRows.has(idx);
+      cb.style.cursor = 'pointer';
+      if (cb.checked) row.classList.add('bulk-selected');
+
+      cb.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (e.shiftKey && _lastCheckedIdx >= 0) {
+          // Shift+click: select visual range
+          const allRows = Array.from(table.querySelectorAll('tbody tr[data-index]'));
+          const lastPos = allRows.findIndex(r => parseInt(r.dataset.index) === _lastCheckedIdx);
+          const currPos = allRows.findIndex(r => parseInt(r.dataset.index) === idx);
+          if (lastPos >= 0 && currPos >= 0) {
+            const lo = Math.min(lastPos, currPos), hi = Math.max(lastPos, currPos);
+            for (let i = lo; i <= hi; i++) {
+              const rIdx = parseInt(allRows[i].dataset.index);
+              if (!isNaN(rIdx)) {
+                selectedRows.add(rIdx);
+                const rCb = allRows[i].querySelector('.row-select-cb');
+                if (rCb) rCb.checked = true;
+                allRows[i].classList.add('bulk-selected');
+              }
+            }
+          }
+        } else {
+          if (cb.checked) { selectedRows.add(idx); row.classList.add('bulk-selected'); }
+          else { selectedRows.delete(idx); row.classList.remove('bulk-selected'); }
+        }
+        _lastCheckedIdx = idx;
+        updateSelectionUI();
+      });
+      td.appendChild(cb);
+      row.insertBefore(td, row.firstChild);
+    });
+
+    // Handle the "no annotations" placeholder row (no data-index)
+    table.querySelectorAll('tbody tr:not([data-index])').forEach(row => {
+      const td = document.createElement('td');
+      td.style.cssText = 'padding:0;';
+      row.insertBefore(td, row.firstChild);
+    });
+  }
+
+  function updateSelectionUI() {
+    const bar = document.getElementById('v2SelectionBar');
+    if (!bar) return;
+    const count = selectedRows.size;
+    const countEl = document.getElementById('v2SelectionCount');
+    if (countEl) countEl.textContent = `${count} row${count !== 1 ? 's' : ''} selected`;
+    bar.style.display = count > 0 ? 'flex' : 'none';
+
+    // Update select-all checkbox
+    const selectAllCb = document.querySelector('#annotationTable thead .row-select-th input');
+    if (selectAllCb) {
+      const total = document.querySelectorAll('#annotationTable tbody tr[data-index]').length;
+      selectAllCb.checked = count > 0 && count >= total;
+      selectAllCb.indeterminate = count > 0 && count < total;
+    }
+  }
+
+  // ===================================================================
+  //  SELECTION BAR — toolbar above table when rows are selected
+  // ===================================================================
+  function injectSelectionBar() {
+    const waitFor = setInterval(() => {
+      const tableContainer = document.querySelector('.annotation-table-container');
+      if (!tableContainer) return;
+      clearInterval(waitFor);
+      if (document.getElementById('v2SelectionBar')) return;
+
+      const bar = document.createElement('div');
+      bar.id = 'v2SelectionBar';
+      bar.style.cssText = 'display:none; align-items:center; gap:10px; padding:6px 12px; background:linear-gradient(135deg,#dbeafe,#ede9fe); border:1px solid #93c5fd; border-radius:6px; margin-bottom:6px; font-size:12px; font-weight:600; color:#1e40af;';
+      bar.innerHTML = `
+        <span id="v2SelectionCount">0 rows selected</span>
+        <button id="v2BulkUpdateBtn" style="padding:4px 12px; background:#3b82f6; color:#fff; border:none; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;">Bulk Update</button>
+        <button id="v2ClearSelectionBtn" style="padding:4px 10px; background:#e2e8f0; color:#475569; border:1px solid #cbd5e1; border-radius:4px; font-size:11px; cursor:pointer;">Clear</button>
+      `;
+      tableContainer.parentElement.insertBefore(bar, tableContainer);
+
+      document.getElementById('v2BulkUpdateBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        openBulkUpdateModal();
+      });
+      document.getElementById('v2ClearSelectionBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        selectedRows.clear();
+        document.querySelectorAll('.row-select-cb').forEach(c => { c.checked = false; });
+        document.querySelectorAll('#annotationTable tbody tr').forEach(r => r.classList.remove('bulk-selected'));
+        updateSelectionUI();
+      });
+    }, 300);
+  }
+
+  // ===================================================================
+  //  BULK UPDATE MODAL — update a field across selected rows
+  // ===================================================================
+  function injectBulkUpdateModal() {
+    if (document.getElementById('v2BulkUpdateModal')) return;
+    const modal = document.createElement('div');
+    modal.className = 'batch-fill-modal';
+    modal.id = 'v2BulkUpdateModal';
+    modal.innerHTML = `
+      <div class="batch-fill-content" style="max-width:440px;">
+        <h3 style="margin:0 0 16px; font-size:16px; color:#1e293b;">
+          Bulk Update <span id="bulkUpdateCount" style="color:#3b82f6;">0</span> rows
+        </h3>
+        <div style="margin-bottom:12px;">
+          <label style="display:block; font-size:12px; font-weight:600; color:#374151; margin-bottom:4px;">Field to update:</label>
+          <select id="bulkUpdateField" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;"></select>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="display:block; font-size:12px; font-weight:600; color:#374151; margin-bottom:4px;">New value:</label>
+          <div id="bulkUpdateInputContainer"></div>
+        </div>
+        <div class="batch-fill-actions">
+          <button class="btn btn-secondary" id="bulkUpdateCancelBtn">Cancel</button>
+          <button class="btn btn-primary" id="bulkUpdateApplyBtn">Apply</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+    document.getElementById('bulkUpdateCancelBtn').addEventListener('click', () => modal.classList.remove('active'));
+    document.getElementById('bulkUpdateApplyBtn').addEventListener('click', applyBulkUpdate);
+    document.getElementById('bulkUpdateField').addEventListener('change', buildBulkUpdateInput);
+  }
+
+  function openBulkUpdateModal() {
+    if (selectedRows.size === 0) return;
+    document.getElementById('bulkUpdateCount').textContent = selectedRows.size;
+
+    // Populate field dropdown from batchFill-able columns
+    const select = document.getElementById('bulkUpdateField');
+    select.innerHTML = COLUMNS
+      .filter(c => c.batchFill)
+      .map(c => `<option value="${c.field}">${c.label}</option>`)
+      .join('');
+
+    buildBulkUpdateInput();
+    document.getElementById('bulkUpdateApplyBtn').textContent = `Apply to ${selectedRows.size} row${selectedRows.size !== 1 ? 's' : ''}`;
+    document.getElementById('v2BulkUpdateModal').classList.add('active');
+    setTimeout(() => document.getElementById('bulkUpdateValue')?.focus(), 100);
+  }
+
+  // ── Dropdown options shared with batch fill ──
+  const _bulkDropdowns = {
+    morph_code: [
+      { v: '', l: '- Select -' },
+      { v: 'BR', l: 'BR - Branching' }, { v: 'CO', l: 'CO - Columnar' },
+      { v: 'EN', l: 'EN - Encrusting' }, { v: 'FO', l: 'FO - Foliaceous' },
+      { v: 'FL', l: 'FL - Free-living' }, { v: 'LA', l: 'LA - Laminar' },
+      { v: 'MD', l: 'MD - Mounding' }, { v: 'MA', l: 'MA - Massive' },
+      { v: 'PL', l: 'PL - Plating' }, { v: 'SM', l: 'SM - Submassive' },
+      { v: 'SO', l: 'SO - Solitary' }, { v: 'TB', l: 'TB - Tabular' }
+    ],
+    transect:  [{ v: '', l: '- Select -' }, { v: 'A', l: 'A' }, { v: 'B', l: 'B' }],
+    segment:   [{ v: '', l: '- Select -' }, { v: '0', l: '0' }, { v: '5', l: '5' }, { v: '10', l: '10' }, { v: '15', l: '15' }],
+    juvenile:  [{ v: '0', l: 'No (0)' }, { v: '-1', l: 'Yes (-1)' }],
+    remnant:   [{ v: '0', l: 'No (0)' }, { v: '-1', l: 'Yes (-1)' }],
+    ex_bound:  [{ v: '0', l: 'No (0)' }, { v: '-1', l: 'Yes (-1)' }],
+    no_colony: [{ v: '0', l: 'No (0)' }, { v: '-1', l: 'Yes (-1)' }]
+  };
+
+  function buildBulkUpdateInput() {
+    const field = document.getElementById('bulkUpdateField').value;
+    const container = document.getElementById('bulkUpdateInputContainer');
+    const inputStyle = 'width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;';
+
+    if (_bulkDropdowns[field]) {
+      container.innerHTML = `<select id="bulkUpdateValue" style="${inputStyle}">${
+        _bulkDropdowns[field].map(o => `<option value="${o.v}">${o.l}</option>`).join('')
+      }</select>`;
+    } else if (field === 'spcode') {
+      container.innerHTML = `
+        <div style="position:relative;">
+          <input type="text" id="bulkUpdateValue" placeholder="Search species code or name..." autocomplete="off" style="${inputStyle}">
+          <div id="bulkUpdateSpDropdown" style="display:none; position:absolute; left:0; right:0; top:100%; z-index:10000; background:#fff; border:1px solid #d1d5db; border-radius:0 0 6px 6px; box-shadow:0 4px 12px rgba(0,0,0,0.15); max-height:200px; overflow-y:auto;"></div>
+        </div>`;
+      _setupBulkSpeciesAutocomplete();
+    } else {
+      container.innerHTML = `<input type="text" id="bulkUpdateValue" placeholder="Enter value" style="${inputStyle}">`;
+    }
+    setTimeout(() => document.getElementById('bulkUpdateValue')?.focus(), 50);
+  }
+
+  function _setupBulkSpeciesAutocomplete() {
+    const input = document.getElementById('bulkUpdateValue');
+    const dd = document.getElementById('bulkUpdateSpDropdown');
+    if (!input || !dd) return;
+    let timer = null, results = [], selIdx = 0;
+
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      const q = input.value.trim();
+      if (q.length < 2) { dd.style.display = 'none'; return; }
+      timer = setTimeout(() => {
+        const fqs = typeof window.getSpeciesFilterQueryString === 'function' ? window.getSpeciesFilterQueryString() : '';
+        fetch(`/api/coral/species/search?q=${encodeURIComponent(q)}&limit=10${fqs}`)
+          .then(r => r.json())
+          .then(data => {
+            results = data.results || [];
+            selIdx = 0;
+            dd.innerHTML = results.length === 0
+              ? '<div style="padding:8px 12px; color:#6b7280; font-size:12px;">No matches</div>'
+              : results.map((sp, i) => `
+                <div class="bu-sp-item${i === 0 ? ' bu-sp-sel' : ''}" data-i="${i}"
+                     style="padding:6px 12px; cursor:pointer; font-size:12px; border-bottom:1px solid #f3f4f6;">
+                  <strong style="color:#3b82f6;">${sp.code}</strong>
+                  <span style="color:#374151;"> ${sp.taxon_name || sp.genus || ''}</span>
+                  ${sp.scientific_name ? `<span style="color:#9ca3af; font-style:italic;"> ${sp.scientific_name}</span>` : ''}
+                </div>`).join('');
+            dd.querySelectorAll('.bu-sp-item').forEach(el => {
+              el.addEventListener('click', () => { input.value = results[parseInt(el.dataset.i)].code; dd.style.display = 'none'; });
+              el.addEventListener('mouseover', () => { dd.querySelectorAll('.bu-sp-item').forEach(x => x.classList.remove('bu-sp-sel')); el.classList.add('bu-sp-sel'); selIdx = parseInt(el.dataset.i); });
+            });
+            dd.style.display = 'block';
+          }).catch(() => { dd.style.display = 'none'; });
+      }, 300);
+    });
+
+    input.addEventListener('keydown', (e) => {
+      if (dd.style.display === 'none') return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); selIdx = Math.min(selIdx + 1, results.length - 1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); selIdx = Math.max(selIdx - 1, 0); }
+      else if (e.key === 'Enter' && results[selIdx]) { e.preventDefault(); input.value = results[selIdx].code; dd.style.display = 'none'; return; }
+      else if (e.key === 'Escape') { dd.style.display = 'none'; return; }
+      else return;
+      dd.querySelectorAll('.bu-sp-item').forEach((el, i) => el.classList.toggle('bu-sp-sel', i === selIdx));
+    });
+  }
+
+  function applyBulkUpdate() {
+    const field = document.getElementById('bulkUpdateField').value;
+    const valueEl = document.getElementById('bulkUpdateValue');
+    if (!field || !valueEl) return;
+    let value = valueEl.value;
+    if (document.body.classList.contains('v2-allcaps') && typeof value === 'string') value = value.toUpperCase();
+    if (typeof annotations === 'undefined') return;
+
+    let count = 0;
+    selectedRows.forEach(idx => {
+      if (idx < 0 || idx >= annotations.length) return;
+      const ann = annotations[idx];
+      ann[field] = value;
+      if (ann.properties) ann.properties[field] = value;
+      count++;
+    });
+
+    // Sync to map layers and refresh labels
+    if (typeof drawnItems !== 'undefined') {
+      const refreshLabels = typeof labelsVisible !== 'undefined' && labelsVisible
+                         && typeof addLabelToAnnotation === 'function';
+      drawnItems.eachLayer(layer => {
+        if (!layer.annotationData) return;
+        const annIdx = annotations.indexOf(layer.annotationData);
+        if (annIdx >= 0 && selectedRows.has(annIdx)) {
+          layer.annotationData[field] = value;
+          if (layer.annotationData.properties) layer.annotationData.properties[field] = value;
+          if (refreshLabels) addLabelToAnnotation(layer);
+        }
+      });
+    }
+
+    if (typeof hasUnsavedChanges !== 'undefined') hasUnsavedChanges = true;
+    if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
+    document.getElementById('v2BulkUpdateModal').classList.remove('active');
+    if (typeof showStatus === 'function') showStatus(`Updated "${field}" on ${count} row${count !== 1 ? 's' : ''}`, 'success');
+  }
+
+  // ===================================================================
   //  INIT
   // ===================================================================
   function init() {
+    // Inject styles for multi-select and bulk update
+    const style = document.createElement('style');
+    style.textContent = `
+      tr.bulk-selected { background: #eff6ff !important; }
+      tr.bulk-selected:hover { background: #dbeafe !important; }
+      .bu-sp-sel { background: #eff6ff !important; }
+      .v2-row-cb { width: 16px; height: 16px; cursor: pointer; accent-color: #3b82f6; }
+    `;
+    document.head.appendChild(style);
+
     initSortableHeaders();
     injectTableSizeControls();
     injectColumnPicker();
     initArrowKeyNav();
     initClipboardEvents();
     injectBatchFillModal();
-    // Keyboard shortcuts hint removed — now in Info > Keyboard Shortcuts popup
+    injectSelectionBar();
+    injectBulkUpdateModal();
     // Apply initial column visibility
     setTimeout(applyColumnVisibility, 150);
-    console.log('🔧 v2-table.js loaded — Sort, Resize, Column Picker, Arrow Keys, Copy/Paste, Batch Fill');
+    console.log('🔧 v2-table.js loaded — Sort, Resize, Column Picker, Arrow Keys, Copy/Paste, Batch Fill, Multi-Select');
   }
 
   if (document.readyState === 'loading') {

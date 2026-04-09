@@ -181,25 +181,24 @@
       'transect', 'segment', 'seglength', 'segwidth', 'spcode'
     ];
 
-    const indices = window.v2BulkMode.sessionAnnotationIndices;
+    // Use direct object references (sessionAnnotations) instead of indices —
+    // indices go stale after undo/splice, but object refs survive.
+    const batchAnnotations = window.v2BulkMode.sessionAnnotations || [];
     let appliedCount = 0;
     let fieldCount = 0;
 
-    // Apply each default field to each annotation in the batch
-    indices.forEach(idx => {
-      if (idx >= 0 && idx < annotations.length) {
-        const ann = annotations[idx];
-        fieldsToApply.forEach(field => {
-          if (fieldDefaults[field] && !ann[field]) {
-            ann[field] = fieldDefaults[field];
-            if (ann.properties) {
-              ann.properties[field] = fieldDefaults[field];
-            }
-            fieldCount++;
+    batchAnnotations.forEach(ann => {
+      if (!ann) return;
+      fieldsToApply.forEach(field => {
+        if (fieldDefaults[field] && !ann[field]) {
+          ann[field] = fieldDefaults[field];
+          if (ann.properties) {
+            ann.properties[field] = fieldDefaults[field];
           }
-        });
-        appliedCount++;
-      }
+          fieldCount++;
+        }
+      });
+      appliedCount++;
     });
 
     // Save the project with new values
@@ -213,6 +212,9 @@
     }
 
     // Clear the batch session so next Apply works on new batch
+    if (window.v2BulkMode && window.v2BulkMode.sessionAnnotations) {
+      window.v2BulkMode.sessionAnnotations.length = 0;
+    }
     if (window.v2BulkMode && window.v2BulkMode.sessionAnnotationIndices) {
       window.v2BulkMode.sessionAnnotationIndices.length = 0;
     }

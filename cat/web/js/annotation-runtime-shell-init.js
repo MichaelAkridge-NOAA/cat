@@ -1000,7 +1000,7 @@
     const LAYOUT_KEY = 'cat_layout_mode';
     const PANEL_WIDTH_KEY = 'cat_panel_width';
     const MIN_PANEL_WIDTH = 280;
-    const MAX_PANEL_WIDTH = 900;
+    const MAX_PANEL_WIDTH = 1600;
 
     function toggleLayoutMode() {
       const isDocked = document.body.classList.contains('layout-docked');
