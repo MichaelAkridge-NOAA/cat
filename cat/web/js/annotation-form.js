@@ -102,7 +102,9 @@ function searchSpecies(query) {
   dropdown.innerHTML = '<div class="autocomplete-loading">Searching...</div>';
   dropdown.classList.add('active');
   
-  fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10`)
+  const filterQs = typeof window.getSpeciesFilterQueryString === 'function' ? window.getSpeciesFilterQueryString() : '';
+  const sep = filterQs ? '&' : '';
+  fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10${sep}${filterQs}`)
     .then(res => res.json())
     .then(data => {
       autocompleteResults = data.results || [];
@@ -1187,7 +1189,9 @@ function createAutocompleteTableCell(cell, field, currentValue, index) {
         dropdown.innerHTML = '<div class="autocomplete-loading" style="padding: 8px; text-align: center; color: #888;">Searching...</div>';
         dropdown.style.display = 'block';
         
-        fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10`)
+        const filterQs = typeof window.getSpeciesFilterQueryString === 'function' ? window.getSpeciesFilterQueryString() : '';
+        const sep = filterQs ? '&' : '';
+        fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10${sep}${filterQs}`)
           .then(res => res.json())
           .then(data => {
             tableAutocompleteResults = data.results || [];

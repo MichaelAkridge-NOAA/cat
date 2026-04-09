@@ -1335,7 +1335,7 @@
         // 3. Open in annotation viewer after short delay
         setTimeout(() => {
           closeOracleModal();
-          window.open(`/annotation_file_mode.html?project_id=${projectId}`, '_blank');
+          window.open(`/annotation.html?project_id=${projectId}`, '_blank');
         }, 800);
 
       } catch (err) {
@@ -1584,12 +1584,12 @@
 
     function openDbProject(projectId) {
       if (!projectId) return;
-      window.location.href = `/annotation_file_mode.html?project_id=${encodeURIComponent(projectId)}`;
+      window.location.href = `/annotation.html?project_id=${encodeURIComponent(projectId)}`;
     }
 
     function openDbProjectV2(projectId) {
       if (!projectId) return;
-      window.location.href = `/annotation_v2.html?project_id=${encodeURIComponent(projectId)}`;
+      window.location.href = `/annotation.html?project_id=${encodeURIComponent(projectId)}`;
     }
 
     // ========================================
@@ -1968,7 +1968,7 @@
         }
       }
 
-      window.location.href = `/annotation_file_mode.html?project_id=${encodeURIComponent(projectId)}`;
+      window.location.href = `/annotation.html?project_id=${encodeURIComponent(projectId)}`;
     }
     
     // ========================================
@@ -2882,7 +2882,7 @@
       
       // Redirect to viewer after a short delay to ensure download starts
       setTimeout(() => {
-        window.location.href = '/annotation_file_mode.html';
+        window.location.href = '/annotation.html';
       }, 500);
     }
     
@@ -2932,7 +2932,7 @@
 
       // If loaded JSON already has a DB project id and Oracle mode is active, go directly
       if (storageBackend === 'oracle' && loadedProject.project_id) {
-        window.location.href = `/annotation_file_mode.html?project_id=${encodeURIComponent(loadedProject.project_id)}`;
+        window.location.href = `/annotation.html?project_id=${encodeURIComponent(loadedProject.project_id)}`;
         return;
       }
       
@@ -3004,7 +3004,7 @@
           </button>
 
           <div style="margin-top: 14px; font-size: 12px; color: #64748b;">
-            Need legacy file-mode viewer? <a href="/annotation_file_mode_REFACTORED.html" style="color:#2563eb; text-decoration:none;">Open legacy viewer</a>
+            Need legacy viewer? <a href="/annotation_file_mode_REFACTORED.html" style="color:#2563eb; text-decoration:none;">Open deprecated viewer</a>
           </div>
 
           <button onclick="this.closest('[style*=fixed]').remove()" style="
@@ -3031,7 +3031,7 @@
       const modal = document.querySelector('[style*="position: fixed"]');
       if (modal) modal.remove();
 
-      window.location.href = '/annotation_file_mode.html';
+      window.location.href = '/annotation.html';
     }
 
     function launchAnnotationToolV2() {
@@ -3039,7 +3039,7 @@
       const modal = document.querySelector('[style*="position: fixed"]');
       if (modal) modal.remove();
 
-      window.location.href = '/annotation_v2.html';
+      window.location.href = '/annotation.html';
     }
     
     // ========================================

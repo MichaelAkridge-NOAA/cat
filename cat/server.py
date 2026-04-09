@@ -519,26 +519,34 @@ def read_converter():
         return converter_file.read_text(encoding="utf-8")
     return "<h1>Converter not found</h1>"
 
-# Serve the file-based annotation page
+# Serve the annotation page
 @app.get("/annotate", response_class=HTMLResponse)
 def read_file_annotation():
-    file_annotation_file = BASE_DIR / "web" / "annotation_file_mode.html"
+    file_annotation_file = BASE_DIR / "web" / "annotation.html"
     if file_annotation_file.exists():
         return file_annotation_file.read_text(encoding="utf-8")
-    return "<h1>File-Based Annotation not found</h1>"
+    return "<h1>Annotation not found</h1>"
 
-# Serve the file-based annotation page (alternate URL)
+# Serve the annotation page (canonical URL)
+@app.get("/annotation.html", response_class=HTMLResponse)
+def read_annotation_page():
+    file_annotation_file = BASE_DIR / "web" / "annotation.html"
+    if file_annotation_file.exists():
+        return file_annotation_file.read_text(encoding="utf-8")
+    return "<h1>Annotation not found</h1>"
+
+# Backward-compat redirect for old /annotation_file_mode.html URLs
 @app.get("/annotation_file_mode.html", response_class=HTMLResponse)
 def read_file_annotation_alt():
-    file_annotation_file = BASE_DIR / "web" / "annotation_file_mode.html"
+    file_annotation_file = BASE_DIR / "web" / "annotation.html"
     if file_annotation_file.exists():
         return file_annotation_file.read_text(encoding="utf-8")
-    return "<h1>File-Based Annotation not found</h1>"
+    return "<h1>Annotation not found</h1>"
 
-# Serve the refactored annotation page
+# Serve the deprecated refactored annotation page
 @app.get("/annotation_file_mode_REFACTORED.html", response_class=HTMLResponse)
 def read_file_annotation_refactored():
-    file_annotation_file = BASE_DIR / "web" / "annotation_file_mode_REFACTORED.html"
+    file_annotation_file = BASE_DIR / "web" / "deprecated" / "annotation_file_mode_REFACTORED.html"
     if file_annotation_file.exists():
         return file_annotation_file.read_text(encoding="utf-8")
     return "<h1>Refactored Annotation not found</h1>"
@@ -546,14 +554,15 @@ def read_file_annotation_refactored():
 # Serve the unified annotation page (v2 features merged into v1)
 @app.get("/annotate/v2", response_class=HTMLResponse)
 def read_annotation_v2():
-    file_annotation_file = BASE_DIR / "web" / "annotation_file_mode.html"
+    file_annotation_file = BASE_DIR / "web" / "annotation.html"
     if file_annotation_file.exists():
         return file_annotation_file.read_text(encoding="utf-8")
     return "<h1>Annotation not found</h1>"
 
+# Backward-compat redirect for old /annotation_v2.html URLs
 @app.get("/annotation_v2.html", response_class=HTMLResponse)
 def read_annotation_v2_alt():
-    file_annotation_file = BASE_DIR / "web" / "annotation_file_mode.html"
+    file_annotation_file = BASE_DIR / "web" / "annotation.html"
     if file_annotation_file.exists():
         return file_annotation_file.read_text(encoding="utf-8")
     return "<h1>Annotation not found</h1>"

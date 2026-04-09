@@ -15,14 +15,18 @@
   let centroidMarkers = [];        // L.circleMarker refs
   let bulkIdCounter = 0;           // monotonic counter for colony_id (never decremented)
   let bulkSessionAnnotationIndices = []; // indices of annotations added in current bulk session
+  let bulkSessionAnnotations = [];        // direct references to annotation objects (survives splice)
   const UNDO_TOAST_MS = 1800;
   let _tableUpdateTimer = null;   // debounce timer for table rebuilds during rapid drawing
+  let _activeDrawHandler = null;  // track the current L.Draw.Polyline handler so we can disable before re-enabling
+  let _bulkDrawInProgress = false; // re-entrancy guard: prevent duplicate draw:created handling
 
   // ── Expose to global so other modules can query ──
   window.v2BulkMode = {
     get enabled()  { return bulkModeEnabled; },
     get history()  { return bulkDrawHistory; },
     get sessionAnnotationIndices() { return bulkSessionAnnotationIndices; },
+    get sessionAnnotations() { return bulkSessionAnnotations; },
   };
 
   // ===================================================================
@@ -119,6 +123,7 @@
       // Reset history tracking for this new bulk session
       bulkDrawHistory = [];
       bulkSessionAnnotationIndices = [];
+      bulkSessionAnnotations = [];
       updateBulkBannerCount();
       // Auto-activate the polyline (line) drawing tool
       activatePolylineTool();
@@ -135,9 +140,17 @@
     setTimeout(() => {
       try {
         if (typeof drawControl !== 'undefined') {
+          // ── FIX: disable the previous handler before creating a new one ──
+          // Without this, each draw creates an additional handler that
+          // never gets cleaned up, leading to exponential draw:created
+          // events (2^N) and an eventual browser crash.
+          if (_activeDrawHandler) {
+            try { _activeDrawHandler.disable(); } catch (_) { /* already disabled */ }
+            _activeDrawHandler = null;
+          }
           // Create a fresh polyline handler and enable it
-          const handler = new L.Draw.Polyline(map, drawControl.options.draw.polyline);
-          handler.enable();
+          _activeDrawHandler = new L.Draw.Polyline(map, drawControl.options.draw.polyline);
+          _activeDrawHandler.enable();
           // Update visual feedback
           if (typeof updateDrawingToolVisualFeedback === 'function') {
             updateDrawingToolVisualFeedback('.leaflet-draw-draw-polyline');
@@ -167,6 +180,15 @@
       // Add our own EARLY handler (prepend)
       map.on('draw:created', function (event) {
         if (!bulkModeEnabled) return; // let original handler do its thing
+
+        // ── FIX: re-entrancy guard ──
+        // If multiple L.Draw handlers exist (e.g. from a prior leak), each
+        // fires its own draw:created.  Only process the first one.
+        if (_bulkDrawInProgress) {
+          event._v2BulkHandled = true;
+          return;
+        }
+        _bulkDrawInProgress = true;
 
         const layer = event.layer;
         const type = event.layerType;
@@ -223,6 +245,7 @@
         // Track in current bulk session for batch apply defaults
         if (annotationIndex >= 0) {
           bulkSessionAnnotationIndices.push(annotationIndex);
+          bulkSessionAnnotations.push(blankAnnotation);
         }
 
         // Debounced table update — avoid rebuilding 35-col table on every rapid draw
@@ -254,6 +277,9 @@
 
         // ── IMPORTANT: prevent original handler from running ──
         event._v2BulkHandled = true;
+
+        // ── FIX: release re-entrancy guard after current event loop tick ──
+        setTimeout(() => { _bulkDrawInProgress = false; }, 0);
       });
 
       // Patch existing CREATED handlers to skip when bulk-handled

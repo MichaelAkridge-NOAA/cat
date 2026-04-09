@@ -287,6 +287,50 @@ DDL_BLOCKS: List[str] = [
             IF SQLCODE != -1430 THEN RAISE; END IF;
     END;
     """,
+    # -----------------------------------------------------------------
+    # Coral species reference table
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[
+            CREATE TABLE cat_coral_species (
+                species_id   NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                spcode       VARCHAR2(20)  NOT NULL,
+                taxon_name   VARCHAR2(255),
+                genus        VARCHAR2(120),
+                family       VARCHAR2(120),
+                class_name   VARCHAR2(120),
+                comp_class   VARCHAR2(120),
+                morphology_1 VARCHAR2(120),
+                morphology_2 VARCHAR2(120),
+                scientific_name VARCHAR2(512),
+                gencode      VARCHAR2(20),
+                samoa        VARCHAR2(10),
+                marianas     VARCHAR2(10),
+                hawaii       VARCHAR2(10),
+                johnston     VARCHAR2(10),
+                line_island  VARCHAR2(10),
+                phoenix      VARCHAR2(10),
+                wake         VARCHAR2(10),
+                inactive_flag NUMBER(1) DEFAULT 0,
+                adu_flag      NUMBER(1) DEFAULT 0,
+                juv_flag      NUMBER(1) DEFAULT 0,
+                CONSTRAINT uq_cat_coral_spcode UNIQUE (spcode)
+            )
+        ]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[CREATE INDEX idx_cat_coral_species_genus ON cat_coral_species(genus)]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
 ]
 
 
@@ -305,5 +349,6 @@ def bootstrap_schema() -> dict:
             "cat_overlay_features",
             "cat_sites",
             "cat_site_visits",
+            "cat_coral_species",
         ],
     }

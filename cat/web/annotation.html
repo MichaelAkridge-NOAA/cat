@@ -1,0 +1,2630 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CAT: Coral Annotation Tool</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+  <link rel="stylesheet" href="css/annotation-styles.css" />
+  <link rel="stylesheet" href="css/annotation-panels.css" />
+  <link rel="stylesheet" href="css/annotation-controls.css" />
+  <link rel="stylesheet" href="css/annotation-v2.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+  <!-- Phase 1: Externalized CSS files (legacy inline styles retained but disabled) -->
+  <style id="legacyInlineStyles" media="not all">
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(180deg, #0a2540 0%, #0d3a5f 30%, #10446e 60%, #134e7d 100%);
+      overflow: hidden;
+    }
+    .navbar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      right: 10px;
+      background: rgba(255, 255, 255, 0.95);
+      padding: 8px 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      z-index: 2000;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: nowrap;
+      gap: 10px;
+    }
+    .navbar h1 {
+      margin: 0;
+      font-size: 16px;
+      color: #333;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .navbar h1 img {
+      height: 24px;
+      width: 24px;
+      object-fit: contain;
+    }
+    .navbar h1 .cat-text {
+      font-weight: 700;
+      color: #06b6d4;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+    }
+    .nav-links a {
+      color: #667eea;
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 13px;
+      transition: color 0.3s;
+      white-space: nowrap;
+    }
+    .nav-links a:hover {
+      color: #5568d3;
+    }
+    .nav-links .btn {
+      padding: 6px 12px;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    #map {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 100%;
+      height: 100vh;
+      background: #2c2c2c;
+    }
+    
+    /* Annotation Form Panel - Bottom Horizontal Layout */
+    .annotation-panel {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      right: 10px;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      z-index: 1000;
+      max-height: 55vh;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .annotation-panel h3 {
+      margin: 0;
+      font-size: 14px;
+      color: #667eea;
+      font-weight: 600;
+    }
+    /* Horizontal Form Layout */
+    .form-container {
+      display: flex;
+      gap: 15px;
+      overflow-x: auto;
+      padding-bottom: 5px;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      min-width: 120px;
+      flex-shrink: 0;
+    }
+    .form-group.wide {
+      min-width: 180px;
+    }
+    .form-section {
+      margin-bottom: 0;
+    }
+    .form-section label {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 10px;
+      color: #555;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .form-section input[type="text"],
+    .form-section input[type="number"],
+    .form-section select {
+      width: 100%;
+      padding: 5px 7px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .form-section select {
+      background: white;
+      cursor: pointer;
+    }
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .form-row-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+    }
+    .btn-group {
+      display: flex;
+      gap: 8px;
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid #eee;
+    }
+    .btn {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: #667eea;
+      color: white;
+    }
+    .btn-primary:hover {
+      background: #5568d3;
+    }
+    .btn-secondary {
+      background: #6c757d;
+      color: white;
+    }
+    .btn-secondary:hover {
+      background: #5a6268;
+    }
+    .btn-danger {
+      background: #dc3545;
+      color: white;
+    }
+    .btn-danger:hover {
+      background: #c82333;
+    }
+    .btn-success {
+      background: #28a745;
+      color: white;
+    }
+    .btn-success:hover {
+      background: #218838;
+    }
+    
+    /* Autocomplete Dropdown Styles */
+    .autocomplete-wrapper {
+      position: relative;
+    }
+    .autocomplete-dropdown {
+      position: fixed;
+      background: white;
+      border: 1px solid #ddd;
+      border-top: none;
+      border-radius: 0 0 4px 4px;
+      max-height: 250px;
+      overflow-y: auto;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      display: none;
+      min-width: 200px;
+    }
+    .autocomplete-dropdown.active {
+      display: block;
+    }
+    .autocomplete-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      border-bottom: 1px solid #f0f0f0;
+      transition: background 0.2s;
+    }
+    .autocomplete-item:last-child {
+      border-bottom: none;
+    }
+    .autocomplete-item:hover,
+    .autocomplete-item.selected {
+      background: #f8f9fa;
+    }
+    .autocomplete-code {
+      font-weight: 600;
+      color: #667eea;
+      font-size: 12px;
+    }
+    .autocomplete-name {
+      color: #333;
+      font-size: 11px;
+      margin-top: 2px;
+    }
+    .autocomplete-sci {
+      color: #888;
+      font-size: 10px;
+      font-style: italic;
+      margin-top: 2px;
+    }
+    .autocomplete-loading {
+      padding: 12px;
+      text-align: center;
+      color: #888;
+      font-size: 11px;
+    }
+    .autocomplete-empty {
+      padding: 12px;
+      text-align: center;
+      color: #999;
+      font-size: 11px;
+    }
+    
+
+    /* Status messages */
+    .status {
+      padding: 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-bottom: 12px;
+      display: none;
+    }
+    .status.success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    .status.info {
+      background: #d1ecf1;
+      color: #0c5460;
+      border: 1px solid #bee5eb;
+    }
+    
+    /* Collapsible sections */
+    .collapsible {
+      background: #f8f9fa;
+      padding: 8px 12px;
+      margin: 10px -15px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+      color: #333;
+      border-top: 1px solid #dee2e6;
+      border-bottom: 1px solid #dee2e6;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .collapsible:hover {
+      background: #e9ecef;
+    }
+    .collapsible-content {
+      padding: 10px 0;
+      display: none;
+    }
+    .collapsible-content.active {
+      display: block;
+    }
+    .collapsible::after {
+      content: '▼';
+      font-size: 10px;
+    }
+    .collapsible.active::after {
+      content: '▲';
+    }
+    
+    /* Annotation Table View */
+    .annotation-table-container {
+      flex: 1;
+      overflow: auto;
+      background: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 4px;
+      max-height: 200px;
+      min-height: 100px;
+    }
+    .annotation-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      background: white;
+    }
+    .annotation-table thead {
+      position: sticky;
+      top: 0;
+      background: #667eea;
+      color: white;
+      z-index: 10;
+    }
+    .annotation-table th {
+      padding: 6px 8px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+      border-right: 1px solid rgba(255,255,255,0.2);
+    }
+    .annotation-table th:last-child {
+      border-right: none;
+    }
+    .annotation-table td {
+      padding: 5px 8px;
+      border-bottom: 1px solid #dee2e6;
+      border-right: 1px solid #f0f0f0;
+      white-space: nowrap;
+    }
+    .annotation-table td:last-child {
+      border-right: none;
+    }
+    .annotation-table tbody tr {
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .annotation-table tbody tr:hover {
+      background: #e9ecef;
+    }
+    .annotation-table tbody tr.selected {
+      background: #d1ecf1;
+      font-weight: 600;
+    }
+    .annotation-table .actions {
+      display: flex;
+      gap: 5px;
+    }
+    .annotation-table .btn-sm {
+      padding: 2px 6px;
+      font-size: 10px;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .annotation-table .btn-edit {
+      background: #667eea;
+      color: white;
+    }
+    .annotation-table .btn-edit:hover {
+      background: #5568d3;
+    }
+    .annotation-table .btn-delete {
+      background: #dc3545;
+      color: white;
+    }
+    .annotation-table .btn-delete:hover {
+      background: #c82333;
+    }
+    
+    /* Editable cells */
+    .annotation-table td.editable {
+      cursor: cell;
+      position: relative;
+    }
+    .annotation-table td.editable:hover {
+      background: #fff3cd;
+      outline: 1px dashed #ffc107;
+    }
+    .annotation-table td.editing {
+      padding: 2px;
+      background: #fff;
+    }
+    .annotation-table td.editing input,
+    .annotation-table td.editing select {
+      width: 100%;
+      padding: 4px 6px;
+      border: 2px solid #667eea;
+      border-radius: 3px;
+      font-size: 11px;
+      font-family: inherit;
+      box-sizing: border-box;
+    }
+    .annotation-table td.editing input:focus,
+    .annotation-table td.editing select:focus {
+      outline: none;
+      border-color: #06b6d4;
+    }
+    
+    /* Helper text */
+    .helper-text {
+      font-size: 11px;
+      color: #6c757d;
+      margin-top: 2px;
+      font-style: italic;
+    }
+    
+    /* Combined Map Layers Panel */
+    .layer-control {
+      position: absolute;
+      top: 80px;
+      left: 10px;
+      bottom: 10px;
+      background: white;
+      padding: 0;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      z-index: 1000;
+      width: 280px;
+      transition: all 0.3s ease;
+      max-height: calc(100vh - 90px);
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+    .layer-control.collapsed {
+      width: auto;
+      max-height: auto;
+      bottom: auto;
+      overflow: visible;
+    }
+    
+    /* Layer section dividers */
+    .layer-section {
+      margin-bottom: 20px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid #e9ecef;
+    }
+    .layer-section:last-child {
+      margin-bottom: 0;
+      padding-bottom: 0;
+      border-bottom: none;
+    }
+    .section-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: #495057;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 10px;
+      padding: 5px;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+    .section-title:hover {
+      background: #f8f9fa;
+    }
+    .section-collapse-icon {
+      font-size: 10px;
+      color: #667eea;
+      transition: transform 0.3s;
+    }
+    .layer-section.collapsed .section-collapse-icon {
+      transform: rotate(-90deg);
+    }
+    .section-content {
+      max-height: 2000px;
+      overflow: visible;
+      transition: max-height 0.3s ease, margin-top 0.3s ease, padding 0.3s ease;
+      margin-top: 10px;
+    }
+    .layer-section.collapsed .section-content {
+      max-height: 0;
+      margin-top: 0;
+      overflow: hidden;
+    }
+    .section-content.collapsed {
+      max-height: 0;
+      margin-top: 0;
+      overflow: hidden;
+      padding: 0 !important;
+    }
+    
+    /* Collapsible panel header */
+    .panel-header {
+      padding: 12px 15px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid #667eea;
+      user-select: none;
+    }
+    .panel-header:hover {
+      background: #f8f9fa;
+    }
+    .panel-header h4 {
+      margin: 0;
+      font-size: 14px;
+      color: #333;
+    }
+    .panel-header .collapse-icon {
+      font-size: 12px;
+      color: #667eea;
+      transition: transform 0.3s;
+    }
+    .panel-header.collapsed .collapse-icon {
+      transform: rotate(-90deg);
+    }
+    .panel-content {
+      padding: 15px 20px;
+      max-height: none;
+      overflow: visible;
+      transition: max-height 0.3s ease, padding 0.3s ease;
+    }
+    .panel-content.collapsed {
+      max-height: 0;
+      padding: 0 20px;
+      overflow: hidden;
+    }
+    .layer-control h4 {
+      margin: 0 0 12px 0;
+      font-size: 14px;
+      color: #333;
+      border-bottom: 2px solid #667eea;
+      padding-bottom: 6px;
+    }
+    .layer-item {
+      margin-bottom: 15px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #eee;
+    }
+    .layer-item:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+    }
+    .layer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .layer-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: #333;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+    }
+    .layer-collapse-icon {
+      font-size: 10px;
+      margin-left: 6px;
+      color: #999;
+      transition: transform 0.2s;
+    }
+    .layer-details {
+      max-height: 500px;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+      padding: 0 5px;
+    }
+    .layer-details.collapsed {
+      max-height: 0;
+      padding: 0;
+    }
+    .layer-toggle {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+    }
+    .layer-toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .3s;
+      border-radius: 24px;
+    }
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .3s;
+      border-radius: 50%;
+    }
+    .layer-toggle input:checked + .toggle-slider {
+      background-color: #667eea;
+    }
+    .layer-toggle input:checked + .toggle-slider:before {
+      transform: translateX(20px);
+    }
+    .layer-toggle input:disabled + .toggle-slider {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .opacity-control {
+      margin-top: 5px;
+    }
+    .opacity-control label {
+      font-size: 11px;
+      color: #666;
+      display: block;
+      margin-bottom: 4px;
+    }
+    .opacity-slider {
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      background: #ddd;
+      outline: none;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    .opacity-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #667eea;
+      cursor: pointer;
+    }
+    .opacity-slider::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #667eea;
+      cursor: pointer;
+      border: none;
+      font-size: 12px;
+      font-weight: 600;
+      color: #333;
+    }
+    .cog-selector select {
+      width: 100%;
+      padding: 6px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    
+    /* Statistics panel */
+    .stats-panel {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(255, 255, 255, 0.95);
+      padding: 10px 15px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      z-index: 1000;
+      font-size: 12px;
+      min-width: 200px;
+    }
+    .stats-panel h4 {
+      margin: 0 0 8px 0;
+      font-size: 13px;
+      color: #333;
+    }
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .stat-label {
+      color: #666;
+    }
+    .stat-value {
+      font-weight: bold;
+      color: #667eea;
+    }
+    
+    /* Leaflet customizations - Position controls to avoid overlap */
+    
+    /* Move drawing tools to top-right, below navbar */
+    .leaflet-top.leaflet-right {
+      top: 80px;  /* Position below navbar (navbar is ~60px + 10px margin + 10px gap) */
+      right: 10px;
+    }
+    
+    /* Group zoom controls with drawing tools - minimal spacing */
+    .leaflet-control-zoom {
+      margin-top: 8px !important;
+      border-radius: 6px !important;
+      overflow: hidden;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2) !important;
+    }
+    
+    /* Make zoom buttons match drawing tool size */
+    .leaflet-control-zoom a {
+      width: 36px !important;
+      height: 36px !important;
+      line-height: 36px !important;
+      font-size: 20px !important;
+      font-weight: bold !important;
+    }
+    
+    /* Make drawing toolbar buttons larger and more accessible */
+    .leaflet-draw-toolbar a {
+      width: 36px !important;
+      height: 36px !important;
+      line-height: 36px !important;
+      font-size: 18px !important;
+    }
+    
+    .leaflet-draw-toolbar {
+      border-radius: 6px !important;
+      overflow: hidden;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2) !important;
+    }
+    
+    /* Visual feedback for active drawing tool */
+    .leaflet-draw-toolbar a.drawing-tool-active {
+      background-color: #667eea !important;
+      color: white !important;
+      box-shadow: inset 0 0 8px rgba(0,0,0,0.3) !important;
+    }
+    
+    /* Make the icon white when button is active (Leaflet uses background images) */
+    .leaflet-draw-toolbar a.drawing-tool-active {
+      filter: brightness(0) invert(1) !important;
+      /* First brightness(0) makes it black, then invert(1) makes it white */
+    }
+    
+    /* Override to keep background color while changing icon */
+    .leaflet-draw-draw-polyline.drawing-tool-active,
+    .leaflet-draw-draw-polygon.drawing-tool-active,
+    .leaflet-draw-draw-rectangle.drawing-tool-active {
+      background-color: #667eea !important;
+      position: relative;
+    }
+    
+    /* Use a pseudo-element for the colored background to avoid filter affecting it */
+    .leaflet-draw-draw-polyline.drawing-tool-active::before,
+    .leaflet-draw-draw-polygon.drawing-tool-active::before,
+    .leaflet-draw-draw-rectangle.drawing-tool-active::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #667eea;
+      z-index: -1;
+    }
+    
+    /* Add labels to drawing tools for clarity */
+    .leaflet-draw-draw-polyline::after,
+    .leaflet-draw-draw-polygon::after,
+    .leaflet-draw-draw-rectangle::after {
+      content: attr(title);
+      position: absolute;
+      right: 100%;
+      top: 50%;
+      transform: translateY(-50%);
+      background: rgba(0,0,0,0.8);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      white-space: nowrap;
+      margin-right: 8px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+    
+    .leaflet-draw-draw-polyline:hover::after,
+    .leaflet-draw-draw-polygon:hover::after,
+    .leaflet-draw-draw-rectangle:hover::after {
+      opacity: 1;
+    }
+    
+    /* Loading overlay - light tint to see progress dots */
+    .loading-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.15);  /* Much lighter - was 0.5, now 0.15 */
+      backdrop-filter: blur(1px);  /* Very subtle blur - just enough for depth */
+      z-index: 3000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;  /* Allow interaction with map underneath */
+    }
+    .loading-overlay.active {
+      display: flex;
+    }
+    .loading-spinner {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      text-align: center;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);  /* Add shadow for better visibility */
+      pointer-events: auto;  /* Re-enable interaction with spinner itself */
+    }
+    .spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #667eea;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 15px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    /* Edit Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 4000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-overlay.active {
+      display: flex;
+    }
+    .modal-content {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+      max-width: 900px;
+      width: 100%;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-header {
+      padding: 20px 25px;
+      border-bottom: 2px solid #667eea;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-header h3 {
+      margin: 0;
+      color: #333;
+      font-size: 18px;
+    }
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 32px;
+      color: #999;
+      cursor: pointer;
+      padding: 0;
+      width: 32px;
+      height: 32px;
+      line-height: 28px;
+      transition: color 0.2s;
+    }
+    .modal-close:hover {
+      color: #333;
+    }
+    .modal-body {
+      padding: 25px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .modal-footer {
+      padding: 15px 25px;
+      border-top: 1px solid #eee;
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+    .modal-form-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 15px;
+    }
+    .modal-form-field {
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-form-field.wide {
+      grid-column: span 2;
+    }
+    .modal-form-field.full {
+      grid-column: span 3;
+    }
+    .modal-form-field label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #555;
+      margin-bottom: 5px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .modal-form-field input,
+    .modal-form-field select {
+      padding: 8px 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .modal-form-field input:focus,
+    .modal-form-field select:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+    }
+    
+    /* Shapefile Editor Styles */
+    .edit-tool-btn {
+      transition: all 0.2s ease;
+      border: 1px solid #ccc !important;
+    }
+    .edit-tool-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      border-color: #007bff !important;
+    }
+    .edit-tool-btn:active {
+      transform: translateY(0);
+    }
+    
+    /* Custom scrollbar for layer control */
+    .layer-control::-webkit-scrollbar {
+      width: 8px;
+    }
+    .layer-control::-webkit-scrollbar-track {
+      background: #f1f1f1;
+      border-radius: 4px;
+    }
+    .layer-control::-webkit-scrollbar-thumb {
+      background: #888;
+      border-radius: 4px;
+    }
+    .layer-control::-webkit-scrollbar-thumb:hover {
+      background: #555;
+    }
+  </style>
+  <!-- Active styles for navbar dropdowns, toasts, and annotation count badge -->
+  <style>
+    /* Override .nav-links overflow so dropdown menus can pop out */
+    .nav-links, .nav-menus {
+      overflow: visible !important;
+    }
+    /* Left group: logo + menus flush together */
+    .nav-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .nav-left h1 {
+      margin: 0;
+    }
+    /* Left-side menu bar */
+    .nav-menus {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .nav-menus .nav-dropdown-btn {
+      border: none;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #555;
+    }
+    .nav-menus .nav-dropdown-btn:hover,
+    .nav-menus .nav-dropdown-btn.open {
+      background: #e8eaff;
+    }
+    /* --- Navbar dropdown menus --- */
+    .nav-dropdown {
+      position: relative;
+      display: inline-block;
+    }
+    .nav-dropdown-btn {
+      background: none;
+      border: 1px solid #dee2e6;
+      border-radius: 5px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #495057;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .nav-dropdown-btn:hover, .nav-dropdown-btn.open {
+      background: #f0f1ff;
+      border-color: #667eea;
+      color: #667eea;
+    }
+    .nav-dropdown-btn .caret {
+      font-size: 8px;
+      opacity: 0.6;
+    }
+    .nav-dropdown-menu {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 0;
+      min-width: 180px;
+      background: white;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+      z-index: 9000;
+      padding: 4px 0;
+      animation: navDropIn 0.12s ease-out;
+    }
+    .nav-dropdown-menu.open { display: block; }
+    @keyframes navDropIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .nav-dropdown-menu .dd-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 14px;
+      font-size: 12px;
+      color: #333;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.1s;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+    }
+    .nav-dropdown-menu .dd-item:hover {
+      background: #f0f1ff;
+      color: #667eea;
+    }
+    .nav-dropdown-menu .dd-item.danger { color: #dc3545; }
+    .nav-dropdown-menu .dd-item.danger:hover { background: #fff0f0; color: #dc3545; }
+    .nav-dropdown-menu .dd-divider {
+      height: 1px;
+      background: #eee;
+      margin: 4px 0;
+    }
+    .nav-dropdown-menu .dd-label {
+      padding: 4px 14px 2px;
+      font-size: 10px;
+      font-weight: 700;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .nav-dropdown-menu kbd {
+      margin-left: auto;
+      font-size: 10px;
+      color: #aaa;
+      background: #f5f5f5;
+      padding: 1px 5px;
+      border-radius: 3px;
+      border: 1px solid #ddd;
+    }
+    /* Override .nav-links a for dropdown anchor items */
+    .nav-dropdown-menu a.dd-item {
+      text-decoration: none;
+      color: #333;
+      font-weight: normal;
+    }
+    .nav-dropdown-menu a.dd-item:hover {
+      color: #667eea;
+    }
+    /* --- Toast notifications --- */
+    #toastContainer {
+      position: fixed;
+      top: 56px;
+      right: 14px;
+      z-index: 11000;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      pointer-events: none;
+    }
+    .cat-toast {
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+      animation: toastIn 0.25s ease-out;
+      max-width: 340px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .cat-toast:hover { opacity: 0.85; }
+    .cat-toast.success { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
+    .cat-toast.error   { background: #fef2f2; color: #991b1b; border: 1px solid #fca5a5; }
+    .cat-toast.warning { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
+    .cat-toast.info    { background: #eff6ff; color: #1e40af; border: 1px solid #93c5fd; }
+    .cat-toast.exit    { animation: toastOut 0.2s ease-in forwards; }
+    @keyframes toastIn  { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
+    @keyframes toastOut { to   { opacity: 0; transform: translateX(30px); } }
+    /* Annotation count badge in navbar */
+    #navAnnotationCount {
+      padding: 3px 8px;
+      background: rgba(102,126,234,0.12);
+      color: #667eea;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <!-- Left group: logo + menus together -->
+    <div class="nav-left">
+      <h1>
+        <img src="/logo.png" alt="CAT">
+        <span class="cat-text">CAT</span>
+      </h1>
+      <div class="nav-menus">
+        <div class="nav-dropdown" data-dropdown="file">
+          <button class="nav-dropdown-btn" onclick="toggleNavDropdown('file')">File <span class="caret">▾</span></button>
+          <div class="nav-dropdown-menu" id="dd-file" style="left:0;right:auto;">
+            <button class="dd-item" onclick="saveAnnotation(); closeNavDropdowns();">💾 Save Annotation <kbd>Ctrl+S</kbd></button>
+            <button class="dd-item" onclick="if(typeof saveProject==='function') saveProject(); closeNavDropdowns();">💾 Save Project</button>
+            <div class="dd-divider"></div>
+            <button class="dd-item" onclick="if(typeof exportGeoJSON==='function') exportGeoJSON(); closeNavDropdowns();">🌐 Export GeoJSON</button>
+            <button class="dd-item" onclick="if(typeof exportCSV==='function') exportCSV(); closeNavDropdowns();">📊 Export CSV</button>
+            <button class="dd-item" onclick="if(typeof exportShapefile==='function') exportShapefile(); closeNavDropdowns();">📦 Export Shapefile</button>
+            <div class="dd-divider"></div>
+            <button class="dd-item danger" onclick="if(typeof clearAllAnnotations==='function') clearAllAnnotations(); closeNavDropdowns();">🗑️ Clear All Annotations</button>
+          </div>
+        </div>
+        <div class="nav-dropdown" data-dropdown="view">
+          <button class="nav-dropdown-btn" onclick="toggleNavDropdown('view')">View <span class="caret">▾</span></button>
+          <div class="nav-dropdown-menu" id="dd-view" style="left:0;right:auto;">
+            <button class="dd-item" onclick="toggleLayoutMode(); closeNavDropdowns();" id="ddLayoutToggle">⬛ Dock Right</button>
+            <button class="dd-item" onclick="document.getElementById('toggleLabels').click(); closeNavDropdowns();">🏷️ Toggle Labels</button>
+            <button class="dd-item" onclick="if(typeof refreshAnnotations==='function') refreshAnnotations(); closeNavDropdowns();">🔄 Refresh Annotations</button>
+          </div>
+        </div>
+        <div class="nav-dropdown" data-dropdown="info">
+          <button class="nav-dropdown-btn" onclick="toggleNavDropdown('info')">Info <span class="caret">▾</span></button>
+          <div class="nav-dropdown-menu" id="dd-info" style="left:0;right:auto;">
+            <div class="dd-label">Session</div>
+            <div class="dd-item" style="cursor:default;">
+              <span>👤</span>
+              <span id="currentUserBadge" style="display:none;font-size:12px;color:#667eea;font-weight:500;"><span id="currentUsername"></span></span>
+              <span id="noUserPlaceholder" style="color:#999;font-size:11px;">No user set</span>
+            </div>
+            <div class="dd-item" style="cursor:default;">
+              <span>📊</span>
+              <span id="totalTimeDisplay" style="display:none;font-size:12px;color:#667eea;font-family:'Courier New',monospace;">Total: <span id="totalTime">0h 0m</span></span>
+              <span id="noTimePlaceholder" style="color:#999;font-size:11px;">No time tracked</span>
+            </div>
+            <div class="dd-divider"></div>
+            <button class="dd-item" onclick="if(typeof catShowShortcuts==='function') catShowShortcuts(); closeNavDropdowns();">⌨️ Keyboard Shortcuts <kbd>?</kbd></button>
+            <div class="dd-divider"></div>
+            <a class="dd-item" href="/project_creator.html">📁 Projects</a>
+          </div>
+        </div>
+        <div class="nav-dropdown" data-dropdown="settings">
+          <button class="nav-dropdown-btn" onclick="toggleNavDropdown('settings')">Settings <span class="caret">▾</span></button>
+          <div class="nav-dropdown-menu" id="dd-settings" style="left:0;right:auto;">
+            <div class="dd-label">Project</div>
+            <button class="dd-item" onclick="openSpeciesFilterSettings(); closeNavDropdowns();">🐠 Species Filters</button>
+            <button class="dd-item" onclick="if(typeof v2CaptureDefaults==='function'){ document.getElementById('defaultsBar')&&(document.getElementById('defaultsBar').style.display='flex'); } closeNavDropdowns();" title="Set default values for new annotations">🎨 Annotation Defaults</button>
+            <div class="dd-divider"></div>
+            <div class="dd-label">Application</div>
+            <button class="dd-item" onclick="openAutoSaveSettings(); closeNavDropdowns();">💾 Auto-save Preferences</button>
+            <button class="dd-item" onclick="openTimerSettings(); closeNavDropdowns();">⏱️ Timer</button>
+            <button class="dd-item disabled" style="opacity:0.5;cursor:default;" title="Coming soon">🤖 SAM / AI Model</button>
+            <button class="dd-item disabled" style="opacity:0.5;cursor:default;" title="Coming soon">🗺️ Map &amp; Display</button>
+            <button class="dd-item disabled" style="opacity:0.5;cursor:default;" title="Coming soon">📊 Export Defaults</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right side: status items -->
+    <div class="nav-links">
+      <span id="annotationTimer" style="display:none; padding: 4px 8px; background: rgba(40, 167, 69, 0.1); color: #28a745; border-radius: 4px; font-size: 12px; font-weight: 500; font-family: 'Courier New', monospace; cursor: pointer; white-space: nowrap;" title="Click to pause/resume timer">⏱️ <span id="timerDisplay">00:00</span></span>
+      <span id="navAnnotationCount" title="Annotations in this project">0</span>
+      <span id="autoSaveBadge" style="display:none; padding: 4px 8px; background: rgba(40,167,69,0.1); color: #28a745; border-radius: 4px; font-size: 12px; font-weight: 500; white-space: nowrap;" title="Auto-save status">✅ Saved</span>
+      <button id="undoBtn" onclick="undoLastAction()" disabled title="Undo (Ctrl+Z)" style="background:none;border:1px solid #dee2e6;border-radius:4px;padding:3px 6px;cursor:pointer;font-size:12px;color:#495057;opacity:0.5;" onmouseover="if(!this.disabled)this.style.opacity='1'" onmouseout="if(!this.disabled)this.style.opacity='0.85'">↩</button>
+      <button id="redoBtn" onclick="redoLastAction()" disabled title="Redo (Ctrl+Y)" style="background:none;border:1px solid #dee2e6;border-radius:4px;padding:3px 6px;cursor:pointer;font-size:12px;color:#495057;opacity:0.5;" onmouseover="if(!this.disabled)this.style.opacity='1'" onmouseout="if(!this.disabled)this.style.opacity='0.85'">↪</button>
+      <button id="saveProjectBtn" class="btn btn-success" style="display:none; padding: 5px 10px; font-size: 12px; white-space: nowrap;">💾 Save</button>
+      <a href="/" style="padding: 5px 10px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 5px; color: #e2e8f0; font-size: 12px; text-decoration: none; white-space: nowrap; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.18)'" onmouseout="this.style.background='rgba(255,255,255,0.08)'" title="Back to Home">🏠 Home</a>
+    </div>
+  </nav>
+
+  <div id="layout-resize-handle"></div>
+  <!-- Drawing hints bar — shown while actively placing vertices -->
+  <div id="drawingHintsBar" style="display:none; position:fixed; top:0; left:50%; transform:translateX(-50%); z-index:10000; padding:6px 18px; background:rgba(30,30,30,0.92); color:#fff; font-size:12px; border-radius:0 0 8px 8px; box-shadow:0 2px 8px rgba(0,0,0,0.3); pointer-events:none; white-space:nowrap;">
+    <kbd style="background:rgba(255,255,255,0.15);padding:1px 5px;border-radius:3px;font-size:11px;">Esc</kbd> cancel
+    &nbsp;&middot;&nbsp;
+    <kbd style="background:rgba(255,255,255,0.15);padding:1px 5px;border-radius:3px;font-size:11px;">Backspace</kbd> undo vertex
+    &nbsp;&middot;&nbsp;
+    <span id="drawingHintFinish">double-click to finish</span>
+  </div>
+  <div id="toastContainer"></div>
+  <div id="map"></div>
+  
+  <!-- Full Screen Loading Overlay -->
+  <div id="loadingOverlay" style="
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(10, 37, 64, 0.95);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    backdrop-filter: blur(4px);
+  ">
+    <div style="text-align: center; color: white; max-width: 500px; padding: 40px;">
+      <div style="font-size: 48px; margin-bottom: 20px;" id="loadingIcon">⏳</div>
+      <div style="font-size: 24px; font-weight: 600; margin-bottom: 15px;" id="loadingTitle">Loading Project</div>
+      <div style="font-size: 16px; opacity: 0.9; line-height: 1.6;" id="loadingMessage">Initializing...</div>
+      <div style="margin-top: 25px; background: rgba(255,255,255,0.1); height: 4px; border-radius: 2px; overflow: hidden;">
+        <div id="loadingProgress" style="height: 100%; background: linear-gradient(90deg, #06b6d4, #0891b2); width: 0%; transition: width 0.3s;"></div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Upload Project Panel -->
+  <div class="layer-control" id="uploadPanel" style="display: block; top: 80px; width: 300px;">
+    <div class="panel-header">
+      <h4>📂 Load Project</h4>
+    </div>
+    <div class="panel-content" style="padding: 15px;">
+      <p style="margin-bottom: 10px; font-size: 13px; color: #666;">Upload your project JSON file to begin annotating.</p>
+      <input type="file" id="projectFileInput" accept=".json" style="display: block; width: 100%; margin-bottom: 10px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+      <button id="loadProjectBtn" class="btn btn-primary" style="width: 100%;">Load Project</button>
+      <div id="uploadStatus" style="margin-top: 15px; padding: 10px; border-radius: 6px; background: rgba(255,255,255,0.05);"></div>
+    </div>
+  </div>
+  
+  <!-- Combined Map Layers Panel -->
+  <div class="layer-control" id="mapLayersPanel" style="display: none;">
+    <div class="panel-header" onclick="togglePanel('mapLayersPanel')">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <h4>🗺️ Map Layers</h4>
+        <span id="mapLayersSiteBadge" style="font-size: 10px; font-weight: 600; padding: 3px 8px; background: rgba(102, 126, 234, 0.15); color: #667eea; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.5px;">No Site</span>
+      </div>
+      <span class="collapse-icon">▼</span>
+    </div>
+    <div class="panel-content" id="mapLayersContent">
+      
+      <!-- Map File Section -->
+      <div class="layer-section" id="mapFileSection">
+        <div class="section-title" onclick="toggleSection('mapFileSection')" style="cursor: pointer; display: flex; justify-content: space-between; align-items: center;">
+          <span>📷 Map Files</span>
+          <span class="section-collapse-icon">▼</span>
+        </div>
+        <div class="section-content">
+          <select id="cogSelect" onchange="loadSelectedCOG()" style="width: 100%; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px;">
+            <option value="">Loading...</option>
+          </select>
+        </div>
+      </div>
+      
+      <!-- Layer Controls Section -->
+      <div class="layer-section" id="layerControlsSection">
+        <div class="section-title" onclick="toggleSection('layerControlsSection')" style="cursor: pointer; display: flex; justify-content: space-between; align-items: center;">
+          <span>⚙️ Layer Controls</span>
+          <span class="section-collapse-icon">▼</span>
+        </div>
+        <div class="section-content">
+    
+    <!-- Map Files Section - Dynamic TIF Layers -->
+    <div id="mapFileSection">
+      <div class="layer-subsection-title"></div>
+      <!-- TIF layers will be dynamically added here by loadProjectLayers() -->
+      
+      <!-- Shapefile Layers (Multiple) - Added here so they're grouped with map files -->
+      <div id="shapefileLayersContainer">
+        <!-- Shapefile layers will be dynamically added here -->
+      </div>
+    </div>
+    
+    <!-- Annotations Layer -->
+    <div class="layer-item">
+      <div class="layer-header" onclick="toggleLayerDetails('annotationsDetails')" style="cursor: pointer;">
+        <div class="layer-name">
+          <span>✏️</span>
+          <span>Annotations</span>
+          <span class="layer-collapse-icon" id="annotationsDetailsIcon">▼</span>
+        </div>
+        <label class="layer-toggle" onclick="event.stopPropagation();">
+          <input type="checkbox" id="toggleAnnotations" checked onchange="toggleAnnotationsLayer()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="layer-details" id="annotationsDetails">
+        <div class="opacity-control">
+          <label>Opacity: <span id="annotationsOpacityValue">80</span>%</label>
+          <input type="range" class="opacity-slider" id="annotationsOpacity" min="0" max="100" value="80" oninput="setAnnotationsOpacity(this.value)">
+        </div>
+        <div class="opacity-control" style="margin-top: 8px;">
+          <label>Line Width: <span id="lineWidthValue">7</span>px</label>
+          <input type="range" class="opacity-slider" id="lineWidth" min="1" max="10" value="7" oninput="setLineWidth(this.value)">
+        </div>
+        <div class="opacity-control" style="margin-top: 8px;">
+          <label style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="toggleLabels" onchange="toggleAnnotationLabels(this.checked)" style="width: auto; margin: 0;" checked>
+            <span>Show Species Labels</span>
+          </label>
+        </div>
+      </div>
+    </div>
+    
+    </div> <!-- End section-content -->
+    </div> <!-- End Layer Controls Section -->
+    </div> <!-- End panel-content -->
+  </div> <!-- End Map Layers Panel -->
+  
+  <!-- Statistics Panel -->
+  <div class="stats-panel" id="statsPanel" style="display: none;">
+    <h4>📊 Statistics</h4>
+    <div class="stat-row">
+      <span class="stat-label">Total:</span>
+      <span class="stat-value" id="statTotal">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Lines:</span>
+      <span class="stat-value" id="statLines">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Boxes:</span>
+      <span class="stat-value" id="statBoxes">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Polygons:</span>
+      <span class="stat-value" id="statPolygons">0</span>
+    </div>
+  </div>
+  
+  <!-- Annotation Form Panel - Horizontal Layout -->
+  <div class="annotation-panel" id="annotationFormPanel" style="display: none;">
+    <!-- Form Section -->
+    <div style="margin-bottom: 2px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; padding: 6px 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;" onclick="toggleAnnotationSection('formSection')">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <h3 style="margin: 0; font-size: 15px;">✏️ Annotation Form</h3>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span id="drawingModeIndicator" style="display:none;font-size:9px;font-weight:600;padding:2px 6px;border-radius:10px;background:#667eea;color:white;"></span>
+            <div style="font-size: 9px; color: #6c757d;">Press <kbd style="background: white; padding: 1px 4px; border-radius: 2px; border: 1px solid #ccc; font-size: 9px;">Ctrl+S</kbd> to save</div>
+          </div>
+        </div>
+        <span class="section-collapse-icon" id="formSectionIcon">▼</span>
+      </div>
+      
+      <div id="formSectionContent" class="section-content">
+        <div class="form-container">
+      <!-- Core Fields -->
+      <div class="form-group">
+        <div class="form-section">
+          <label>Analyst * <span style="font-size:9px;color:#6c757d;font-weight:normal;">(session)</span></label>
+          <input type="text" id="analyst" placeholder="NAME" maxlength="10" required />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Year * <span style="font-size:9px;color:#6c757d;font-weight:normal;">(session)</span></label>
+          <input type="number" id="obs_year" placeholder="2026" min="2000" max="2100" required />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Mission ID * <span style="font-size:9px;color:#6c757d;font-weight:normal;">(session)</span></label>
+          <input type="text" id="mission_id" placeholder="CRUISEID" required />
+        </div>
+      </div>
+      
+      <div class="form-group wide">
+        <div class="form-section">
+          <label>Site * <span style="font-size:9px;color:#6c757d;font-weight:normal;">(session)</span></label>
+          <input type="text" id="site" placeholder="SITE" required />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Transect</label>
+          <select id="transect">
+            <option value="">-</option>
+            <option value="A" selected>A</option>
+            <option value="B">B</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Segment</label>
+          <select id="segment">
+            <option value="">-</option>
+            <option value="0">0</option>
+            <option value="5">5</option>
+            <option value="10">10</option>
+            <option value="15">15</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Seg Length</label>
+          <input type="number" id="seglength" placeholder="" step="0.1" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Seg Width</label>
+          <input type="number" id="segwidth" placeholder="" step="0.1" />
+        </div>
+      </div>
+      
+      <!-- Copy from last annotation -->
+      <div class="form-group">
+        <button type="button" id="copyLastBtn" onclick="copyFromLastAnnotation()"
+          title="Copy species & condition fields from the most recently saved annotation"
+          style="width:100%;padding:5px 10px;background:#f0f4ff;border:1px solid #c0caf0;border-radius:4px;cursor:pointer;font-size:12px;color:#3355aa;">
+          ⎘ Copy Last Annotation
+        </button>
+      </div>
+
+      <!-- Species & Colony -->
+      <div class="form-group">
+        <div class="form-section">
+          <label>Species <small style="color: #888;">(type to search)</small></label>
+          <div class="autocomplete-wrapper">
+            <input type="text" id="spcode" placeholder="PLOB or Porites lobata" maxlength="50" autocomplete="off" />
+            <div id="species-autocomplete" class="autocomplete-dropdown"></div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Morphology</label>
+          <select id="morph_code">
+            <option value="">-</option>
+            <option value="BR">BR - Branching</option>
+            <option value="CO">CO - Columnar</option>
+            <option value="EN">EN - Encrusting</option>
+            <option value="FO">FO - Foliaceous</option>
+            <option value="FL">FL - Free-living</option>
+            <option value="LA">LA - Laminar</option>
+            <option value="MD">MD - Mounding</option>
+            <option value="MA">MA - Massive</option>
+            <option value="PL">PL - Plating</option>
+            <option value="SM">SM - Submassive</option>
+            <option value="SO">SO - Solitary</option>
+            <option value="TB">TB - Tabular</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>No Colony</label>
+          <select id="no_colony">
+            <option value="0">No</option>
+            <option value="-1">Yes</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Juvenile</label>
+          <select id="juvenile">
+            <option value="0">No</option>
+            <option value="-1">Yes</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>JUV_SUBSTRATE <small style="color: #888;">(type to search)</small></label>
+          <div class="autocomplete-wrapper">
+            <input type="text" id="juv_substrate" placeholder="" maxlength="50" autocomplete="off" />
+            <div id="juv-substrate-autocomplete" class="autocomplete-dropdown"></div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Remnant</label>
+          <select id="remnant">
+            <option value="0">No</option>
+            <option value="-1">Yes</option>
+          </select>
+        </div>
+      </div>
+      
+      <!-- Fragment field commented out - not used anymore
+      <div class="form-group">
+        <div class="form-section">
+          <label>Fragment</label>
+          <select id="fragment">
+            <option value="0">No</option>
+            <option value="-1">Yes</option>
+          </select>
+        </div>
+      </div>
+      -->
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Ex. Bound</label>
+          <select id="ex_bound">
+            <option value="0">No</option>
+            <option value="-1">Yes</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Old Dead %</label>
+          <input type="number" id="olddead" placeholder="" min="0" max="100" />
+        </div>
+      </div>
+      
+      <!-- Recent Dead -->
+      <div class="form-group">
+        <div class="form-section">
+          <label>RD Cause 1</label>
+          <input type="text" id="rdcause1" placeholder="" maxlength="10" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>RD 1 %</label>
+          <input type="number" id="rd_1" placeholder="" min="0" max="100" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>RD Cause 2</label>
+          <input type="text" id="rdcause2" maxlength="10" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>RD 2 %</label>
+          <input type="number" id="rd_2" min="0" max="100" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>RD Cause 3</label>
+          <input type="text" id="rdcause3" maxlength="10" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>RD 3 %</label>
+          <input type="number" id="rd_3" min="0" max="100" />
+        </div>
+      </div>
+      
+      <!-- Health Conditions -->
+      <div class="form-group">
+        <div class="form-section">
+          <label>Condition 1</label>
+          <input type="text" id="con_1" placeholder="" maxlength="10" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Extent 1 %</label>
+          <input type="number" id="extent_1" placeholder="" min="0" max="100" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Severity 1</label>
+          <input type="number" id="sev_1" placeholder="" min="1" max="5" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Condition 2</label>
+          <input type="text" id="con_2" maxlength="10" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Extent 2 %</label>
+          <input type="number" id="extent_2" min="0" max="100" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Severity 2</label>
+          <input type="number" id="sev_2" min="1" max="5" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Condition 3</label>
+          <input type="text" id="con_3" maxlength="10" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Extent 3 %</label>
+          <input type="number" id="extent_3" min="0" max="100" />
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <div class="form-section">
+          <label>Severity 3</label>
+          <input type="number" id="sev_3" min="1" max="5" />
+        </div>
+      </div>
+      
+      <!-- Action Buttons -->
+      <div class="form-group" style="display: flex; gap: 5px; align-items: flex-end;">
+        <button class="btn btn-primary" onclick="saveAnnotation()" style="padding: 6px 15px; font-size: 12px;">💾 Save</button>
+        <button class="btn btn-secondary" onclick="clearForm()" style="padding: 6px 15px; font-size: 12px;">🔄 Clear Form</button>
+        <button class="btn btn-danger" id="discardAnnotationBtn" onclick="discardCurrentAnnotation()" style="padding: 6px 15px; font-size: 12px; display: none;">✖ Discard</button>
+      </div>
+    </div>
+    
+    <div id="statusMessage" class="status"></div>
+    
+    <!-- Annotations List Section -->
+    <div style="margin-bottom: 2px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; padding: 8px; background: #f8f9fa; border-radius: 4px; cursor: pointer;" onclick="toggleAnnotationSection('annotationsListSection')">
+        <div style="display: flex; align-items: center; gap: 15px;">
+          <h3 style="margin: 0; font-size: 15px;">📋 Annotations (<span id="annotationCount">0</span>)</h3>
+        </div>
+        <span class="section-collapse-icon" id="annotationsListSectionIcon">▼</span>
+      </div>
+      
+      <div id="annotationsListSectionContent" class="section-content">
+        <div id="annotationStats" style="display:none;padding:4px 8px;margin-bottom:4px;background:linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%);border:1px solid #bae6fd;border-radius:4px;font-size:11px;color:#0c4a6e;"></div>
+
+        <div style="padding: 4px 0 6px 0;">
+          <input type="text" id="annotationTableFilter" placeholder="🔍 Filter by species, site, analyst…"
+            oninput="filterAnnotationTable(this.value)"
+            style="width:100%;padding:4px 8px;font-size:11px;border:1px solid #dee2e6;border-radius:4px;box-sizing:border-box;" />
+        </div>
+
+        <div class="annotation-table-container">
+          <table class="annotation-table" id="annotationTable">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Type</th>
+            <th>Site</th>
+            <th>Species</th>
+            <th>Juvenile</th>
+            <th>JUV_SUBSTRATE</th>
+            <th>Analyst</th>
+            <th>Year</th>
+            <th>Mission</th>
+            <th>Segment</th>
+            <th>Transect</th>
+            <th>Morph</th>
+            <th>Old Dead %</th>
+            <th>Remnant</th>
+            <th>Fragment</th>
+            <th>Ex Bound</th>
+            <th>No Colony</th>
+            <th>Seg Length</th>
+            <th>Seg Width</th>
+            <th>Line Length (m)</th>
+            <th>RD Cause 1</th>
+            <th>RD 1 %</th>
+            <th>RD Cause 2</th>
+            <th>RD 2 %</th>
+            <th>RD Cause 3</th>
+            <th>RD 3 %</th>
+            <th>Condition 1</th>
+            <th>Extent 1</th>
+            <th>Severity 1</th>
+            <th>Condition 2</th>
+            <th>Extent 2</th>
+            <th>Severity 2</th>
+            <th>Condition 3</th>
+            <th>Extent 3</th>
+            <th>Severity 3</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="annotationTableBody">
+          <tr>
+            <td colspan="35" style="text-align: center; padding: 20px; color: #6c757d;">
+              No annotations yet - draw on the map to create one
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Loading Overlay -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-spinner">
+      <div class="spinner"></div>
+      <div>Loading...</div>
+    </div>
+  </div>
+
+  <!-- Layer Management Modal -->
+  <div class="modal-overlay" id="layerManagementModal" style="display: none;">
+    <div class="modal-content" style="max-width: 700px;">
+      <div class="modal-header">
+        <h3>🗂️ Manage Overlay Layers</h3>
+        <button class="modal-close" onclick="closeLayerManagementModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="margin-bottom: 15px; color: #aaa; font-size: 13px;">
+          Drag layers to reorder. Toggle visibility with checkboxes. Delete unwanted layers.
+        </div>
+        <div id="layerManagementList" style="max-height: 400px; overflow-y: auto;">
+          <!-- Layer items will be inserted here -->
+        </div>
+        <div id="layerManagementEmpty" style="text-align: center; padding: 40px; color: #666;">
+          No overlay layers found. Upload a shapefile to get started.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="saveLayerManagement()">💾 Save Changes</button>
+        <button class="btn btn-secondary" onclick="closeLayerManagementModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Modal -->
+  <div class="modal-overlay" id="editModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>✏️ Edit Annotation #<span id="editModalId"></span></h3>
+        <button class="modal-close" onclick="closeEditModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="editFormContainer"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="saveEditedAnnotation()">💾 Save Changes</button>
+        <button class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/cat-ui-utils.js"></script>
+  <script>
+  // --- Navbar dropdown logic ---
+  function toggleNavDropdown(name) {
+    const menu = document.getElementById('dd-' + name);
+    const btn = menu?.previousElementSibling;
+    const wasOpen = menu?.classList.contains('open');
+    closeNavDropdowns();
+    if (!wasOpen && menu) {
+      menu.classList.add('open');
+      if (btn) btn.classList.add('open');
+    }
+  }
+  function closeNavDropdowns() {
+    document.querySelectorAll('.nav-dropdown-menu.open').forEach(m => m.classList.remove('open'));
+    document.querySelectorAll('.nav-dropdown-btn.open').forEach(b => b.classList.remove('open'));
+  }
+  // Close dropdowns on click outside
+  document.addEventListener('mousedown', function(e) {
+    if (!e.target.closest('.nav-dropdown')) closeNavDropdowns();
+  });
+
+  // --- Toast notification system (replaces inline showStatus) ---
+  (function() {
+    const TOAST_DURATION = { success: 2200, info: 3000, warning: 4000, error: 6000 };
+    // Expose as _catToast so runtime-operations.js local showStatus() can delegate
+    // Also set window.showStatus for scripts that call it directly
+    window._catToast = toastShowStatus;
+    window.showStatus = toastShowStatus;
+    function toastShowStatus(message, type) {
+      type = type || 'info';
+      // For routine success saves, just flash the autosave badge — no toast
+      if (type === 'success' && /annotation saved|saved!/i.test(message)) {
+        flashAutoSaveBadge(message);
+        return;
+      }
+      createToast(message, type);
+    };
+
+    function createToast(message, type) {
+      const container = document.getElementById('toastContainer');
+      if (!container) return;
+      const el = document.createElement('div');
+      el.className = 'cat-toast ' + type;
+      // Strip emoji prefix for cleaner look (keep if it's the whole message)
+      el.textContent = message;
+      el.onclick = () => dismissToast(el);
+      container.appendChild(el);
+      // Auto-dismiss
+      const dur = TOAST_DURATION[type] || 3000;
+      setTimeout(() => dismissToast(el), dur);
+      // Cap at 4 toasts visible
+      while (container.children.length > 4) {
+        dismissToast(container.firstElementChild);
+      }
+    }
+
+    function dismissToast(el) {
+      if (!el || el.classList.contains('exit')) return;
+      el.classList.add('exit');
+      setTimeout(() => el.remove(), 220);
+    }
+
+    function flashAutoSaveBadge(message) {
+      const badge = document.getElementById('autoSaveBadge');
+      if (!badge) return;
+      // Extract count if present (e.g. "Total: 12")
+      const countMatch = message.match(/Total:\s*(\d+)/i);
+      if (countMatch) updateNavAnnotationCount(parseInt(countMatch[1]));
+      badge.style.display = '';
+      badge.textContent = '✅ Saved';
+      badge.style.background = 'rgba(40,167,69,0.2)';
+      badge.style.transition = 'background 0.6s';
+      setTimeout(() => { badge.style.background = 'rgba(40,167,69,0.1)'; }, 600);
+    }
+
+    // Annotation count badge in navbar
+    window.updateNavAnnotationCount = function(count) {
+      const el = document.getElementById('navAnnotationCount');
+      if (!el) return;
+      if (count > 0) {
+        el.textContent = count + ' annotation' + (count !== 1 ? 's' : '');
+        el.style.display = '';
+      } else {
+        el.style.display = 'none';
+      }
+    };
+  })();
+  </script>
+  <script src="js/annotation-undo.js"></script>
+  <script src="js/annotation-runtime-core.js"></script>
+  <script src="js/annotation-runtime-autosave.js"></script>
+  <script src="js/annotation-runtime-user.js"></script>
+  <script src="js/annotation-runtime-project-layers.js"></script>
+  <script src="js/annotation-runtime-annotations.js"></script>
+  <script src="js/annotation-runtime-shell-init.js"></script>
+  <script src="js/annotation-runtime-layer-controls.js"></script>
+  <script src="js/annotation-runtime-panel-ui.js"></script>
+  <script src="js/annotation-runtime-sam3-grid.js"></script>
+  <script src="js/annotation-runtime-inputs-init.js"></script>
+  <script src="js/annotation-runtime-operations.js"></script>
+  <script src="js/annotation-overlay-layers.js"></script>
+  <!-- Enhancement modules (merged from v2) -->
+  <script src="js/v2-bulk.js"></script>
+  <script src="js/v2-table.js"></script>
+  <script src="js/v2-defaults.js"></script>
+
+  <!-- ============================================================ -->
+  <!--  Species Filter Settings Modal                                -->
+  <!-- ============================================================ -->
+  <div id="speciesFilterModal" style="
+    display:none; position:fixed; inset:0; z-index:20000;
+    background:rgba(0,0,0,0.5); backdrop-filter:blur(3px);
+    align-items:center; justify-content:center;
+  ">
+    <div style="
+      background:#fff; border-radius:12px; max-width:520px; width:92%;
+      box-shadow:0 20px 60px rgba(0,0,0,0.3); padding:0; overflow:hidden;
+    ">
+      <!-- Header -->
+      <div style="padding:18px 24px; background:linear-gradient(135deg,#0a2540,#1a365d); color:#fff;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h3 style="margin:0; font-size:16px;">⚙️ Species Filter Settings</h3>
+          <button onclick="closeSpeciesFilterModal()" style="background:none; border:none; color:#fff; font-size:20px; cursor:pointer; padding:0 4px;">✕</button>
+        </div>
+        <div style="font-size:12px; opacity:0.8; margin-top:4px;">Filter the species autocomplete list per-project</div>
+      </div>
+      <!-- Body -->
+      <div style="padding:20px 24px; max-height:60vh; overflow-y:auto;">
+        <!-- Regions -->
+        <div style="margin-bottom:16px;">
+          <div style="font-weight:600; font-size:13px; color:#374151; margin-bottom:8px;">🌏 Region Filters</div>
+          <div style="font-size:12px; color:#6b7280; margin-bottom:10px;">Enable regions to show only species found there. If none are selected all species are shown.</div>
+          <div id="sfRegionToggles" style="display:grid; grid-template-columns:1fr 1fr; gap:6px;"></div>
+        </div>
+        <!-- Flags -->
+        <div style="margin-bottom:16px;">
+          <div style="font-weight:600; font-size:13px; color:#374151; margin-bottom:8px;">🏷️ Flag Filters</div>
+          <div id="sfFlagToggles" style="display:grid; gap:6px;"></div>
+        </div>
+        <!-- Preview -->
+        <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:12px; font-size:12px; color:#6b7280;">
+          <span id="sfPreviewCount">Loading...</span>
+        </div>
+      </div>
+      <!-- Footer -->
+      <div style="padding:14px 24px; border-top:1px solid #e5e7eb; display:flex; justify-content:space-between; align-items:center;">
+        <button onclick="resetSpeciesFilters()" style="padding:6px 14px; border:1px solid #d1d5db; background:#fff; border-radius:6px; cursor:pointer; font-size:12px; color:#6b7280;">Reset All</button>
+        <div style="display:flex; gap:8px;">
+          <button onclick="closeSpeciesFilterModal()" style="padding:6px 14px; border:1px solid #d1d5db; background:#fff; border-radius:6px; cursor:pointer; font-size:12px;">Cancel</button>
+          <button onclick="saveSpeciesFilters()" style="padding:6px 14px; border:none; background:#2563eb; color:#fff; border-radius:6px; cursor:pointer; font-size:12px; font-weight:500;">💾 Save Filters</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  // ============================================================
+  //  Species Filter Settings — wired to project metadata
+  // ============================================================
+  (function () {
+    'use strict';
+
+    const REGION_LABELS = {
+      samoa: 'Samoa', marianas: 'Marianas', hawaii: 'Hawaiʻi',
+      johnston: 'Johnston', line_island: 'Line Islands',
+      phoenix: 'Phoenix', wake: 'Wake',
+    };
+    const FLAG_LABELS = {
+      hide_inactive: 'Hide inactive species',
+      adu_only: 'Adult-survey species only',
+      juv_only: 'Juvenile-survey species only',
+    };
+
+    // Active filters applied to autocomplete queries
+    window._speciesFilters = {};
+
+    // ── Open / close ──
+    window.openSpeciesFilterSettings = function () {
+      const modal = document.getElementById('speciesFilterModal');
+      modal.style.display = 'flex';
+      _buildToggles();
+      _updatePreview();
+    };
+    window.closeSpeciesFilterModal = function () {
+      document.getElementById('speciesFilterModal').style.display = 'none';
+    };
+
+    // ── Build toggle checkboxes ──
+    function _buildToggles() {
+      const saved = _loadFilters();
+
+      // Regions
+      const regionDiv = document.getElementById('sfRegionToggles');
+      regionDiv.innerHTML = '';
+      Object.entries(REGION_LABELS).forEach(([key, label]) => {
+        const checked = saved[key] ? 'checked' : '';
+        regionDiv.innerHTML += `
+          <label style="display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #e5e7eb;border-radius:6px;cursor:pointer;font-size:12px;background:#fff;">
+            <input type="checkbox" class="sf-toggle" data-key="${key}" ${checked}
+              onchange="document.dispatchEvent(new Event('sf-change'))" style="accent-color:#2563eb;">
+            ${label}
+          </label>`;
+      });
+
+      // Flags
+      const flagDiv = document.getElementById('sfFlagToggles');
+      flagDiv.innerHTML = '';
+      Object.entries(FLAG_LABELS).forEach(([key, label]) => {
+        const checked = saved[key] ? 'checked' : '';
+        flagDiv.innerHTML += `
+          <label style="display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #e5e7eb;border-radius:6px;cursor:pointer;font-size:12px;background:#fff;">
+            <input type="checkbox" class="sf-toggle" data-key="${key}" ${checked}
+              onchange="document.dispatchEvent(new Event('sf-change'))" style="accent-color:#2563eb;">
+            ${label}
+          </label>`;
+      });
+
+      // Live preview on change
+      document.addEventListener('sf-change', _updatePreview);
+    }
+
+    // ── Read current toggle states from modal ──
+    function _readToggles() {
+      const filters = {};
+      document.querySelectorAll('.sf-toggle').forEach(cb => {
+        if (cb.checked) filters[cb.dataset.key] = true;
+      });
+      return filters;
+    }
+
+    // ── Preview count ──
+    async function _updatePreview() {
+      const filters = _readToggles();
+      const qs = _filtersToQueryString(filters);
+      try {
+        const resp = await fetch(`/api/coral/species?${qs}`);
+        const data = await resp.json();
+        const el = document.getElementById('sfPreviewCount');
+        const anyFilter = Object.keys(filters).length > 0;
+        el.innerHTML = anyFilter
+          ? `<strong>${data.count}</strong> species match current filters (out of ~386 total)`
+          : `<strong>${data.count}</strong> species (no filters — showing all)`;
+      } catch (e) { console.warn('Preview fetch error', e); }
+    }
+
+    // ── Save ──
+    window.saveSpeciesFilters = async function () {
+      const filters = _readToggles();
+      window._speciesFilters = filters;
+
+      // Persist into project metadata
+      if (typeof currentProject !== 'undefined' && currentProject) {
+        if (!currentProject.metadata) currentProject.metadata = {};
+        currentProject.metadata.species_filters = filters;
+
+        // If DB project, also push to server
+        if (currentProject.project_id && typeof storageBackend !== 'undefined' && storageBackend === 'oracle') {
+          try {
+            await fetch(`/api/db/projects/${currentProject.project_id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ metadata: currentProject.metadata }),
+            });
+          } catch (e) { console.warn('Could not persist filters to DB:', e); }
+        }
+
+        // Mark unsaved for file-mode projects
+        if (typeof hasUnsavedChanges !== 'undefined') hasUnsavedChanges = true;
+      }
+
+      // Also store in localStorage as a fallback
+      try { localStorage.setItem('cat_species_filters', JSON.stringify(filters)); } catch (_) {}
+
+      closeSpeciesFilterModal();
+      if (typeof showStatus === 'function') showStatus('✅ Species filters saved', 'success');
+    };
+
+    // ── Reset ──
+    window.resetSpeciesFilters = function () {
+      document.querySelectorAll('.sf-toggle').forEach(cb => cb.checked = false);
+      document.dispatchEvent(new Event('sf-change'));
+    };
+
+    // ── Load filters from project metadata (or localStorage fallback) ──
+    function _loadFilters() {
+      if (typeof currentProject !== 'undefined' && currentProject?.metadata?.species_filters) {
+        window._speciesFilters = currentProject.metadata.species_filters;
+        return window._speciesFilters;
+      }
+      try {
+        const stored = localStorage.getItem('cat_species_filters');
+        if (stored) {
+          window._speciesFilters = JSON.parse(stored);
+          return window._speciesFilters;
+        }
+      } catch (_) {}
+      return window._speciesFilters || {};
+    }
+
+    // ── Convert filters dict to URL query string ──
+    function _filtersToQueryString(filters) {
+      const params = new URLSearchParams();
+      Object.entries(filters || {}).forEach(([k, v]) => {
+        if (v) params.set(k, '1');
+      });
+      return params.toString();
+    }
+
+    // Expose for use by annotation-form.js
+    window.getSpeciesFilterQueryString = function () {
+      return _filtersToQueryString(window._speciesFilters || {});
+    };
+
+    // Auto-load filters when project loads
+    const _origInterval = setInterval(() => {
+      if (typeof currentProject !== 'undefined' && currentProject) {
+        clearInterval(_origInterval);
+        _loadFilters();
+      }
+    }, 500);
+  })();
+  </script>
+
+  <!-- ============================================================ -->
+  <!--  Timer Settings Modal                                         -->
+  <!-- ============================================================ -->
+  <div id="timerSettingsModal" style="
+    display:none; position:fixed; inset:0; z-index:20000;
+    background:rgba(0,0,0,0.5); backdrop-filter:blur(3px);
+    align-items:center; justify-content:center;
+  ">
+    <div style="
+      background:#fff; border-radius:12px; max-width:480px; width:92%;
+      box-shadow:0 20px 60px rgba(0,0,0,0.3); overflow:hidden;
+    ">
+      <!-- Header -->
+      <div style="padding:18px 24px; background:linear-gradient(135deg,#0a2540,#1a365d); color:#fff;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h3 style="margin:0; font-size:16px;">⏱️ Timer Settings</h3>
+          <button onclick="closeTimerSettings()" style="background:none; border:none; color:#fff; font-size:20px; cursor:pointer; padding:0 4px;">✕</button>
+        </div>
+        <div style="font-size:12px; opacity:0.8; margin-top:4px;">Control how session and annotation timing works</div>
+      </div>
+      <!-- Body -->
+      <div style="padding:20px 24px;">
+        <!-- Auto-start -->
+        <label style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:8px; cursor:pointer; font-size:13px;">
+          <div>
+            <div style="font-weight:600; color:#374151;">▶️ Auto-start on project load</div>
+            <div style="font-size:11px; color:#9ca3af; margin-top:2px;">Timer begins automatically when a project opens</div>
+          </div>
+          <input type="checkbox" id="tsAutoStart" style="accent-color:#2563eb; width:18px; height:18px;">
+        </label>
+        <!-- Allow pause -->
+        <label style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:8px; cursor:pointer; font-size:13px;">
+          <div>
+            <div style="font-weight:600; color:#374151;">⏸️ Allow manual pause</div>
+            <div style="font-size:11px; color:#9ca3af; margin-top:2px;">Click the timer badge to pause/resume (handy for breaks)</div>
+          </div>
+          <input type="checkbox" id="tsAllowPause" checked style="accent-color:#2563eb; width:18px; height:18px;">
+        </label>
+        <!-- Idle auto-pause -->
+        <div style="padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:8px;">
+          <label style="display:flex; align-items:center; justify-content:space-between; cursor:pointer; font-size:13px;">
+            <div>
+              <div style="font-weight:600; color:#374151;">💤 Auto-pause on idle</div>
+              <div style="font-size:11px; color:#9ca3af; margin-top:2px;">Pause timer when no activity is detected</div>
+            </div>
+            <input type="checkbox" id="tsIdlePause" style="accent-color:#2563eb; width:18px; height:18px;">
+          </label>
+          <div id="tsIdleDelayRow" style="display:none; margin-top:8px; padding-top:8px; border-top:1px solid #f3f4f6;">
+            <label style="font-size:12px; color:#6b7280;">Idle timeout:
+              <select id="tsIdleDelay" style="margin-left:6px; padding:4px 8px; border:1px solid #d1d5db; border-radius:4px; font-size:12px;">
+                <option value="60">1 minute</option>
+                <option value="120">2 minutes</option>
+                <option value="300" selected>5 minutes</option>
+                <option value="600">10 minutes</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <!-- Show per-annotation time -->
+        <label style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:8px; cursor:pointer; font-size:13px;">
+          <div>
+            <div style="font-weight:600; color:#374151;">📝 Track per-annotation time</div>
+            <div style="font-size:11px; color:#9ca3af; margin-top:2px;">Record how long each individual annotation takes</div>
+          </div>
+          <input type="checkbox" id="tsPerAnnotation" checked style="accent-color:#2563eb; width:18px; height:18px;">
+        </label>
+        <!-- Current status -->
+        <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:12px; font-size:12px; color:#6b7280; margin-top:4px;">
+          <span id="tsStatusText">Timer is not running</span>
+        </div>
+      </div>
+      <!-- Footer -->
+      <div style="padding:14px 24px; border-top:1px solid #e5e7eb; display:flex; justify-content:space-between; align-items:center;">
+        <button onclick="resetTimerSettings()" style="padding:6px 14px; border:1px solid #d1d5db; background:#fff; border-radius:6px; cursor:pointer; font-size:12px; color:#6b7280;">Reset Defaults</button>
+        <div style="display:flex; gap:8px;">
+          <button onclick="closeTimerSettings()" style="padding:6px 14px; border:1px solid #d1d5db; background:#fff; border-radius:6px; cursor:pointer; font-size:12px;">Cancel</button>
+          <button onclick="saveTimerSettings()" style="padding:6px 14px; border:none; background:#2563eb; color:#fff; border-radius:6px; cursor:pointer; font-size:12px; font-weight:500;">💾 Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!--  Auto-save Preferences Modal                                  -->
+  <!-- ============================================================ -->
+  <div id="autoSaveSettingsModal" style="
+    display:none; position:fixed; inset:0; z-index:20000;
+    background:rgba(0,0,0,0.5); backdrop-filter:blur(3px);
+    align-items:center; justify-content:center;
+  ">
+    <div style="
+      background:#fff; border-radius:12px; max-width:480px; width:92%;
+      box-shadow:0 20px 60px rgba(0,0,0,0.3); overflow:hidden;
+    ">
+      <!-- Header -->
+      <div style="padding:18px 24px; background:linear-gradient(135deg,#0a2540,#1a365d); color:#fff;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h3 style="margin:0; font-size:16px;">💾 Auto-save Preferences</h3>
+          <button onclick="closeAutoSaveSettings()" style="background:none; border:none; color:#fff; font-size:20px; cursor:pointer; padding:0 4px;">✕</button>
+        </div>
+        <div style="font-size:12px; opacity:0.8; margin-top:4px;">Configure automatic saving for database projects</div>
+      </div>
+      <!-- Body -->
+      <div style="padding:20px 24px;">
+        <!-- Enable auto-save -->
+        <label style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:8px; cursor:pointer; font-size:13px;">
+          <div>
+            <div style="font-weight:600; color:#374151;">⚡ Enable auto-save</div>
+            <div style="font-size:11px; color:#9ca3af; margin-top:2px;">Automatically save annotations to the database</div>
+          </div>
+          <input type="checkbox" id="asEnabled" checked style="accent-color:#2563eb; width:18px; height:18px;">
+        </label>
+        <!-- Interval -->
+        <div style="padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:8px;">
+          <div style="font-weight:600; color:#374151; font-size:13px;">🕐 Save interval</div>
+          <div style="font-size:11px; color:#9ca3af; margin-top:2px; margin-bottom:8px;">How often unsaved changes are pushed to the database</div>
+          <div id="asIntervalOptions" style="display:grid; grid-template-columns:repeat(4,1fr); gap:6px;">
+            <label style="display:flex; align-items:center; justify-content:center; gap:4px; padding:8px; border:1px solid #e5e7eb; border-radius:6px; cursor:pointer; font-size:12px; background:#fff; transition: all 0.15s;">
+              <input type="radio" name="asInterval" value="15000" style="accent-color:#2563eb;"> 15s
+            </label>
+            <label style="display:flex; align-items:center; justify-content:center; gap:4px; padding:8px; border:1px solid #e5e7eb; border-radius:6px; cursor:pointer; font-size:12px; background:#fff; transition: all 0.15s;">
+              <input type="radio" name="asInterval" value="30000" checked style="accent-color:#2563eb;"> 30s
+            </label>
+            <label style="display:flex; align-items:center; justify-content:center; gap:4px; padding:8px; border:1px solid #e5e7eb; border-radius:6px; cursor:pointer; font-size:12px; background:#fff; transition: all 0.15s;">
+              <input type="radio" name="asInterval" value="60000" style="accent-color:#2563eb;"> 60s
+            </label>
+            <label style="display:flex; align-items:center; justify-content:center; gap:4px; padding:8px; border:1px solid #e5e7eb; border-radius:6px; cursor:pointer; font-size:12px; background:#fff; transition: all 0.15s;">
+              <input type="radio" name="asInterval" value="120000" style="accent-color:#2563eb;"> 2 min
+            </label>
+          </div>
+        </div>
+        <!-- Show notifications -->
+        <label style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:8px; cursor:pointer; font-size:13px;">
+          <div>
+            <div style="font-weight:600; color:#374151;">🔔 Show save notifications</div>
+            <div style="font-size:11px; color:#9ca3af; margin-top:2px;">Display the auto-save status badge in the toolbar</div>
+          </div>
+          <input type="checkbox" id="asShowBadge" checked style="accent-color:#2563eb; width:18px; height:18px;">
+        </label>
+        <!-- Max retries -->
+        <div style="padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:8px;">
+          <label style="font-size:13px; font-weight:600; color:#374151;">🔄 Max retry attempts
+            <select id="asMaxRetries" style="margin-left:8px; padding:4px 8px; border:1px solid #d1d5db; border-radius:4px; font-size:12px;">
+              <option value="1">1</option>
+              <option value="3" selected>3</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+            </select>
+          </label>
+          <div style="font-size:11px; color:#9ca3af; margin-top:4px;">How many times to retry after a failed save before entering offline mode</div>
+        </div>
+        <!-- Current status -->
+        <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:12px; font-size:12px; color:#6b7280; margin-top:4px;">
+          <span id="asStatusText">Loading…</span>
+        </div>
+      </div>
+      <!-- Footer -->
+      <div style="padding:14px 24px; border-top:1px solid #e5e7eb; display:flex; justify-content:space-between; align-items:center;">
+        <button onclick="resetAutoSaveSettings()" style="padding:6px 14px; border:1px solid #d1d5db; background:#fff; border-radius:6px; cursor:pointer; font-size:12px; color:#6b7280;">Reset Defaults</button>
+        <div style="display:flex; gap:8px;">
+          <button onclick="closeAutoSaveSettings()" style="padding:6px 14px; border:1px solid #d1d5db; background:#fff; border-radius:6px; cursor:pointer; font-size:12px;">Cancel</button>
+          <button onclick="saveAutoSaveSettings()" style="padding:6px 14px; border:none; background:#2563eb; color:#fff; border-radius:6px; cursor:pointer; font-size:12px; font-weight:500;">💾 Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  // ============================================================
+  //  Timer Settings + Auto-save Preferences
+  // ============================================================
+  (function () {
+    'use strict';
+
+    const TS_KEY = 'cat_timer_settings';
+    const AS_KEY = 'cat_autosave_settings';
+
+    const TIMER_DEFAULTS = {
+      autoStart: false,
+      allowPause: true,
+      idlePause: false,
+      idleDelaySec: 300,
+      perAnnotation: true,
+    };
+    const AUTOSAVE_DEFAULTS = {
+      enabled: true,
+      intervalMs: 30000,
+      showBadge: true,
+      maxRetries: 3,
+    };
+
+    // ── Persistence helpers ──
+    function _loadJson(key, defaults) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? { ...defaults, ...JSON.parse(raw) } : { ...defaults };
+      } catch (_) { return { ...defaults }; }
+    }
+    function _saveJson(key, obj) {
+      try { localStorage.setItem(key, JSON.stringify(obj)); } catch (_) {}
+    }
+
+    // ================================================================
+    //  TIMER SETTINGS
+    // ================================================================
+    let _idleTimeout = null;
+    let _idleListenersAttached = false;
+
+    window.openTimerSettings = function () {
+      const s = _loadJson(TS_KEY, TIMER_DEFAULTS);
+      document.getElementById('tsAutoStart').checked = s.autoStart;
+      document.getElementById('tsAllowPause').checked = s.allowPause;
+      document.getElementById('tsIdlePause').checked = s.idlePause;
+      document.getElementById('tsIdleDelay').value = String(s.idleDelaySec);
+      document.getElementById('tsPerAnnotation').checked = s.perAnnotation;
+      _toggleIdleDelayRow();
+      _updateTimerStatus();
+      document.getElementById('tsIdlePause').onchange = _toggleIdleDelayRow;
+      document.getElementById('timerSettingsModal').style.display = 'flex';
+    };
+    window.closeTimerSettings = function () {
+      document.getElementById('timerSettingsModal').style.display = 'none';
+    };
+    window.saveTimerSettings = function () {
+      const s = {
+        autoStart: document.getElementById('tsAutoStart').checked,
+        allowPause: document.getElementById('tsAllowPause').checked,
+        idlePause: document.getElementById('tsIdlePause').checked,
+        idleDelaySec: parseInt(document.getElementById('tsIdleDelay').value, 10),
+        perAnnotation: document.getElementById('tsPerAnnotation').checked,
+      };
+      _saveJson(TS_KEY, s);
+      _applyTimerSettings(s);
+      closeTimerSettings();
+      if (typeof showStatus === 'function') showStatus('✅ Timer settings saved', 'success');
+    };
+    window.resetTimerSettings = function () {
+      document.getElementById('tsAutoStart').checked = TIMER_DEFAULTS.autoStart;
+      document.getElementById('tsAllowPause').checked = TIMER_DEFAULTS.allowPause;
+      document.getElementById('tsIdlePause').checked = TIMER_DEFAULTS.idlePause;
+      document.getElementById('tsIdleDelay').value = String(TIMER_DEFAULTS.idleDelaySec);
+      document.getElementById('tsPerAnnotation').checked = TIMER_DEFAULTS.perAnnotation;
+      _toggleIdleDelayRow();
+    };
+
+    function _toggleIdleDelayRow() {
+      const show = document.getElementById('tsIdlePause').checked;
+      document.getElementById('tsIdleDelayRow').style.display = show ? 'block' : 'none';
+    }
+    function _updateTimerStatus() {
+      const el = document.getElementById('tsStatusText');
+      if (!el) return;
+      if (typeof timerState === 'undefined') { el.textContent = 'Timer module not loaded'; return; }
+      if (timerState.isRunning && timerState.isPaused) {
+        el.innerHTML = '⏸️ Timer is <strong>paused</strong>';
+      } else if (timerState.isRunning) {
+        el.innerHTML = '▶️ Timer is <strong>running</strong> — ' + (timerState.elapsedSeconds || 0) + 's elapsed';
+      } else {
+        el.textContent = '⏹️ Timer is not running';
+      }
+    }
+
+    function _applyTimerSettings(s) {
+      // Pause control: make badge non-clickable if pause disabled
+      const badge = document.getElementById('annotationTimer');
+      if (badge) {
+        badge.style.cursor = s.allowPause ? 'pointer' : 'default';
+        badge.title = s.allowPause ? 'Click to pause/resume timer' : 'Timer (pause disabled in settings)';
+      }
+      // Expose for timer module
+      window._timerSettings = s;
+
+      // Idle auto-pause watcher
+      _clearIdleWatcher();
+      if (s.idlePause) _startIdleWatcher(s.idleDelaySec);
+    }
+
+    // ── Idle watcher ──
+    const IDLE_EVENTS = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'];
+    function _onActivity() {
+      // If timer was auto-paused by idle, resume it
+      if (window._idleAutoPaused && typeof timerState !== 'undefined' && timerState.isPaused) {
+        window._idleAutoPaused = false;
+        if (typeof startTimer === 'function') startTimer();
+        if (typeof showStatus === 'function') showStatus('▶️ Timer resumed (activity detected)', 'info');
+      }
+      // Reset idle countdown
+      if (_idleTimeout) clearTimeout(_idleTimeout);
+      const delay = (window._timerSettings?.idleDelaySec || 300) * 1000;
+      _idleTimeout = setTimeout(_onIdle, delay);
+    }
+    function _onIdle() {
+      if (typeof timerState !== 'undefined' && timerState.isRunning && !timerState.isPaused) {
+        if (typeof pauseTimer === 'function') pauseTimer();
+        window._idleAutoPaused = true;
+        if (typeof showStatus === 'function') showStatus('⏸️ Timer auto-paused (idle)', 'warning');
+      }
+    }
+    function _startIdleWatcher(delaySec) {
+      if (!_idleListenersAttached) {
+        IDLE_EVENTS.forEach(evt => document.addEventListener(evt, _onActivity, { passive: true }));
+        _idleListenersAttached = true;
+      }
+      _idleTimeout = setTimeout(_onIdle, delaySec * 1000);
+    }
+    function _clearIdleWatcher() {
+      if (_idleTimeout) { clearTimeout(_idleTimeout); _idleTimeout = null; }
+      window._idleAutoPaused = false;
+    }
+
+    // ================================================================
+    //  AUTO-SAVE SETTINGS
+    // ================================================================
+    window.openAutoSaveSettings = function () {
+      const s = _loadJson(AS_KEY, AUTOSAVE_DEFAULTS);
+      document.getElementById('asEnabled').checked = s.enabled;
+      document.querySelectorAll('input[name="asInterval"]').forEach(r => {
+        r.checked = (parseInt(r.value, 10) === s.intervalMs);
+      });
+      document.getElementById('asShowBadge').checked = s.showBadge;
+      document.getElementById('asMaxRetries').value = String(s.maxRetries);
+      _updateAutoSaveStatus();
+      document.getElementById('autoSaveSettingsModal').style.display = 'flex';
+    };
+    window.closeAutoSaveSettings = function () {
+      document.getElementById('autoSaveSettingsModal').style.display = 'none';
+    };
+    window.saveAutoSaveSettings = function () {
+      const checkedRadio = document.querySelector('input[name="asInterval"]:checked');
+      const s = {
+        enabled: document.getElementById('asEnabled').checked,
+        intervalMs: checkedRadio ? parseInt(checkedRadio.value, 10) : 30000,
+        showBadge: document.getElementById('asShowBadge').checked,
+        maxRetries: parseInt(document.getElementById('asMaxRetries').value, 10),
+      };
+      _saveJson(AS_KEY, s);
+      _applyAutoSaveSettings(s);
+      closeAutoSaveSettings();
+      if (typeof showStatus === 'function') showStatus('✅ Auto-save preferences saved', 'success');
+    };
+    window.resetAutoSaveSettings = function () {
+      document.getElementById('asEnabled').checked = AUTOSAVE_DEFAULTS.enabled;
+      document.querySelectorAll('input[name="asInterval"]').forEach(r => {
+        r.checked = (parseInt(r.value, 10) === AUTOSAVE_DEFAULTS.intervalMs);
+      });
+      document.getElementById('asShowBadge').checked = AUTOSAVE_DEFAULTS.showBadge;
+      document.getElementById('asMaxRetries').value = String(AUTOSAVE_DEFAULTS.maxRetries);
+    };
+
+    function _updateAutoSaveStatus() {
+      const el = document.getElementById('asStatusText');
+      if (!el) return;
+      const isOracle = typeof storageBackend !== 'undefined' && storageBackend === 'oracle';
+      if (!isOracle) {
+        el.innerHTML = '📁 <strong>File mode</strong> — auto-save is not available (use 💾 Save to download)';
+        return;
+      }
+      const running = typeof autoSaveIntervalId !== 'undefined' && autoSaveIntervalId !== null;
+      if (running) {
+        const intervalSec = (typeof AUTO_SAVE_INTERVAL_MS !== 'undefined' ? AUTO_SAVE_INTERVAL_MS : 30000) / 1000;
+        el.innerHTML = `✅ Auto-save is <strong>active</strong> — saving every ${intervalSec}s`;
+      } else {
+        el.innerHTML = '⏹️ Auto-save is <strong>stopped</strong>';
+      }
+    }
+
+    function _applyAutoSaveSettings(s) {
+      // Update the global interval constant (used by startAutoSave)
+      if (typeof AUTO_SAVE_INTERVAL_MS !== 'undefined') {
+        // AUTO_SAVE_INTERVAL_MS is declared with const, so we override via a
+        // module-level setter if available, or restart the interval directly.
+      }
+
+      // Apply badge visibility
+      const badge = document.getElementById('autoSaveBadge');
+      if (badge && !s.showBadge) {
+        badge.style.display = 'none';
+      }
+      window._autoSaveSettings = s;
+
+      // If Oracle mode, restart auto-save with new interval
+      const isOracle = typeof storageBackend !== 'undefined' && storageBackend === 'oracle';
+      if (isOracle) {
+        // Stop existing
+        if (typeof stopAutoSave === 'function') stopAutoSave();
+
+        if (s.enabled) {
+          // Restart with new interval
+          if (typeof autoSaveIntervalId !== 'undefined') {
+            autoSaveIntervalId = setInterval(function () {
+              if (typeof runAutoSave === 'function') runAutoSave();
+            }, s.intervalMs);
+            if (typeof setAutoSaveBadge === 'function') {
+              setAutoSaveBadge('saved', '✅ Auto-save on (' + (s.intervalMs / 1000) + 's)');
+            }
+            if (typeof startChangePolling === 'function') startChangePolling();
+          }
+        }
+      }
+    }
+
+    // ================================================================
+    //  APPLY ON LOAD — read saved prefs and apply them
+    // ================================================================
+    function _initSettingsOnLoad() {
+      // Timer settings
+      const ts = _loadJson(TS_KEY, TIMER_DEFAULTS);
+      _applyTimerSettings(ts);
+
+      // If auto-start is enabled and a project loads, start the timer
+      if (ts.autoStart) {
+        const _waitForProject = setInterval(() => {
+          if (typeof currentProject !== 'undefined' && currentProject) {
+            clearInterval(_waitForProject);
+            if (typeof startTimer === 'function' && (typeof timerState === 'undefined' || !timerState.isRunning)) {
+              startTimer();
+            }
+          }
+        }, 500);
+        // Give up after 30s
+        setTimeout(() => clearInterval(_waitForProject), 30000);
+      }
+
+      // Auto-save settings
+      const as = _loadJson(AS_KEY, AUTOSAVE_DEFAULTS);
+      window._autoSaveSettings = as;
+      // The actual auto-save is started by the runtime when an Oracle project loads,
+      // so we just expose the settings for it to read.
+    }
+
+    // Patch the pause-click handler to respect allowPause setting
+    const _origTimerBadgeSetup = setInterval(() => {
+      const badge = document.getElementById('annotationTimer');
+      if (!badge) return;
+      clearInterval(_origTimerBadgeSetup);
+      // Wrap the existing click handler
+      badge.addEventListener('click', function (e) {
+        const s = window._timerSettings || TIMER_DEFAULTS;
+        if (!s.allowPause) {
+          e.stopImmediatePropagation();
+          if (typeof showStatus === 'function') showStatus('⏸️ Pause is disabled in Timer settings', 'warning');
+        }
+      }, true); // capture phase — fires before the existing handler
+    }, 200);
+
+    // Run on DOMContentLoaded or immediately if already loaded
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', _initSettingsOnLoad);
+    } else {
+      _initSettingsOnLoad();
+    }
+  })();
+  </script>
+</body>
+</html>
