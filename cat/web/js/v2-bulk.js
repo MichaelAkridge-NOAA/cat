@@ -103,6 +103,18 @@
       bulkSessionAnnotations = [];
       _drawCount = 0;
       _bulkDrawInProgress = false; // ensure guard is cleared on fresh session
+
+      // Seed the bulk ID counter from the max existing colony_id
+      // so bulk IDs don't collide with single-draw IDs
+      let maxColonyId = 0;
+      if (typeof annotations !== 'undefined' && annotations) {
+        annotations.forEach(a => {
+          const cid = parseInt(a.colony_id) || 0;
+          if (cid > maxColonyId) maxColonyId = cid;
+        });
+      }
+      bulkIdCounter = maxColonyId;
+
       updateBulkBannerCount();
       // Auto-activate the polyline (line) drawing tool
       activatePolylineTool();

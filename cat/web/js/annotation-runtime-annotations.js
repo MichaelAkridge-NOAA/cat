@@ -387,7 +387,7 @@
         // Refresh map label if species changed
         if (field === 'spcode' && labelsVisible && typeof addLabelToAnnotation === 'function') {
           drawnItems.eachLayer(l => {
-            if (l.annotationData === annotation) addLabelToAnnotation(l);
+            if (l.annotationData === annotation || l.feature === annotation) addLabelToAnnotation(l);
           });
         }
 
@@ -582,6 +582,18 @@
         
         cell.classList.remove('editing');
         dropdown.style.display = 'none';
+
+        // Refresh map label when species is changed via autocomplete
+        if (field === 'spcode' && labelsVisible && typeof addLabelToAnnotation === 'function') {
+          drawnItems.eachLayer(l => {
+            // File mode: annotationData is the same object reference
+            // DB mode: feature is the same object reference
+            if (l.annotationData === annotation || l.feature === annotation) {
+              addLabelToAnnotation(l);
+            }
+          });
+        }
+
         updateAnnotationTable();
         saveProject();
       };

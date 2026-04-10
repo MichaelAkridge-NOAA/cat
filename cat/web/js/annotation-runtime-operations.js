@@ -507,6 +507,7 @@
       
       // Build annotation data (lowercase for file mode, matching expected format)
       const annotationData = {
+        colony_id: annotations.length + 1,
         geometry: geometry,
         type: currentAnnotation.type || 'polygon',
         analyst: analyst,
@@ -625,7 +626,9 @@
 
         
         currentAnnotation = null;
-        if (typeof hideDiscardButton === 'function') hideDiscardButton();
+        // Hide discard button (inline — hideDiscardButton lives in unloaded annotation-drawing.js)
+        const _discardBtn = document.getElementById('discardAnnotationBtn');
+        if (_discardBtn) _discardBtn.style.display = 'none';
 
         // Increment annotation count and reset timer for next annotation
         incrementAnnotationCount();
@@ -815,11 +818,14 @@
         const geojson = await response.json();
         
         // Clear all existing annotation layers from the map
+        // Remove both DB-mode layers (objectId) and file-mode layers (annotationData)
+        const layersToRemove = [];
         drawnItems.eachLayer(layer => {
-          if (layer.options && layer.options.objectId) {
-            drawnItems.removeLayer(layer);
+          if ((layer.options && layer.options.objectId) || layer.annotationData) {
+            layersToRemove.push(layer);
           }
         });
+        layersToRemove.forEach(layer => drawnItems.removeLayer(layer));
         
         // Clear all labels
         hideAllAnnotationLabels();
@@ -899,6 +905,13 @@
             }
           });
         });
+        
+        // Safety net: ensure all labels are restored for every layer in drawnItems.
+        // Individual addLabelToAnnotation calls above may silently skip layers
+        // (e.g. file-mode features without an id).
+        if (labelsVisible && typeof showAllAnnotationLabels === 'function') {
+          showAllAnnotationLabels();
+        }
         
         // Update UI
         updateStatistics();
@@ -1498,7 +1511,8 @@
     // Add keyboard shortcut for saving (Ctrl+S or Cmd+S)
     document.addEventListener('keydown', function(e) {
       // Check for Ctrl+S (Windows/Linux) or Cmd+S (Mac)
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      // Use toLowerCase() so Caps Lock doesn't break the shortcut
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault(); // Prevent browser's default save dialog
         // If there's an active drawn shape, save that annotation
         if (currentAnnotation) {

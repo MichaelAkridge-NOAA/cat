@@ -89,13 +89,13 @@
                  '';
                  
         // Try multiple field name variations for colony ID, use display index as fallback
+        // NOTE: no_colony is a boolean field (-1/0), NOT an ID — do not include it here
         colonyId = layer.annotationData.colony_id || 
                    layer.annotationData.COLONY_ID ||
                    layer.annotationData.id ||
                    layer.annotationData.ID ||
-                   layer.annotationData.no_colony ||
                    layer.annotationData._displayIndex ||
-                   annotationId;
+                   (annotations ? annotations.indexOf(layer.annotationData) + 1 || annotationId : annotationId);
 
         // Build a useful display label (e.g. "SSID #3" or "Line #3" if no species yet)
         if (!spcode) {
@@ -184,7 +184,7 @@
       
       // Show key fields first
       const keyFields = ['spcode', 'species_code', 'SPCODE', 'SPECIES_CODE', 'species'];
-      const idFields = ['colony_id', 'COLONY_ID', 'id', 'ID', 'no_colony'];
+      const idFields = ['colony_id', 'COLONY_ID', 'id', 'ID'];
       const sizeFields = ['size_cm', 'SIZE_CM', 'diameter', 'DIAMETER'];
       
       // Species

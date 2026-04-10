@@ -662,6 +662,29 @@
       }
     });
 
+    // ── Discard button handler ──
+    // discardCurrentAnnotation is called by the Discard button's onclick in the HTML.
+    // Defined here because annotation-drawing.js (which originally held it) is not loaded.
+    window.discardCurrentAnnotation = function() {
+      if (currentAnnotation && currentAnnotation.layer && !currentAnnotation.layer.annotationData) {
+        console.log('🧹 Discarding unsaved annotation via button');
+        drawnItems.removeLayer(currentAnnotation.layer);
+        currentAnnotation = null;
+        // Clear per-annotation form fields (preserve session fields)
+        ['transect','segment','seglength','segwidth','no_colony','spcode','juvenile',
+         'juv_substrate','remnant','morph_code','ex_bound','olddead',
+         'rdcause1','rd_1','rdcause2','rd_2','rdcause3','rd_3',
+         'con_1','extent_1','sev_1','con_2','extent_2','sev_2','con_3','extent_3','sev_3'
+        ].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+        ['no_colony','juvenile','remnant','ex_bound'].forEach(id => {
+          const el = document.getElementById(id); if (el) el.value = '0';
+        });
+        const discardBtn = document.getElementById('discardAnnotationBtn');
+        if (discardBtn) discardBtn.style.display = 'none';
+        showStatus('Annotation discarded', 'info');
+      }
+    };
+
     // ── Minimap, map view persistence ──
     if (typeof catMapSaveView === 'function') catMapSaveView(map);
     if (typeof catInitMinimap === 'function') catInitMinimap(map);
