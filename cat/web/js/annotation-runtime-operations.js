@@ -818,7 +818,6 @@
         const geojson = await response.json();
         
         // Clear all existing annotation layers from the map
-        // Remove both DB-mode layers (objectId) and file-mode layers (annotationData)
         const layersToRemove = [];
         drawnItems.eachLayer(layer => {
           if ((layer.options && layer.options.objectId) || layer.annotationData) {
@@ -830,10 +829,32 @@
         // Clear all labels
         hideAllAnnotationLabels();
         
-        // Update annotations array (and keep projectAnnotations in sync for poll)
-        annotations = isOracleProjectMode()
-          ? (geojson.features || []).map(normalizeDbGeoJsonFeature)
-          : (geojson.features || []);
+        // Normalize features: flatten GeoJSON properties to root level
+        // so the table, labels, stats, and style all read fields correctly.
+        const rawFeatures = geojson.features || [];
+        annotations = rawFeatures.map((feature, idx) => {
+          const gf = isOracleProjectMode() ? normalizeDbGeoJsonFeature(feature) : feature;
+          const props = gf.properties || {};
+          // Flatten: merge nested properties to root (same as loadProjectAnnotations)
+          const flat = {
+            ...props,
+            properties: props,
+            geometry: gf.geometry
+          };
+          // Carry over DB tracking fields
+          const dbId = props.annotation_id || gf.id;
+          if (dbId != null) {
+            flat.id = dbId;
+            flat._dbAnnotationId = dbId;
+          }
+          // Mark as synced (came from DB) with version for poll comparison
+          flat._syncStatus = 'synced';
+          flat._dbAnnotationVersion = props.version ?? 1;
+          flat._displayIndex = idx + 1;
+          return flat;
+        });
+
+        // Keep projectAnnotations in sync for poll and auto-save
         if (typeof getProjectAnnotations === 'function') {
           const pa = getProjectAnnotations();
           if (pa) { pa.length = 0; annotations.forEach(a => pa.push(a)); }
@@ -842,59 +863,40 @@
         console.log(`✅ Refreshed: ${annotations.length} annotations from database`);
         
         // Add all annotations to map
-        annotations.forEach(feature => {
-          // Calculate expected visual position from coordinates
-          let expectedCenter = null;
-          if (feature.geometry.type === 'LineString' && feature.geometry.coordinates.length >= 2) {
-            const c = feature.geometry.coordinates;
-            expectedCenter = L.latLng(
-              (c[0][1] + c[c.length-1][1]) / 2,
-              (c[0][0] + c[c.length-1][0]) / 2
-            );
-          } else if (feature.geometry.type === 'Polygon' && feature.geometry.coordinates.length > 0) {
-            const coords = feature.geometry.coordinates[0];
-            let latSum = 0, lngSum = 0;
-            coords.forEach(c => { lngSum += c[0]; latSum += c[1]; });
-            expectedCenter = L.latLng(latSum / coords.length, lngSum / coords.length);
-          }
-          
-          // Debug: Log loading
-          console.log(`📥 Loading annotation ${feature.id} from DB`);
-          
+        annotations.forEach((ann, index) => {
           // Determine style based on species completeness
           const _refreshStyle = (typeof getAnnotationLayerStyle === 'function')
-            ? getAnnotationLayerStyle(feature)
+            ? getAnnotationLayerStyle(ann)
             : { color: '#3388ff', weight: 7, opacity: 0.8, fillOpacity: 0.3 };
 
-          const layer = L.geoJSON(feature, {
+          const geoFeature = { type: 'Feature', geometry: ann.geometry, properties: ann.properties || {} };
+          const layer = L.geoJSON(geoFeature, {
             pane: 'annotationsPane',
-            style: _refreshStyle,
-            objectId: feature.id
+            style: _refreshStyle
           });
 
           layer.eachLayer(l => {
-            l.options.objectId = feature.id;
-            l.feature = feature;
+            // Use annotationData (same as loadProjectAnnotations) so labels,
+            // table, and edits all use the consistent flat format.
+            l.annotationData = ann;
             drawnItems.addLayer(l);
-            
-
             
             // Remove any existing click handlers before adding new one
             l.off('click');
             
-            // Add click handler for editing
+            // Add click handler
             l.on('click', function(e) {
               L.DomEvent.stopPropagation(e);
-              selectAnnotationForEdit(feature.id);
+              showAnnotationPopup(l, e.latlng);
             });
             
             // Add popup
+            const spcode = ann.spcode || ann.SPCODE || ann.species_code || '';
             const popup = `
-              <b>ID:</b> ${feature.id}<br>
-              <b>Type:</b> ${feature.properties.SHAPE}<br>
-              <b>Species:</b> ${feature.properties.SPCODE || 'N/A'}<br>
-              <b>Site:</b> ${feature.properties.SITE}<br>
-              <b>Analyst:</b> ${feature.properties.ANALYST}<br>
+              <b>ID:</b> ${ann._dbAnnotationId || ann.id || (index + 1)}<br>
+              <b>Species:</b> ${spcode || 'N/A'}<br>
+              <b>Site:</b> ${ann.site || ann.SITE || 'N/A'}<br>
+              <b>Analyst:</b> ${ann.analyst || ann.ANALYST || 'N/A'}<br>
               <small style="color: #666;">Click to edit</small>
             `;
             l.bindPopup(popup);
@@ -906,9 +908,7 @@
           });
         });
         
-        // Safety net: ensure all labels are restored for every layer in drawnItems.
-        // Individual addLabelToAnnotation calls above may silently skip layers
-        // (e.g. file-mode features without an id).
+        // Safety net: ensure all labels are restored
         if (labelsVisible && typeof showAllAnnotationLabels === 'function') {
           showAllAnnotationLabels();
         }

@@ -56,6 +56,8 @@
           try {
             const synced = await syncAnnotationToDb(layer.annotationData);
             synced._syncStatus = 'synced';
+            // Record this sync so the poll can ignore our own writes
+            _recordSyncedByMe(synced._dbAnnotationId, synced._dbAnnotationVersion);
             const projectAnnotations = getProjectAnnotations();
             const idx = projectAnnotations.findIndex(a =>
               a === layer.annotationData ||
@@ -230,6 +232,25 @@
     const POLL_INTERVAL_MS = 60 * 1000; // 60 seconds
     let pollIntervalId = null;
 
+    // Track annotation IDs we have recently synced ourselves.
+    // Entries are { id, version, ts }.  Cleared after 90s (> poll interval).
+    const _recentlySyncedByMe = [];
+    const _RECENTLY_SYNCED_TTL = 90 * 1000; // 90 seconds
+
+    /** Call after every successful auto-save/sync to record our own writes. */
+    function _recordSyncedByMe(dbAnnotationId, version) {
+      if (!dbAnnotationId) return;
+      _recentlySyncedByMe.push({ id: dbAnnotationId, version: version ?? 1, ts: Date.now() });
+    }
+
+    /** Prune entries older than TTL */
+    function _pruneRecentlySynced() {
+      const cutoff = Date.now() - _RECENTLY_SYNCED_TTL;
+      while (_recentlySyncedByMe.length > 0 && _recentlySyncedByMe[0].ts < cutoff) {
+        _recentlySyncedByMe.shift();
+      }
+    }
+
     async function pollForRemoteChanges() {
       if (!isOracleProjectMode || !isOracleProjectMode()) return;
       if (autoSaveInProgress) return; // don't poll while auto-save is mid-sync
@@ -242,13 +263,23 @@
         const data = await resp.json();
         const remoteAnns = data.annotations || [];
 
+        // Prune stale entries from the recently-synced list
+        _pruneRecentlySynced();
+
+        // Build sets from our recent syncs for fast lookup
+        const mySyncedIds = new Set(_recentlySyncedByMe.map(e => e.id));
+        const mySyncedVersions = {};
+        _recentlySyncedByMe.forEach(e => {
+          mySyncedVersions[e.id] = Math.max(mySyncedVersions[e.id] || 0, e.version);
+        });
+
         // Build a map of local annotation id → version
-        // Check _dbAnnotationId (flat annotations) and .id (GeoJSON features after refresh)
         const localVersions = {};
-        let localUnsyncedCount = 0; // annotations not yet synced to DB
-        const projectAnnotations = typeof getProjectAnnotations === 'function' ? getProjectAnnotations() : [];
-        // Also check the annotations array (may differ from projectAnnotations after refresh)
-        const allLocalAnns = projectAnnotations.length > 0 ? projectAnnotations : (typeof annotations !== 'undefined' ? annotations : []);
+        let localUnsyncedCount = 0;
+        // Use annotations array directly (always kept in sync after refresh/load)
+        const allLocalAnns = (typeof annotations !== 'undefined' && annotations.length > 0)
+          ? annotations
+          : (typeof getProjectAnnotations === 'function' ? getProjectAnnotations() : []);
         allLocalAnns.forEach(a => {
           const dbId = a._dbAnnotationId || a.annotation_id || a.id;
           if (dbId) {
@@ -264,15 +295,22 @@
           const id = r.annotation_id;
           if (!id) return;
           if (!(id in localVersions)) {
-            newCount++;
+            // This ID isn't in our local list.  If we recently created it
+            // ourselves (race between sync and poll) skip it.
+            if (!mySyncedIds.has(id)) {
+              newCount++;
+            }
           } else if ((r.version ?? 1) > localVersions[id]) {
-            updatedCount++;
+            // Version bump.  If our own sync caused it, skip.
+            if (mySyncedVersions[id] && mySyncedVersions[id] >= (r.version ?? 1)) {
+              // This version bump was from our own auto-save — ignore
+            } else {
+              updatedCount++;
+            }
           }
         });
 
-        // Subtract unsynced local annotations from "new" count — they're likely
-        // our own annotations that auto-save just pushed to DB but haven't been
-        // acknowledged locally yet (race between sync and poll).
+        // Subtract remaining unsynced local annotations from "new" count
         newCount = Math.max(0, newCount - localUnsyncedCount);
 
         if (newCount > 0 || updatedCount > 0) {

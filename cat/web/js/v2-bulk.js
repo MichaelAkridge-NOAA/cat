@@ -264,10 +264,18 @@
             annotationIndex = annotations.length;
             annotations.push(blankAnnotation);
           }
-          // Push to currentProject.annotations for save/persistence
-          // (this is a separate array from annotations — verified in loadProjectAnnotations)
+          // Push to projectAnnotations (the authoritative array for auto-save, poll, and sync)
+          if (typeof getProjectAnnotations === 'function') {
+            const pa = getProjectAnnotations();
+            if (pa && pa !== annotations) {
+              pa.push(blankAnnotation);
+            }
+          }
+          // Also push to currentProject.annotations for save/persistence
           if (typeof currentProject !== 'undefined' && currentProject && currentProject.annotations) {
-            currentProject.annotations.push(blankAnnotation);
+            if (currentProject.annotations !== (typeof getProjectAnnotations === 'function' ? getProjectAnnotations() : null)) {
+              currentProject.annotations.push(blankAnnotation);
+            }
           }
 
           // Track in bulk history for undo
@@ -458,7 +466,16 @@
       if (idx !== -1) annotations.splice(idx, 1);
     }
 
-    // Remove from project array
+    // Remove from projectAnnotations (authoritative array for auto-save/poll)
+    if (annotationToRemove && typeof getProjectAnnotations === 'function') {
+      const pa = getProjectAnnotations();
+      if (pa) {
+        const pi = pa.indexOf(annotationToRemove);
+        if (pi !== -1) pa.splice(pi, 1);
+      }
+    }
+
+    // Remove from currentProject.annotations if separate
     if (annotationToRemove && typeof currentProject !== 'undefined' && currentProject && currentProject.annotations) {
       const idx = currentProject.annotations.indexOf(annotationToRemove);
       if (idx !== -1) currentProject.annotations.splice(idx, 1);

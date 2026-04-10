@@ -14,8 +14,10 @@
       // Update stats bar
       const statsDiv = document.getElementById('annotationStats');
       if (statsDiv && annotations.length > 0) {
-        const species = new Set(annotations.map(a => a.spcode || a.species_code || a.SPCODE).filter(Boolean));
-        const withSpecies = annotations.filter(a => a.spcode || a.species_code || a.SPCODE).length;
+        const _getSp = (a) => a.spcode || a.species_code || a.SPCODE || a.SPECIES_CODE ||
+          (a.properties && (a.properties.spcode || a.properties.SPCODE || a.properties.species_code)) || '';
+        const species = new Set(annotations.map(a => _getSp(a)).filter(Boolean));
+        const withSpecies = annotations.filter(a => _getSp(a)).length;
         const pct = Math.round((withSpecies / annotations.length) * 100);
         statsDiv.style.display = 'block';
         statsDiv.innerHTML =
