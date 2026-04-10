@@ -97,6 +97,7 @@
             <button class="btn btn-sm btn-success" onclick="event.stopPropagation(); enableGeometryEdit(${index})" title="Edit Geometry">📐</button>
             <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteAnnotation(${index})" title="Delete">🗑️</button>
           </td>
+          <td data-field="created_at" data-index="${index}" style="color:#6b7280; font-size:11px; white-space:nowrap;">${ann.created_at ? new Date(ann.created_at).toLocaleString() : '-'}</td>
         `;
         
         // Add click handler AFTER innerHTML (so it doesn't get wiped out)
@@ -486,7 +487,7 @@
             dropdown.innerHTML = '<div style="padding: 8px; text-align: center; color: #888;">Searching...</div>';
             dropdown.style.display = 'block';
             
-            fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10`)
+            fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10&cache=1`)
               .then(res => res.json())
               .then(data => {
                 tableResults = data.results || [];
@@ -888,7 +889,7 @@
     function searchEditSpecies(query) {
       const dropdown = document.getElementById('edit-species-autocomplete');
       
-      fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10`)
+      fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10&cache=1`)
         .then(res => res.json())
         .then(data => {
           editAutocompleteResults = data.results || [];

@@ -351,6 +351,12 @@ cog = TilerFactory(environment_dependency=lambda: _GCS_GDAL_ENV)
 # Register all the COG endpoints automatically
 app.include_router(cog.router, tags=["Cloud Optimized GeoTIFF"])
 
+# Suppress OverflowError from rasterio/GDAL at extreme zoom — return empty 404 tile
+# instead of crashing the ASGI worker with a full traceback
+@app.exception_handler(OverflowError)
+async def overflow_tile_handler(request: Request, exc: OverflowError):
+    return JSONResponse(status_code=404, content={"detail": "Tile out of bounds"})
+
 # Mount static files (for any CSS, JS, images, etc.)
 # This allows serving files from the data directory
 data_directory = CONFIG['data']['directory']

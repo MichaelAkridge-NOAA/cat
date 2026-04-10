@@ -55,7 +55,7 @@ function setupSpeciesAutocomplete() {
     
     debounceTimer = setTimeout(() => {
       searchSpecies(query);
-    }, 300);
+    }, 150);
   });
   
   // Keyboard navigation
@@ -1188,10 +1188,10 @@ function createAutocompleteTableCell(cell, field, currentValue, index) {
       debounceTimer = setTimeout(() => {
         dropdown.innerHTML = '<div class="autocomplete-loading" style="padding: 8px; text-align: center; color: #888;">Searching...</div>';
         dropdown.style.display = 'block';
-        
+
         const filterQs = typeof window.getSpeciesFilterQueryString === 'function' ? window.getSpeciesFilterQueryString() : '';
         const sep = filterQs ? '&' : '';
-        fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10${sep}${filterQs}`)
+        fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10${sep}${filterQs}&cache=1`)
           .then(res => res.json())
           .then(data => {
             tableAutocompleteResults = data.results || [];
@@ -1230,8 +1230,8 @@ function createAutocompleteTableCell(cell, field, currentValue, index) {
             console.error('Species search error:', err);
             dropdown.innerHTML = '<div class="autocomplete-empty" style="padding: 8px; text-align: center; color: #999;">Search failed</div>';
           });
-      }, 300);
-      
+      }, 150);
+
     } else if (field === 'juv_substrate') {
       // JUV_SUBSTRATE search
       const upperQuery = query.toUpperCase();

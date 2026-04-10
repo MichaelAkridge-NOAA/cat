@@ -13,7 +13,7 @@
 #   ./update_cat.sh --branch dev      # Override the target git branch
 # =============================================================================
 SCRIPT_VERSION="1.0.0"
-CAT_BRANCH="cat_db_v4"
+CAT_BRANCH="cat_db_v5"
 CAT_REPO_URL="https://github.com/MichaelAkridge-NOAA/cat.git"
 
 # ── Parse flags ──────────────────────────────────────────────────────────────

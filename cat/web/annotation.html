@@ -1250,10 +1250,13 @@
             <button class="dd-item" onclick="openAutoSaveSettings(); closeNavDropdowns();">💾 Auto-save Preferences</button>
             <button class="dd-item" onclick="openTimerSettings(); closeNavDropdowns();">⏱️ Timer</button>
             <div class="dd-divider"></div>
+            <div class="dd-label">Export</div>
+            <button class="dd-item" onclick="exportAnnotationsCsv(false); closeNavDropdowns();">⬇ Export All Annotations (CSV)</button>
+            <div class="dd-divider"></div>
             <div class="dd-label">Display</div>
             <button class="dd-item" id="ddCentroidToggle" onclick="if(typeof v2ToggleCentroids==='function') v2ToggleCentroids(); closeNavDropdowns();">◉ Centroids</button>
             <button class="dd-item disabled" style="opacity:0.5;cursor:default;" title="Coming soon">🤖 SAM / AI Model</button>
-            <button class="dd-item disabled" style="opacity:0.5;cursor:default;" title="Coming soon">🗺️ Map &amp; Display</button>
+            <button class="dd-item" onclick="openMapDisplaySettings(); closeNavDropdowns();">🗺️ Map &amp; Display</button>
             <button class="dd-item disabled" style="opacity:0.5;cursor:default;" title="Coming soon">📊 Export Defaults</button>
           </div>
         </div>
@@ -1790,11 +1793,12 @@
             <th>Extent 3</th>
             <th>Severity 3</th>
             <th>Actions</th>
+            <th>Created</th>
           </tr>
         </thead>
         <tbody id="annotationTableBody">
           <tr>
-            <td colspan="35" style="text-align: center; padding: 20px; color: #6c757d;">
+            <td colspan="36" style="text-align: center; padding: 20px; color: #6c757d;">
               No annotations yet - draw on the map to create one
             </td>
           </tr>
@@ -1961,6 +1965,7 @@
   <!-- Enhancement modules (merged from v2) -->
   <script src="js/v2-bulk.js"></script>
   <script src="js/v2-table.js"></script>
+  <script src="js/v2-lasso.js"></script>
   <script src="js/v2-defaults.js"></script>
 
   <!-- ============================================================ -->
@@ -2630,6 +2635,175 @@
       document.addEventListener('DOMContentLoaded', _initSettingsOnLoad);
     } else {
       _initSettingsOnLoad();
+    }
+  })();
+  </script>
+
+  <!-- ============================================================ -->
+  <!--  Map & Display Settings Modal                                 -->
+  <!-- ============================================================ -->
+  <div id="mapDisplaySettingsModal" style="
+    display:none; position:fixed; inset:0; z-index:20000;
+    background:rgba(0,0,0,0.5); backdrop-filter:blur(3px);
+    align-items:center; justify-content:center;
+  ">
+    <div style="
+      background:#fff; border-radius:12px; max-width:420px; width:92%;
+      box-shadow:0 20px 60px rgba(0,0,0,0.3); overflow:hidden;
+    ">
+      <!-- Header -->
+      <div style="padding:18px 24px; background:linear-gradient(135deg,#0a2540,#1a365d); color:#fff;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h3 style="margin:0; font-size:16px;">🗺️ Map &amp; Display</h3>
+          <button onclick="closeMapDisplaySettings()" style="background:none; border:none; color:#fff; font-size:20px; cursor:pointer; padding:0 4px;">✕</button>
+        </div>
+        <div style="font-size:12px; opacity:0.8; margin-top:4px;">Adjust map interaction behaviour</div>
+      </div>
+      <!-- Body -->
+      <div style="padding:20px 24px;">
+        <!-- Scroll wheel sensitivity -->
+        <div style="padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <div style="font-weight:600; color:#374151; font-size:13px;">🖱️ Scroll wheel sensitivity</div>
+            <span id="wheelPxLabel" style="font-size:12px; color:#6b7280; font-weight:600;"></span>
+          </div>
+          <div style="font-size:11px; color:#9ca3af; margin-bottom:8px;">Higher = more pixels needed per zoom step (slower scroll zoom).</div>
+          <input type="range" id="wheelPxSlider" min="30" max="300" step="10"
+            style="width:100%; accent-color:#2563eb;">
+          <div style="display:flex; justify-content:space-between; font-size:10px; color:#9ca3af; margin-top:2px;">
+            <span>Fast</span><span>Default (60)</span><span>Slow</span>
+          </div>
+        </div>
+        <!-- Zoom increment -->
+        <div style="padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; margin-bottom:8px;">
+          <div style="font-weight:600; color:#374151; font-size:13px; margin-bottom:6px;">🔍 Zoom increment (+/− buttons)</div>
+          <div style="font-size:11px; color:#9ca3af; margin-bottom:10px;">How much each +/− button or keyboard shortcut moves the zoom level.</div>
+          <div style="display:flex; gap:6px;">
+            <label style="flex:1; text-align:center; cursor:pointer;">
+              <input type="radio" name="zoomDelta" value="0.1" style="display:none;">
+              <div class="zd-btn" style="padding:8px 4px; border:2px solid #e5e7eb; border-radius:8px; font-size:11px; font-weight:600; transition:all .15s;">
+                <div style="font-size:16px;">🔬</div>Ultra<br><span style="font-size:10px; color:#9ca3af;">0.1×</span>
+              </div>
+            </label>
+            <label style="flex:1; text-align:center; cursor:pointer;">
+              <input type="radio" name="zoomDelta" value="0.25" style="display:none;">
+              <div class="zd-btn" style="padding:8px 4px; border:2px solid #e5e7eb; border-radius:8px; font-size:11px; font-weight:600; transition:all .15s;">
+                <div style="font-size:16px;">🐢</div>Fine<br><span style="font-size:10px; color:#9ca3af;">0.25×</span>
+              </div>
+            </label>
+            <label style="flex:1; text-align:center; cursor:pointer;">
+              <input type="radio" name="zoomDelta" value="0.5" style="display:none;">
+              <div class="zd-btn" style="padding:8px 4px; border:2px solid #e5e7eb; border-radius:8px; font-size:11px; font-weight:600; transition:all .15s;">
+                <div style="font-size:16px;">🐇</div>Slow<br><span style="font-size:10px; color:#9ca3af;">0.5×</span>
+              </div>
+            </label>
+            <label style="flex:1; text-align:center; cursor:pointer;">
+              <input type="radio" name="zoomDelta" value="1" style="display:none;">
+              <div class="zd-btn" style="padding:8px 4px; border:2px solid #e5e7eb; border-radius:8px; font-size:11px; font-weight:600; transition:all .15s;">
+                <div style="font-size:16px;">⚡</div>Normal<br><span style="font-size:10px; color:#9ca3af;">1× default</span>
+              </div>
+            </label>
+            <label style="flex:1; text-align:center; cursor:pointer;">
+              <input type="radio" name="zoomDelta" value="2" style="display:none;">
+              <div class="zd-btn" style="padding:8px 4px; border:2px solid #e5e7eb; border-radius:8px; font-size:11px; font-weight:600; transition:all .15s;">
+                <div style="font-size:16px;">🚀</div>Fast<br><span style="font-size:10px; color:#9ca3af;">2×</span>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+      <!-- Footer -->
+      <div style="padding:14px 24px; border-top:1px solid #e5e7eb; display:flex; justify-content:flex-end; gap:8px;">
+        <button onclick="closeMapDisplaySettings()" style="padding:6px 14px; border:1px solid #d1d5db; background:#fff; border-radius:6px; cursor:pointer; font-size:12px;">Cancel</button>
+        <button onclick="saveMapDisplaySettings()" style="padding:6px 14px; border:none; background:#2563eb; color:#fff; border-radius:6px; cursor:pointer; font-size:12px; font-weight:500;">💾 Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+    const MD_KEY = 'cat_map_display_settings';
+    const MD_DEFAULTS = { zoomDelta: 1, wheelPx: 60 };
+
+    function _loadMD() {
+      try { return Object.assign({}, MD_DEFAULTS, JSON.parse(localStorage.getItem(MD_KEY) || '{}')); }
+      catch (_) { return Object.assign({}, MD_DEFAULTS); }
+    }
+
+    function _applySettings(s) {
+      if (typeof map === 'undefined') return;
+      map.options.zoomDelta = s.zoomDelta;
+      map.options.zoomSnap  = s.zoomDelta;
+      if (map.scrollWheelZoom && map.scrollWheelZoom._wheelSpeedFactor !== undefined) {
+        map.scrollWheelZoom._wheelPxPerZoomLevel = s.wheelPx;
+      }
+      // Works regardless of internal handler structure
+      if (map.options) map.options.wheelPxPerZoomLevel = s.wheelPx;
+    }
+
+    function _renderButtons(delta) {
+      document.querySelectorAll('[name="zoomDelta"]').forEach(radio => {
+        const btn = radio.nextElementSibling;
+        const active = parseFloat(radio.value) === delta;
+        btn.style.borderColor = active ? '#2563eb' : '#e5e7eb';
+        btn.style.background  = active ? '#eff6ff' : '';
+        btn.style.color       = active ? '#1d4ed8' : '';
+        radio.checked = active;
+      });
+    }
+
+    function _syncWheelSlider(px) {
+      const slider = document.getElementById('wheelPxSlider');
+      const label  = document.getElementById('wheelPxLabel');
+      if (slider) slider.value = px;
+      if (label)  label.textContent = px + ' px';
+    }
+
+    window.openMapDisplaySettings = function () {
+      const s = _loadMD();
+      _renderButtons(s.zoomDelta);
+      _syncWheelSlider(s.wheelPx);
+      document.querySelectorAll('[name="zoomDelta"]').forEach(radio => {
+        radio.onchange = () => _renderButtons(parseFloat(radio.value));
+      });
+      const slider = document.getElementById('wheelPxSlider');
+      if (slider) slider.oninput = () => _syncWheelSlider(parseInt(slider.value));
+      document.getElementById('mapDisplaySettingsModal').style.display = 'flex';
+    };
+
+    window.closeMapDisplaySettings = function () {
+      document.getElementById('mapDisplaySettingsModal').style.display = 'none';
+    };
+
+    window.saveMapDisplaySettings = function () {
+      const checked = document.querySelector('[name="zoomDelta"]:checked');
+      const delta   = checked ? parseFloat(checked.value) : MD_DEFAULTS.zoomDelta;
+      const slider  = document.getElementById('wheelPxSlider');
+      const wheelPx = slider ? parseInt(slider.value) : MD_DEFAULTS.wheelPx;
+      const s = { zoomDelta: delta, wheelPx };
+      localStorage.setItem(MD_KEY, JSON.stringify(s));
+      _applySettings(s);
+      closeMapDisplaySettings();
+      if (typeof showStatus === 'function') showStatus('Map display settings saved', 'success');
+    };
+
+    // Apply saved settings as soon as map is ready
+    function _initOnLoad() {
+      const s = _loadMD();
+      let tries = 0;
+      const poll = setInterval(() => {
+        if (typeof map !== 'undefined' || ++tries > 20) {
+          clearInterval(poll);
+          _applySettings(s);
+        }
+      }, 200);
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', _initOnLoad);
+    } else {
+      _initOnLoad();
     }
   })();
   </script>

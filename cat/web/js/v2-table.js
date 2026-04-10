@@ -7,8 +7,18 @@
 (function () {
   'use strict';
 
+  // ── Sort persistence ──
+  const _SORT_KEY = 'cat_table_sort';
+  function _loadSort() {
+    try { return JSON.parse(localStorage.getItem(_SORT_KEY) || 'null'); } catch (_) { return null; }
+  }
+  function _saveSort(col, dir) {
+    try { localStorage.setItem(_SORT_KEY, JSON.stringify({ column: col, direction: dir })); } catch (_) {}
+  }
+
   // ── State ──
-  const _savedSort = (typeof catGetTableSort === 'function') ? catGetTableSort() : null;
+  let _filterQuery = '';        // active search string
+  const _savedSort = _loadSort();
   let sortColumn = _savedSort ? _savedSort.column : null;
   let sortDirection = _savedSort ? _savedSort.direction : 'asc';
   let kbRow = -1;               // keyboard-nav row index
@@ -65,7 +75,8 @@
     { field: 'con_3',         label: 'Condition 3',    sortable: true,  batchFill: true,  visible: false },
     { field: 'extent_3',      label: 'Extent 3',      sortable: true,  batchFill: true,  visible: false },
     { field: 'sev_3',         label: 'Severity 3',    sortable: true,  batchFill: true,  visible: false },
-    { field: 'actions',       label: 'Actions',       sortable: false, batchFill: false, visible: true  }
+    { field: 'actions',       label: 'Actions',       sortable: false, batchFill: false, visible: true  },
+    { field: 'created_at',    label: 'Created',       sortable: true,  batchFill: false, visible: false }
   ];
 
   // Load saved visibility from localStorage, falling back to defaults
@@ -111,6 +122,7 @@
         applyColumnVisibility();
         applySortableHeaders();
         applyTableSize();
+        if (_filterQuery) _applyFilter(_filterQuery); // re-apply active filter
         if (sortColumn) {
           sortTableByColumn(sortColumn, sortDirection, false);
         }
@@ -162,7 +174,7 @@
           sortDirection = 'asc';
         }
         sortTableByColumn(sortColumn, sortDirection, true);
-        if (typeof catSaveTableSort === 'function') catSaveTableSort(sortColumn, sortDirection);
+        _saveSort(sortColumn, sortDirection);
       };
     });
   }
@@ -183,6 +195,12 @@
       const aText = (a.cells[cellIdx]?.textContent || '').trim();
       const bText = (b.cells[cellIdx]?.textContent || '').trim();
 
+      // Date sort for created_at
+      if (field === 'created_at') {
+        const aT = aText === '-' ? 0 : new Date(aText).getTime();
+        const bT = bText === '-' ? 0 : new Date(bText).getTime();
+        return direction === 'asc' ? aT - bT : bT - aT;
+      }
       // Try numeric sort
       const aNum = parseFloat(aText);
       const bNum = parseFloat(bText);
@@ -1041,10 +1059,27 @@
 
     // Update select-all checkbox
     const selectAllCb = document.querySelector('#annotationTable thead .row-select-th input');
+    const total = document.querySelectorAll('#annotationTable tbody tr[data-index]').length;
     if (selectAllCb) {
-      const total = document.querySelectorAll('#annotationTable tbody tr[data-index]').length;
       selectAllCb.checked = count > 0 && count >= total;
       selectAllCb.indeterminate = count > 0 && count < total;
+    }
+
+    // Show "N selected / M total" in stats bar
+    const statsDiv = document.getElementById('annotationStats');
+    if (statsDiv && statsDiv.style.display !== 'none') {
+      let selSpan = document.getElementById('v2StatsSelected');
+      if (count > 0) {
+        if (!selSpan) {
+          selSpan = document.createElement('span');
+          selSpan.id = 'v2StatsSelected';
+          selSpan.style.cssText = 'margin-left:8px; padding:2px 7px; background:#eff6ff; color:#1d4ed8; border-radius:10px; font-size:11px; font-weight:600;';
+          statsDiv.appendChild(selSpan);
+        }
+        selSpan.textContent = `${count} selected`;
+      } else if (selSpan) {
+        selSpan.remove();
+      }
     }
   }
 
@@ -1064,6 +1099,7 @@
       bar.innerHTML = `
         <span id="v2SelectionCount">0 rows selected</span>
         <button id="v2BulkUpdateBtn" style="padding:4px 12px; background:#3b82f6; color:#fff; border:none; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;">Bulk Update</button>
+        <button id="v2ExportCsvBtn" style="padding:4px 10px; background:#10b981; color:#fff; border:none; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;">⬇ Export CSV</button>
         <button id="v2ClearSelectionBtn" style="padding:4px 10px; background:#e2e8f0; color:#475569; border:1px solid #cbd5e1; border-radius:4px; font-size:11px; cursor:pointer;">Clear</button>
       `;
       tableContainer.parentElement.insertBefore(bar, tableContainer);
@@ -1071,6 +1107,10 @@
       document.getElementById('v2BulkUpdateBtn').addEventListener('click', (e) => {
         e.stopPropagation();
         openBulkUpdateModal();
+      });
+      document.getElementById('v2ExportCsvBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        exportAnnotationsCsv(true);
       });
       document.getElementById('v2ClearSelectionBtn').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1186,7 +1226,7 @@
       if (q.length < 2) { dd.style.display = 'none'; return; }
       timer = setTimeout(() => {
         const fqs = typeof window.getSpeciesFilterQueryString === 'function' ? window.getSpeciesFilterQueryString() : '';
-        fetch(`/api/coral/species/search?q=${encodeURIComponent(q)}&limit=10${fqs}`)
+        fetch(`/api/coral/species/search?q=${encodeURIComponent(q)}&limit=10${fqs}&cache=1`)
           .then(r => r.json())
           .then(data => {
             results = data.results || [];
@@ -1206,7 +1246,7 @@
             });
             dd.style.display = 'block';
           }).catch(() => { dd.style.display = 'none'; });
-      }, 300);
+      }, 150);
     });
 
     input.addEventListener('keydown', (e) => {
@@ -1257,6 +1297,8 @@
     }
 
     if (typeof hasUnsavedChanges !== 'undefined') hasUnsavedChanges = true;
+    selectedRows.clear();
+    _lastCheckedIdx = -1;
     if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
     document.getElementById('v2BulkUpdateModal').classList.remove('active');
     if (typeof showStatus === 'function') showStatus(`Updated "${field}" on ${count} row${count !== 1 ? 's' : ''}`, 'success');
@@ -1284,10 +1326,163 @@
     injectBatchFillModal();
     injectSelectionBar();
     injectBulkUpdateModal();
+    initKeyboardShortcuts();
     // Apply initial column visibility
     setTimeout(applyColumnVisibility, 150);
-    console.log('🔧 v2-table.js loaded — Sort, Resize, Column Picker, Arrow Keys, Copy/Paste, Batch Fill, Multi-Select');
+    console.log('🔧 v2-table.js loaded — Sort, Resize, Column Picker, Arrow Keys, Copy/Paste, Batch Fill, Multi-Select, Filter, Export, Shortcuts');
   }
+
+  // ===================================================================
+  //  FILTER — real-time search across all annotation fields
+  // ===================================================================
+  function _applyFilter(query) {
+    const q = (query || '').trim().toLowerCase();
+    const rows = document.querySelectorAll('#annotationTableBody tr[data-index]');
+    rows.forEach(row => {
+      if (!q) { row.style.display = ''; return; }
+      const idx = parseInt(row.dataset.index);
+      if (isNaN(idx) || typeof annotations === 'undefined') { row.style.display = ''; return; }
+      const ann = annotations[idx];
+      if (!ann) { row.style.display = 'none'; return; }
+      // Search all string/number values on the annotation object
+      const haystack = Object.values(ann)
+        .filter(v => v !== null && v !== undefined && typeof v !== 'object')
+        .join(' ').toLowerCase();
+      row.style.display = haystack.includes(q) ? '' : 'none';
+    });
+    // Show placeholder if all hidden
+    const visible = document.querySelectorAll('#annotationTableBody tr[data-index]:not([style*="none"])').length;
+    let placeholder = document.getElementById('v2FilterPlaceholder');
+    if (q && visible === 0) {
+      if (!placeholder) {
+        placeholder = document.createElement('tr');
+        placeholder.id = 'v2FilterPlaceholder';
+        placeholder.innerHTML = `<td colspan="99" style="text-align:center; padding:16px; color:#9ca3af; font-size:12px;">No annotations match "<strong></strong>"</td>`;
+        document.getElementById('annotationTableBody')?.appendChild(placeholder);
+      }
+      placeholder.querySelector('strong').textContent = q;
+      placeholder.style.display = '';
+    } else if (placeholder) {
+      placeholder.style.display = 'none';
+    }
+  }
+
+  // Exposed on window so the HTML oninput handler can call it
+  window.filterAnnotationTable = function (query) {
+    _filterQuery = query || '';
+    _applyFilter(_filterQuery);
+  };
+
+  // ===================================================================
+  //  EXPORT CSV
+  // ===================================================================
+  // CSV field list — all COLUMNS except actions, plus created_at
+  const _CSV_FIELDS = COLUMNS
+    .filter(c => c.field !== 'actions')
+    .map(c => ({ field: c.field, label: c.label }));
+
+  function exportAnnotationsCsv(selectedOnly) {
+    if (typeof annotations === 'undefined' || annotations.length === 0) {
+      if (typeof showStatus === 'function') showStatus('No annotations to export', 'warning');
+      return;
+    }
+
+    const rows = selectedOnly && selectedRows.size > 0
+      ? [...selectedRows].sort((a, b) => a - b).map(i => annotations[i]).filter(Boolean)
+      : annotations;
+
+    if (rows.length === 0) return;
+
+    const escape = v => {
+      if (v === null || v === undefined) return '';
+      const s = String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n')
+        ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+
+    const header = _CSV_FIELDS.map(f => escape(f.label)).join(',');
+    const body = rows.map(ann =>
+      _CSV_FIELDS.map(f => {
+        const v = ann[f.field];
+        if (f.field === 'created_at' && v) return escape(new Date(v).toISOString());
+        return escape(v);
+      }).join(',')
+    ).join('\n');
+
+    const csv = header + '\n' + body;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `annotations_${selectedOnly && selectedRows.size > 0 ? 'selected_' : ''}${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    if (typeof showStatus === 'function') showStatus(`Exported ${rows.length} annotation${rows.length !== 1 ? 's' : ''} to CSV`, 'success');
+  }
+
+  // Also expose for keyboard shortcut / menu access
+  window.exportAnnotationsCsv = exportAnnotationsCsv;
+
+  // ===================================================================
+  //  KEYBOARD SHORTCUTS
+  // ===================================================================
+  function initKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+      // Never fire when typing in an input/textarea/select
+      if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
+      if (e.target.isContentEditable) return;
+
+      // Ctrl+A — select all visible table rows
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        const table = document.getElementById('annotationTable');
+        if (!table) return;
+        const visibleRows = table.querySelectorAll('tbody tr[data-index]:not([style*="none"])');
+        if (visibleRows.length === 0) return;
+        e.preventDefault();
+        visibleRows.forEach(row => {
+          const idx = parseInt(row.dataset.index);
+          if (!isNaN(idx)) {
+            selectedRows.add(idx);
+            row.classList.add('bulk-selected');
+            const cb = row.querySelector('.row-select-cb');
+            if (cb) cb.checked = true;
+          }
+        });
+        updateSelectionUI();
+        return;
+      }
+
+      // B — open bulk update (only when rows selected)
+      if (e.key === 'b' || e.key === 'B') {
+        if (selectedRows.size > 0) { e.preventDefault(); openBulkUpdateModal(); }
+        return;
+      }
+
+      // L — toggle lasso
+      if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        if (window.v2Lasso) window.v2Lasso.toggle();
+        return;
+      }
+
+      // Escape — clear selection (lasso Escape is handled in v2-lasso.js)
+      if (e.key === 'Escape' && selectedRows.size > 0 && !(window.v2Lasso && window.v2Lasso.active)) {
+        selectedRows.clear();
+        document.querySelectorAll('.row-select-cb').forEach(c => { c.checked = false; });
+        document.querySelectorAll('#annotationTable tbody tr').forEach(r => r.classList.remove('bulk-selected'));
+        updateSelectionUI();
+      }
+    });
+  }
+
+  // ── Public API for other modules (e.g. v2-lasso.js) ──
+  window.v2Table = {
+    get selectedRows() { return selectedRows; },
+    addToSelection(idx) { selectedRows.add(idx); },
+    clearSelection() { selectedRows.clear(); _lastCheckedIdx = -1; },
+    refreshUI() { injectRowCheckboxes(); updateSelectionUI(); },
+    openBulkUpdate() { openBulkUpdateModal(); },
+  };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);

@@ -5,6 +5,7 @@ When a DB is available, species are loaded from cat_coral_species
 and can be filtered per-project by region columns and flags.
 """
 import csv
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +15,10 @@ router = APIRouter(prefix="/api/coral", tags=["coral"])
 
 # ── In-memory cache (CSV fallback) ──
 _species_cache: Optional[List[Dict]] = None
+
+# ── DB species list cache (keyed by filter tuple, TTL 60s) ──
+_db_species_cache: Dict[str, tuple] = {}  # key -> (timestamp, list)
+_DB_CACHE_TTL = 60  # seconds
 
 # ── Region columns present in the CSV / DB ──
 REGION_COLUMNS = [
@@ -153,8 +158,16 @@ def _get_species_list(filters: Optional[Dict] = None) -> List[Dict]:
     """Return species from DB if available, otherwise CSV (with in-memory filtering)."""
     if _is_db_available():
         try:
+            # Build a stable cache key from the filter dict
+            cache_key = str(sorted(filters.items()) if filters else [])
+            now = time.time()
+            if cache_key in _db_species_cache:
+                ts, cached = _db_species_cache[cache_key]
+                if now - ts < _DB_CACHE_TTL:
+                    return cached
             db_rows = _load_species_from_db(filters)
             if db_rows:
+                _db_species_cache[cache_key] = (now, db_rows)
                 return db_rows
         except Exception as e:
             print(f"⚠️ DB species query failed, falling back to CSV: {e}")
@@ -402,9 +415,10 @@ async def import_species_from_csv():
             )
             inserted += 1
 
-    # Clear the in-memory CSV cache so DB takes over
-    global _species_cache
+    # Clear both caches so updated data is picked up immediately
+    global _species_cache, _db_species_cache
     _species_cache = None
+    _db_species_cache = {}
 
     return {
         "success": True,
