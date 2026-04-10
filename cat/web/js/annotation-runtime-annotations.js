@@ -384,10 +384,16 @@
           cell.textContent = newValue;
         }
 
-        // Refresh map label if species changed
-        if (field === 'spcode' && labelsVisible && typeof addLabelToAnnotation === 'function') {
+        // Refresh map label and layer style if species changed
+        if (field === 'spcode') {
           drawnItems.eachLayer(l => {
-            if (l.annotationData === annotation || l.feature === annotation) addLabelToAnnotation(l);
+            if (l.annotationData === annotation || l.feature === annotation) {
+              if (labelsVisible && typeof addLabelToAnnotation === 'function') addLabelToAnnotation(l);
+              // Update layer color when species completeness changes (orange ↔ blue)
+              if (l.setStyle && typeof getAnnotationLayerStyle === 'function') {
+                l.setStyle(getAnnotationLayerStyle(annotation));
+              }
+            }
           });
         }
 
@@ -583,13 +589,17 @@
         cell.classList.remove('editing');
         dropdown.style.display = 'none';
 
-        // Refresh map label when species is changed via autocomplete
-        if (field === 'spcode' && labelsVisible && typeof addLabelToAnnotation === 'function') {
+        // Refresh map label and layer style when species is changed via autocomplete
+        if (field === 'spcode') {
           drawnItems.eachLayer(l => {
             // File mode: annotationData is the same object reference
             // DB mode: feature is the same object reference
             if (l.annotationData === annotation || l.feature === annotation) {
-              addLabelToAnnotation(l);
+              if (labelsVisible && typeof addLabelToAnnotation === 'function') addLabelToAnnotation(l);
+              // Update layer color when species completeness changes (orange ↔ blue)
+              if (l.setStyle && typeof getAnnotationLayerStyle === 'function') {
+                l.setStyle(getAnnotationLayerStyle(annotation));
+              }
             }
           });
         }
@@ -1025,14 +1035,18 @@
         undoPushEdit(index, prevAnnotation, { ...annotation });
       }
 
-      // Refresh map labels if visible
-      if (labelsVisible && typeof addLabelToAnnotation === 'function') {
-        drawnItems.eachLayer(layer => {
-          if (layer.annotationData === annotation) {
+      // Refresh map labels and layer styles
+      drawnItems.eachLayer(layer => {
+        if (layer.annotationData === annotation) {
+          if (labelsVisible && typeof addLabelToAnnotation === 'function') {
             addLabelToAnnotation(layer);
           }
-        });
-      }
+          // Update layer color when species completeness changes (orange ↔ blue)
+          if (layer.setStyle && typeof getAnnotationLayerStyle === 'function') {
+            layer.setStyle(getAnnotationLayerStyle(annotation));
+          }
+        }
+      });
 
       // Update the annotation table
       updateAnnotationTable();

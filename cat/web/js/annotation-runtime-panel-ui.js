@@ -1,4 +1,24 @@
 // Extracted from annotation-file-mode-runtime.js (Phase 2h: panel/label ui)
+
+    // ── Annotation completeness & style helpers (used by labels, refresh, bulk, etc.) ──
+    function isAnnotationComplete(ann) {
+      if (!ann) return false;
+      // Check flat format (file mode / normalized)
+      const sp = ann.spcode || ann.species_code || ann.SPCODE || ann.SPECIES_CODE ||
+                 // Check nested properties (DB/GeoJSON mode)
+                 (ann.properties && (ann.properties.spcode || ann.properties.SPCODE ||
+                  ann.properties.species_code || ann.properties.SPECIES_CODE));
+      return sp && sp !== '-' && String(sp).trim() !== '';
+    }
+    window.isAnnotationComplete = isAnnotationComplete;
+
+    function getAnnotationLayerStyle(ann) {
+      return isAnnotationComplete(ann)
+        ? { color: '#3388ff', weight: 7, opacity: 0.8, fillOpacity: 0.3 }
+        : { color: '#e67e22', weight: 7, opacity: 0.9, fillOpacity: 0.25, dashArray: '6 4' };
+    }
+    window.getAnnotationLayerStyle = getAnnotationLayerStyle;
+
     function toggleAnnotationsLayer() {
       const checked = document.getElementById('toggleAnnotations').checked;
       if (checked) {
@@ -103,10 +123,17 @@
           spcode = (t === 'line' || t === 'polyline') ? 'Line' : 'Ann';
         }
       } else if (layer.feature && layer.feature.id) {
-        // Database mode
+        // Database mode — check both uppercase (Oracle) and lowercase (app-created) property names
         annotationId = layer.feature.id;
-        spcode = layer.feature.properties.SPCODE || 'Unknown';
-        colonyId = layer.feature.properties.colony_id || annotationId;
+        const props = layer.feature.properties || {};
+        spcode = props.SPCODE || props.spcode || props.species_code || props.SPECIES_CODE || '';
+        colonyId = props.colony_id || props.COLONY_ID || props.annotation_id || annotationId;
+
+        // Show useful placeholder instead of 'Unknown' when no species is set
+        if (!spcode) {
+          const geomType = layer.feature.geometry?.type;
+          spcode = (geomType === 'LineString') ? 'Line' : 'Ann';
+        }
       } else {
         return; // No annotation data
       }

@@ -1237,7 +1237,7 @@
       count++;
     });
 
-    // Sync to map layers and refresh labels
+    // Sync to map layers, refresh labels, and update layer styles
     if (typeof drawnItems !== 'undefined') {
       const refreshLabels = typeof labelsVisible !== 'undefined' && labelsVisible
                          && typeof addLabelToAnnotation === 'function';
@@ -1248,6 +1248,10 @@
           layer.annotationData[field] = value;
           if (layer.annotationData.properties) layer.annotationData.properties[field] = value;
           if (refreshLabels) addLabelToAnnotation(layer);
+          // Update layer color when species completeness changes (orange ↔ blue)
+          if (field === 'spcode' && layer.setStyle && typeof getAnnotationLayerStyle === 'function') {
+            layer.setStyle(getAnnotationLayerStyle(layer.annotationData));
+          }
         }
       });
     }

@@ -1115,7 +1115,7 @@
           pane: 'annotationsPane',  // Ensure annotations are in the top pane
           style: {
             color: '#3388ff',
-            weight: 3,
+            weight: 7,
             opacity: 0.8,
             fillOpacity: 0.3
           }
@@ -1141,6 +1141,11 @@
         normalizedAnn._displayIndex = idx + 1;
         
         layer.annotationData = normalizedAnn;
+
+        // Apply correct style: orange-dashed if no species, blue if complete
+        if (typeof getAnnotationLayerStyle === 'function' && layer.setStyle) {
+          layer.setStyle(getAnnotationLayerStyle(normalizedAnn));
+        }
         
         // Add click handler to show popup with details
         layer.on('click', function(e) {

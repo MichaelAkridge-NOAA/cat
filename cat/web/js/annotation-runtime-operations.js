@@ -861,14 +861,14 @@
           // Debug: Log loading
           console.log(`📥 Loading annotation ${feature.id} from DB`);
           
+          // Determine style based on species completeness
+          const _refreshStyle = (typeof getAnnotationLayerStyle === 'function')
+            ? getAnnotationLayerStyle(feature)
+            : { color: '#3388ff', weight: 7, opacity: 0.8, fillOpacity: 0.3 };
+
           const layer = L.geoJSON(feature, {
             pane: 'annotationsPane',
-            style: {
-              color: '#3388ff',
-              weight: 3,
-              opacity: 0.8,
-              fillOpacity: 0.3
-            },
+            style: _refreshStyle,
             objectId: feature.id
           });
 
