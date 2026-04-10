@@ -1099,7 +1099,6 @@
       bar.innerHTML = `
         <span id="v2SelectionCount">0 rows selected</span>
         <button id="v2BulkUpdateBtn" style="padding:4px 12px; background:#3b82f6; color:#fff; border:none; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;">Bulk Update</button>
-        <button id="v2ExportCsvBtn" style="padding:4px 10px; background:#10b981; color:#fff; border:none; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;">⬇ Export CSV</button>
         <button id="v2ClearSelectionBtn" style="padding:4px 10px; background:#e2e8f0; color:#475569; border:1px solid #cbd5e1; border-radius:4px; font-size:11px; cursor:pointer;">Clear</button>
       `;
       tableContainer.parentElement.insertBefore(bar, tableContainer);
@@ -1107,10 +1106,6 @@
       document.getElementById('v2BulkUpdateBtn').addEventListener('click', (e) => {
         e.stopPropagation();
         openBulkUpdateModal();
-      });
-      document.getElementById('v2ExportCsvBtn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        exportAnnotationsCsv(true);
       });
       document.getElementById('v2ClearSelectionBtn').addEventListener('click', (e) => {
         e.stopPropagation();

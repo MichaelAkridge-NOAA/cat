@@ -1019,6 +1019,12 @@
     .nav-left h1 {
       margin: 0;
     }
+    .nav-left > a:hover h1 {
+      opacity: 0.8;
+    }
+    .nav-left > a h1 {
+      transition: opacity 0.15s;
+    }
     /* Left-side menu bar */
     .nav-menus {
       display: flex;
@@ -1189,14 +1195,18 @@
   <nav class="navbar">
     <!-- Left group: logo + menus together -->
     <div class="nav-left">
-      <h1>
-        <img src="/logo.png" alt="CAT">
-        <span class="cat-text">CAT</span>
-      </h1>
+      <a href="/" title="Back to Home" style="text-decoration:none; color:inherit;">
+        <h1>
+          <img src="/logo.png" alt="CAT">
+          <span class="cat-text">CAT</span>
+        </h1>
+      </a>
       <div class="nav-menus">
         <div class="nav-dropdown" data-dropdown="file">
           <button class="nav-dropdown-btn" onclick="toggleNavDropdown('file')">File <span class="caret">▾</span></button>
           <div class="nav-dropdown-menu" id="dd-file" style="left:0;right:auto;">
+            <a class="dd-item" href="/project_creator.html">📁 Projects</a>
+            <div class="dd-divider"></div>
             <button class="dd-item" onclick="saveAnnotation(); closeNavDropdowns();">💾 Save Annotation <kbd>Ctrl+S</kbd></button>
             <button class="dd-item" onclick="if(typeof saveProject==='function') saveProject(); closeNavDropdowns();">💾 Save Project</button>
             <div class="dd-divider"></div>
@@ -1235,8 +1245,6 @@
             </div>
             <div class="dd-divider"></div>
             <button class="dd-item" onclick="if(typeof catShowShortcuts==='function') catShowShortcuts(); closeNavDropdowns();">⌨️ Keyboard Shortcuts <kbd>?</kbd></button>
-            <div class="dd-divider"></div>
-            <a class="dd-item" href="/project_creator.html">📁 Projects</a>
           </div>
         </div>
         <div class="nav-dropdown" data-dropdown="settings">
@@ -1249,9 +1257,6 @@
             <div class="dd-label">Application</div>
             <button class="dd-item" onclick="openAutoSaveSettings(); closeNavDropdowns();">💾 Auto-save Preferences</button>
             <button class="dd-item" onclick="openTimerSettings(); closeNavDropdowns();">⏱️ Timer</button>
-            <div class="dd-divider"></div>
-            <div class="dd-label">Export</div>
-            <button class="dd-item" onclick="exportAnnotationsCsv(false); closeNavDropdowns();">⬇ Export All Annotations (CSV)</button>
             <div class="dd-divider"></div>
             <div class="dd-label">Display</div>
             <button class="dd-item" id="ddCentroidToggle" onclick="if(typeof v2ToggleCentroids==='function') v2ToggleCentroids(); closeNavDropdowns();">◉ Centroids</button>
@@ -1271,7 +1276,6 @@
       <button id="undoBtn" onclick="undoLastAction()" disabled title="Undo (Ctrl+Z)" style="background:none;border:1px solid #dee2e6;border-radius:4px;padding:3px 6px;cursor:pointer;font-size:12px;color:#495057;opacity:0.5;" onmouseover="if(!this.disabled)this.style.opacity='1'" onmouseout="if(!this.disabled)this.style.opacity='0.85'">↩</button>
       <button id="redoBtn" onclick="redoLastAction()" disabled title="Redo (Ctrl+Y)" style="background:none;border:1px solid #dee2e6;border-radius:4px;padding:3px 6px;cursor:pointer;font-size:12px;color:#495057;opacity:0.5;" onmouseover="if(!this.disabled)this.style.opacity='1'" onmouseout="if(!this.disabled)this.style.opacity='0.85'">↪</button>
       <button id="saveProjectBtn" class="btn btn-success" style="display:none; padding: 5px 10px; font-size: 12px; white-space: nowrap;">💾 Save</button>
-      <a href="/" style="padding: 5px 10px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 5px; color: #e2e8f0; font-size: 12px; text-decoration: none; white-space: nowrap; transition: background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.18)'" onmouseout="this.style.background='rgba(255,255,255,0.08)'" title="Back to Home">🏠 Home</a>
     </div>
   </nav>
 

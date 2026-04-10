@@ -13,7 +13,7 @@
 #   ./update_cat.sh --branch dev      # Override the target git branch
 # =============================================================================
 SCRIPT_VERSION="1.0.0"
-CAT_BRANCH="cat_db_v5"
+CAT_BRANCH="cat_db_v6"
 CAT_REPO_URL="https://github.com/MichaelAkridge-NOAA/cat.git"
 
 # ── Parse flags ──────────────────────────────────────────────────────────────
@@ -287,6 +287,13 @@ done
 
 if [ "$APP_READY" = true ]; then
     echo "  ✓ CAT app is responding on http://localhost:8000"
+    # Fetch and display version info
+    VERSION_JSON=$(curl -sf http://localhost:8000/api/version 2>/dev/null || echo "")
+    if [ -n "$VERSION_JSON" ]; then
+        APP_VER=$(echo "$VERSION_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('app_version','?'))" 2>/dev/null || echo "?")
+        SCHEMA_VER=$(echo "$VERSION_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('schema_version','?'))" 2>/dev/null || echo "?")
+        echo "  ✓ Version: app=v${APP_VER}  schema=${SCHEMA_VER}"
+    fi
 else
     echo "  ⚠️  CAT health endpoint not reachable yet."
     echo "     Check with: $CAT_INSTALL_DIR/cat-status.sh"

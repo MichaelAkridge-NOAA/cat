@@ -288,6 +288,54 @@ DDL_BLOCKS: List[str] = [
     END;
     """,
     # -----------------------------------------------------------------
+    # Schema migrations tracking table
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[
+            CREATE TABLE cat_schema_migrations (
+                migration_id  VARCHAR2(20) PRIMARY KEY,
+                description   VARCHAR2(500) NOT NULL,
+                applied_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    # Record known migrations (MERGE = upsert, safe to re-run)
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0001' AS mid, 'Baseline tables: projects, assets, annotations, sessions, overlay layers/features' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0002' AS mid, 'Site reference tables: cat_sites, cat_site_visits, indexes' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0003' AS mid, 'Column migrations: version+deleted_at on annotations, last_heartbeat on sessions' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0004' AS mid, 'Coral species reference table (cat_coral_species)' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0005' AS mid, 'Schema migrations tracking table (cat_schema_migrations)' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
+    # -----------------------------------------------------------------
     # Coral species reference table
     # -----------------------------------------------------------------
     """
@@ -338,8 +386,26 @@ def bootstrap_schema() -> dict:
     for ddl in DDL_BLOCKS:
         execute(ddl)
 
+    # Read back the applied migrations for the summary
+    try:
+        from .oracle import get_connection
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT migration_id, description FROM cat_schema_migrations ORDER BY migration_id"
+                )
+                migrations = [
+                    {"id": row[0], "description": row[1]} for row in cur.fetchall()
+                ]
+                schema_version = migrations[-1]["id"] if migrations else "unknown"
+    except Exception:
+        migrations = []
+        schema_version = "unknown"
+
     return {
         "success": True,
+        "schema_version": schema_version,
+        "migrations": migrations,
         "tables": [
             "cat_projects",
             "cat_project_assets",
@@ -350,5 +416,6 @@ def bootstrap_schema() -> dict:
             "cat_sites",
             "cat_site_visits",
             "cat_coral_species",
+            "cat_schema_migrations",
         ],
     }

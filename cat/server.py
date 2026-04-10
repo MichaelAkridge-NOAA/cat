@@ -79,6 +79,9 @@ if SUPPRESS_TILEMATRIX_WARNINGS:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# CAT DB app version — bump this with each release
+CAT_APP_VERSION = "4.0.0"
+
 # Package directory - where this file lives (contains web/, docs/, etc.)
 BASE_DIR = Path(__file__).parent
 
@@ -374,6 +377,37 @@ app.mount("/css", StaticFiles(directory=str(Path(web_directory) / "css")), name=
 def health_check():
     """Simple health check endpoint for container orchestration."""
     return {"status": "healthy", "service": "cat"}
+
+
+@app.get("/api/version")
+def get_version():
+    """Return app version and DB schema version."""
+    schema_version = "unavailable"
+    migrations = []
+    if DB_API_AVAILABLE:
+        try:
+            from cat.db.oracle import get_connection
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT migration_id, description, applied_at "
+                        "FROM cat_schema_migrations ORDER BY migration_id"
+                    )
+                    rows = cur.fetchall()
+                    migrations = [
+                        {"id": r[0], "description": r[1],
+                         "applied_at": r[2].isoformat() if r[2] else None}
+                        for r in rows
+                    ]
+                    schema_version = migrations[-1]["id"] if migrations else "none"
+        except Exception as exc:
+            schema_version = f"error: {exc}"
+    return {
+        "app_version": CAT_APP_VERSION,
+        "schema_version": schema_version,
+        "migrations": migrations,
+        "db_available": DB_API_AVAILABLE,
+    }
 
 
 # API endpoint to list available COG files in the data directory

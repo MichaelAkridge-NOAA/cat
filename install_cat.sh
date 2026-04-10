@@ -1,14 +1,14 @@
 #!/bin/bash
 # =============================================================================
 # CAT: Coral Annotation Tool - Installation Script for Google Cloud Workstations
-# Version: 2.0.0 (2026-03-30)
+# Version: 5.0.0 (2026-04-10)
 # =============================================================================
 # Installs and configures CAT with Docker and Oracle database
 # Handles auto-start on reboot and management commands
 # Auto-bootstrap: Creates CAT schema and ingests reference data on startup
 # =============================================================================
-SCRIPT_VERSION="5.0.0"
-CAT_BRANCH="cat_db_v5"
+SCRIPT_VERSION="6.0.0"
+CAT_BRANCH="cat_db_v6"
 
 echo "=============================================="
 echo "CAT Installer v${SCRIPT_VERSION}"
