@@ -2,14 +2,29 @@
 """
 make_cog.py — Convert a GeoTIFF to a Cloud Optimized GeoTIFF (COG).
 
+Default compression:
+  RGB/RGBA  → zstd  (lossless, good compression, fast tile serving)
+  All other → lzw   (lossless)
+
 Examples (Windows CMD):
+
+  # Default — lossless zstd, high quality:
   python -m cat.scripts.make_cog ^
     --src "C:\\path\\to\\2025_GUA-2838_mos.tif" ^
-    --dst "C:\\path\\to\\2025_GUA-2838_mos_cog.tif" ^
-    --resampling bilinear
+    --dst "C:\\path\\to\\2025_GUA-2838_mos_cog.tif"
 
-For single-band DEMs you can set nodata (within dtype range), e.g.:
-  python -m cat.scripts.make_cog --src dem.tif --dst dem_cog.tif --nodata -9999 --resampling bilinear
+  # JPEG at quality 95 (near-lossless, smaller file):
+  python -m cat.scripts.make_cog ^
+    --src input.tif --dst output_cog.tif ^
+    --profile jpeg --quality 95
+
+  # Lossless with best compression (zstd):
+  python -m cat.scripts.make_cog ^
+    --src input.tif --dst output_cog.tif ^
+    --profile zstd
+
+  # Single-band DEM with nodata:
+  python -m cat.scripts.make_cog --src dem.tif --dst dem_cog.tif --nodata -9999
 """
 
 import argparse
@@ -24,20 +39,31 @@ from rio_cogeo.cogeo import cog_translate
 from rio_cogeo.profiles import cog_profiles
 
 
-def choose_profile(band_count: int, forced: str | None) -> dict:
+def choose_profile(band_count: int, forced: str | None, quality: int | None) -> dict:
     if forced:
-        if forced not in {"jpeg", "lzw", "zstd"}:
-            raise ValueError("--profile must be one of: jpeg|lzw|zstd")
-        return cog_profiles.get(forced)
-    # Auto: RGB(A) -> jpeg, everything else -> lzw
-    return cog_profiles.get("jpeg" if band_count in (3, 4) else "lzw")
+        if forced not in {"jpeg", "lzw", "zstd", "deflate"}:
+            raise ValueError("--profile must be one of: jpeg|lzw|zstd|deflate")
+        profile = dict(cog_profiles.get(forced))
+    else:
+        # Auto: RGB(A) -> zstd (lossless, good compression), everything else -> lzw
+        profile = dict(cog_profiles.get("zstd" if band_count in (3, 4) else "lzw"))
+
+    # Apply quality setting for JPEG profiles
+    if profile.get("compress", "").lower() == "jpeg":
+        profile["quality"] = quality if quality is not None else 90
+    elif quality is not None:
+        print("WARNING: --quality only applies to JPEG compression; ignored for lossless profiles.")
+
+    return profile
 
 
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--src", required=True, help="Input GeoTIFF")
     p.add_argument("--dst", required=True, help="Output COG path")
-    p.add_argument("--profile", help="Force profile: jpeg|lzw|zstd")
+    p.add_argument("--profile", help="Compression: jpeg|lzw|zstd|deflate  (default: zstd for RGB, lzw for single-band)")
+    p.add_argument("--quality", type=int, default=None,
+                   help="JPEG quality 1-100 (default: 90). Only applies when --profile jpeg is set.")
     p.add_argument("--nodata", type=float, default=None,
                    help="Set nodata for single-band numeric rasters (ignored for multi-band RGB)")
     p.add_argument("--resampling", default="bilinear",
@@ -111,7 +137,7 @@ def main():
         else:
             print(f"WARNING: Source CRS: {src_crs or 'Unknown'}")
 
-    profile = choose_profile(band_count, args.profile)
+    profile = choose_profile(band_count, args.profile, args.quality)
 
     # Internal mask is generally what we want for RGB and is safe otherwise
     config = {"GDAL_TIFF_INTERNAL_MASK": True}
@@ -158,9 +184,11 @@ def main():
             config=config,
             overview_resampling=overview_resampling,  # pass string name, NOT enum/int
         )
+        compress = profile.get('compress', 'none')
+        quality_str = f", quality={profile['quality']}" if 'quality' in profile else " (lossless)"
         print(
             f"SUCCESS: COG written: {args.dst} "
-            f"(bands={band_count}, dtype={dtype}, compress={profile.get('compress','none')}, "
+            f"(bands={band_count}, dtype={dtype}, compress={compress}{quality_str}, "
             f"resampling={overview_resampling})"
         )
     finally:
