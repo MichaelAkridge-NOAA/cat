@@ -149,7 +149,7 @@
     _activateTimeout = setTimeout(() => {
       _activateTimeout = null;
       try {
-        if (typeof drawControl === 'undefined') return;
+        if (!drawControl) return;
 
         // ── FIX: disable any active toolbar handler first ──
         // The toolbar's own L.Draw.Polyline could still be active if the
@@ -291,6 +291,15 @@
           clearTimeout(_tableUpdateTimer);
           _tableUpdateTimer = setTimeout(() => {
             if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
+            // Sync to popout panel if open
+            if (window._catChannel && typeof annotations !== 'undefined') {
+              try {
+                const serializable = JSON.parse(JSON.stringify(annotations));
+                window._catChannel.postMessage({ type: 'sync-annotations', annotations: serializable });
+              } catch (e) {
+                console.warn('v2-bulk: Could not sync to popout:', e);
+              }
+            }
           }, 300);
 
           // Mark changes

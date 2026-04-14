@@ -10,6 +10,48 @@
   <link rel="stylesheet" href="css/annotation-panels.css" />
   <link rel="stylesheet" href="css/annotation-controls.css" />
   <link rel="stylesheet" href="css/annotation-v2.css" />
+  <!-- Popout mode detection — must run before any runtime scripts -->
+  <script>
+    window._catPopoutMode = new URLSearchParams(window.location.search).get('cat_popout') || null;
+    if (window._catPopoutMode) {
+      document.documentElement.classList.add('cat-popout-' + window._catPopoutMode);
+
+      // Layer 1: inject a <style> so hiding applies before elements render
+      var _ps = document.createElement('style');
+      _ps.id = 'cat-popout-style';
+      _ps.textContent =
+        '.navbar,.navbar *,#map,.layer-control,.stats-panel,#statsPanel,' +
+        '.leaflet-container,.leaflet-pane,#sam3Container{display:none!important}' +
+        '#annotationFormPanel{display:block!important;position:static!important;' +
+        'max-height:none!important;min-height:100vh;width:100%;overflow-y:auto;' +
+        'border-radius:0!important;box-shadow:none!important;padding:16px!important}' +
+        'body{overflow:auto!important;background:#f0f4ff!important;height:auto!important}' +
+        '#loadingOverlay{display:none!important}';
+      document.head.appendChild(_ps);
+
+      // Layer 2: after DOM is ready, set inline styles directly so nothing can re-hide them
+      document.addEventListener('DOMContentLoaded', function() {
+        var hide = document.querySelectorAll('.navbar, #map, .layer-control, .stats-panel, #statsPanel, #loadingOverlay, .loading-overlay');
+        for (var i = 0; i < hide.length; i++) {
+          hide[i].style.setProperty('display', 'none', 'important');
+        }
+        var panel = document.getElementById('annotationFormPanel');
+        if (panel) {
+          panel.style.setProperty('display', 'block', 'important');
+          panel.style.setProperty('position', 'static', 'important');
+          panel.style.setProperty('max-height', 'none', 'important');
+          panel.style.setProperty('min-height', '100vh', 'important');
+          panel.style.setProperty('width', '100%', 'important');
+          panel.style.setProperty('overflow-y', 'auto', 'important');
+          panel.style.setProperty('border-radius', '0', 'important');
+          panel.style.setProperty('box-shadow', 'none', 'important');
+          panel.style.setProperty('padding', '16px', 'important');
+        }
+        document.body.style.setProperty('overflow', 'auto', 'important');
+        document.body.style.setProperty('background', '#f0f4ff', 'important');
+      });
+    }
+  </script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
   <!-- Phase 1: Externalized CSS files (legacy inline styles retained but disabled) -->
@@ -1225,6 +1267,7 @@
           <button class="nav-dropdown-btn" onclick="toggleNavDropdown('view')">View <span class="caret">▾</span></button>
           <div class="nav-dropdown-menu" id="dd-view" style="left:0;right:auto;">
             <button class="dd-item" onclick="toggleLayoutMode(); closeNavDropdowns();" id="ddLayoutToggle">⬛ Dock Right</button>
+            <button class="dd-item" onclick="openAnnotationPopout(); closeNavDropdowns();">⊞ Pop Out Panel</button>
             <button class="dd-item" onclick="document.getElementById('toggleLabels').click(); closeNavDropdowns();">🏷️ Toggle Labels</button>
             <button class="dd-item" onclick="if(typeof refreshAnnotations==='function') refreshAnnotations(); closeNavDropdowns();">🔄 Refresh Annotations</button>
           </div>
@@ -1440,9 +1483,19 @@
             <div style="font-size: 9px; color: #6c757d;">Press <kbd style="background: white; padding: 1px 4px; border-radius: 2px; border: 1px solid #ccc; font-size: 9px;">Ctrl+S</kbd> to save</div>
           </div>
         </div>
-        <span class="section-collapse-icon" id="formSectionIcon">▼</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <button class="popout-btn" id="popoutBtn" onclick="openAnnotationPopout()" title="Open annotation panel in a separate window">⊞ Pop Out</button>
+          <span class="section-collapse-icon" id="formSectionIcon">▼</span>
+        </div>
       </div>
-      
+
+      <!-- Waiting indicator shown in form-popout mode until a shape is received -->
+      <div id="popoutWaitingIndicator">
+        <div style="font-size:36px;margin-bottom:12px;">📐</div>
+        <div style="font-weight:600;">Draw a shape on the main map</div>
+        <div style="font-size:12px;color:#999;margin-top:6px;">The form will appear here once a shape is drawn</div>
+      </div>
+
       <div id="formSectionContent" class="section-content">
         <div class="form-container">
       <!-- Core Fields -->
@@ -1745,7 +1798,9 @@
         <div style="display: flex; align-items: center; gap: 15px;">
           <h3 style="margin: 0; font-size: 15px;">📋 Annotations (<span id="annotationCount">0</span>)</h3>
         </div>
-        <span class="section-collapse-icon" id="annotationsListSectionIcon">▼</span>
+        <div style="display:flex;align-items:center;gap:6px;" onclick="event.stopPropagation()">
+          <span class="section-collapse-icon" id="annotationsListSectionIcon">▼</span>
+        </div>
       </div>
       
       <div id="annotationsListSectionContent" class="section-content">
@@ -1971,6 +2026,105 @@
   <script src="js/v2-table.js"></script>
   <script src="js/v2-lasso.js"></script>
   <script src="js/v2-defaults.js"></script>
+
+  <!-- ============================================================ -->
+  <!--  Pop-out Window Support (BroadcastChannel sync)              -->
+  <!-- ============================================================ -->
+  <script>
+  (function() {
+    'use strict';
+    const _ch = new BroadcastChannel('cat-annotation-v1');
+    window._catChannel = _ch;
+    const _mode = window._catPopoutMode;
+
+    if (_mode) {
+      // ── Popout window setup ──
+      document.body.classList.add('cat-popout-' + _mode);
+
+      // Show the annotation panel
+      const panel = document.getElementById('annotationFormPanel');
+      if (panel) panel.style.display = '';
+
+      // Both modes show the full panel — form + table both visible
+
+      // Hide pop-out buttons (no need to pop out from within a popout)
+      const _pb = document.getElementById('popoutBtn');
+      if (_pb) _pb.style.display = 'none';
+
+      // Listen for messages from the main window
+      _ch.onmessage = function(e) {
+        const msg = e.data;
+        if (msg.type === 'new-shape') {
+          window._popoutGeometry = msg.geometry;
+          window._popoutShapeType = msg.shapeType;
+          if (typeof showStatus === 'function') showStatus('Shape received — fill in the form and click Save', 'info');
+          // Focus the species field so the user can start typing immediately
+          window.focus();
+          const spField = document.getElementById('spcode');
+          if (spField) { spField.focus(); spField.select(); }
+        }
+        if (msg.type === 'sync-annotations' && Array.isArray(msg.annotations)) {
+          // Bulk draw sync — replace local annotations array and refresh table
+          annotations.length = 0;
+          msg.annotations.forEach(function(a) { annotations.push(a); });
+          if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
+        }
+        if (msg.type === 'annotations-changed' && _mode === 'table') {
+          if (typeof refreshAnnotationsFromDb === 'function') {
+            refreshAnnotationsFromDb().catch(function(e) { console.warn('Refresh failed:', e); });
+          }
+        }
+      };
+
+      // Announce readiness to main window (so main can send pending shape)
+      _ch.postMessage({ type: 'popout-ready', mode: _mode });
+
+      // Tell main window when this popout closes so it can restore the panel
+      window.addEventListener('beforeunload', function() {
+        _ch.postMessage({ type: 'popout-closed' });
+      });
+
+    } else {
+      // ── Main window: listen for popout events ──
+      _ch.onmessage = function(e) {
+        const msg = e.data;
+        if (msg.type === 'annotations-changed') {
+          if (typeof refreshAnnotations === 'function') {
+            refreshAnnotations().catch(function(e) { console.warn('Refresh failed:', e); });
+          }
+        }
+        if (msg.type === 'popout-ready' && msg.mode === 'form' && window._pendingPopoutShape) {
+          _ch.postMessage(window._pendingPopoutShape);
+          window._pendingPopoutShape = null;
+        }
+        if (msg.type === 'popout-closed') {
+          // Restore the annotation panel when the popout window closes
+          const mainPanel = document.getElementById('annotationFormPanel');
+          if (mainPanel) mainPanel.style.display = '';
+        }
+      };
+    }
+
+    // ── Pop-out opener ──
+    window.openAnnotationPopout = function() {
+      if (window._annotationPopout && !window._annotationPopout.closed) { window._annotationPopout.focus(); return; }
+      const base = window.location.pathname;
+      const pid = (typeof currentProject !== 'undefined' && currentProject && currentProject.project_id)
+        ? '&project_id=' + currentProject.project_id : '';
+      window._annotationPopout = window.open(
+        base + '?cat_popout=panel' + pid,
+        'cat-annotation-popout',
+        'width=1200,height=800,resizable=yes,scrollbars=yes'
+      );
+      // Hide the entire annotation panel while the popout is open
+      const mainPanel = document.getElementById('annotationFormPanel');
+      if (mainPanel) mainPanel.style.display = 'none';
+    };
+    // Keep old names as aliases in case anything still calls them
+    window.openFormPopout = window.openAnnotationPopout;
+    window.openTablePopout = window.openAnnotationPopout;
+  })();
+  </script>
 
   <!-- ============================================================ -->
   <!--  Species Filter Settings Modal                                -->

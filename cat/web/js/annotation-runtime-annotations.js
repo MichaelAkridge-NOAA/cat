@@ -48,8 +48,16 @@
       const fmtPct = (v) => (v !== undefined && v !== null && v !== '') ? v + '%' : '-';
       const fmtVal = (v) => (v !== undefined && v !== null && v !== '') ? v : '-';
 
-      // Populate table with annotations
-      annotations.forEach((ann, index) => {
+      // Populate table with annotations — descending by ID (newest at top)
+      const sortedIndices = annotations
+        .map((ann, i) => ({ ann, i }))
+        .sort((a, b) => {
+          const idA = a.ann.colony_id || a.ann.COLONY_ID || a.ann.id || a.ann.ID || (a.i + 1);
+          const idB = b.ann.colony_id || b.ann.COLONY_ID || b.ann.id || b.ann.ID || (b.i + 1);
+          return Number(idB) - Number(idA);
+        });
+
+      sortedIndices.forEach(({ ann, i: index }) => {
         const row = document.createElement('tr');
         row.dataset.index = index;
 
@@ -1056,8 +1064,23 @@
 
       // Mark unsaved and trigger save/sync
       hasUnsavedChanges = true;
+
+      // In popout mode: sync directly to DB (drawnItems is a stub, no layers to iterate)
+      if (window._catPopoutMode && typeof isOracleProjectMode === 'function' && isOracleProjectMode() &&
+          typeof syncAnnotationToDb === 'function') {
+        syncAnnotationToDb(annotation)
+          .then(() => {
+            if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed' });
+          })
+          .catch(err => showStatus(`❌ DB sync failed: ${err.message}`, 'error'));
+        closeEditModal();
+        showStatus('✅ Annotation updated', 'success');
+        return;
+      }
+
       if (typeof isOracleProjectMode === 'function' && isOracleProjectMode()) {
         if (typeof saveProject === 'function') saveProject();
+        if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed' });
       }
 
       // Close modal (this will also hide geometry edit buttons)
@@ -1314,10 +1337,27 @@
     
     async function deleteAnnotation(index) {
       if (!await catConfirm('Delete this annotation?', { danger: true, ok: 'Delete' })) return;
-      
+
       const ann = annotations[index];
       if (!ann) return;
-      
+
+      // In popout mode: delete directly from DB (no Leaflet layers to remove)
+      if (window._catPopoutMode && typeof isOracleProjectMode === 'function' && isOracleProjectMode()) {
+        const dbId = typeof getDbAnnotationId === 'function' ? getDbAnnotationId(ann) : null;
+        if (dbId) {
+          try {
+            await fetch(`${serverUrl}/api/db/projects/${currentProject.project_id}/annotations/${dbId}`, {
+              method: 'DELETE'
+            });
+          } catch (err) { console.warn('Delete API call failed:', err); }
+        }
+        annotations.splice(index, 1);
+        updateAnnotationTable();
+        if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed' });
+        showStatus('🗑️ Annotation deleted', 'success');
+        return;
+      }
+
       // Find and remove layer from map (and get its ID for label removal)
       let layerId = null;
       drawnItems.eachLayer(layer => {
@@ -1351,7 +1391,8 @@
       if (typeof isOracleProjectMode === 'function' && isOracleProjectMode()) {
         setAutoSaveBadge('pending', '🔵 Unsaved changes');
         if (typeof saveProject === 'function') saveProject();
+        if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed' });
       }
     }
-    
+
     // Auto-save logic extracted to js/annotation-runtime-autosave.js

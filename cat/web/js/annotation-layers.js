@@ -7,6 +7,7 @@
 // Local variables for this module
 let demLayer = null;
 let projectBounds = null;
+let cogVisualSettings = {};   // keyed by tif.id — stores gamma, saturation, contrast, rescale
 
 /**
  * Load a COG/TIF layer onto the map
@@ -43,6 +44,14 @@ async function loadTifLayer(tif) {
     }
   }
   
+  // For non-DEM COGs, apply visual settings if any are set
+  if (!isDEM) {
+    const vs = cogVisualSettings[tif.id] || {};
+    const formula = buildColorFormula(vs);
+    if (formula)  tileUrl += `&color_formula=${encodeURIComponent(formula)}`;
+    if (vs.rescale) tileUrl += `&rescale=${vs.rescale}`;
+  }
+
   console.log('🔧 Loading TIF layer:', {
     name: tif.name,
     cogPath: tif.cog_path,
@@ -96,6 +105,62 @@ async function loadTifLayer(tif) {
   // Set as current COG if it's not a DEM
   if (!isDEM) {
     currentCOG = tif;
+  }
+}
+
+/**
+ * Build a TiTiler color_formula string from visual settings.
+ * Returns null if all values are at their defaults.
+ * @param {Object} settings - Visual settings object
+ * @returns {string|null}
+ */
+function buildColorFormula(settings) {
+  const parts = [];
+  const gamma = settings.gamma ?? 1.0;
+  const sat   = settings.saturation ?? 1.0;
+  const cont  = settings.contrast ?? 0.0;
+
+  if (gamma !== 1.0)
+    parts.push(`gamma R G B ${gamma.toFixed(2)}`);
+  if (cont > 0)
+    parts.push(`sigmoidal R G B ${cont.toFixed(2)} 0.13`);
+  if (sat !== 1.0)
+    parts.push(`saturation ${sat.toFixed(2)}`);
+
+  return parts.length ? parts.join(' ') : null;
+}
+
+/**
+ * Reload a COG layer using the current cogVisualSettings for that layer.
+ * @param {Object} tif - TIF configuration object
+ */
+function reloadCogWithSettings(tif) {
+  if (tifLayers[tif.id]) {
+    const map = getMap();
+    if (map) map.removeLayer(tifLayers[tif.id]);
+    delete tifLayers[tif.id];
+  }
+  loadTifLayer(tif);
+}
+
+/**
+ * Fetch /statistics for a COG, derive p2/p98 rescale, then reload.
+ * @param {Object} tif - TIF configuration object
+ */
+async function applyAutoStretch(tif) {
+  const cogPath = encodeURIComponent(tif.cog_path);
+  const statsUrl = `${window.location.origin}/statistics?url=${cogPath}`;
+  try {
+    const res   = await fetch(statsUrl);
+    const stats = await res.json();
+    const b1    = stats.b1 || stats['1'] || {};
+    const p2    = b1.percentile_2  ?? 0;
+    const p98   = b1.percentile_98 ?? 255;
+    if (!cogVisualSettings[tif.id]) cogVisualSettings[tif.id] = {};
+    cogVisualSettings[tif.id].rescale = `${p2},${p98}`;
+    reloadCogWithSettings(tif);
+  } catch (e) {
+    console.warn('Auto-stretch failed:', e);
   }
 }
 
@@ -532,22 +597,54 @@ function buildLayerControls(tifFiles) {
         toggleLayerDetails(`${safeId}_details`);
       });
     } else {
-      // Regular TIF (orthomosaic)
+      // Regular TIF (orthomosaic) — collapsible visual settings panel
       layerDiv.innerHTML = `
-        <label>
-          <input type="checkbox" class="tif-layer-checkbox" data-tif-id="${tif.id}" ${shouldAutoLoad ? 'checked' : ''}>
-          <span>${tif.name}</span>
-        </label>
+        <div class="layer-header tif-header-${safeId}" style="cursor:pointer;">
+          <div class="layer-name" style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+            <label onclick="event.stopPropagation()" style="display:flex;align-items:center;gap:8px;flex:1;">
+              <input type="checkbox" class="tif-layer-checkbox" data-tif-id="${tif.id}" ${shouldAutoLoad ? 'checked' : ''}>
+              <span>${tif.name}</span>
+            </label>
+            <span class="layer-collapse-icon" id="${safeId}_detailsIcon">▶</span>
+          </div>
+        </div>
+        <div class="layer-details collapsed" id="${safeId}_details">
+          <div class="opacity-control">
+            <label>Opacity: <span id="${safeId}_opacityValue">100</span>%</label>
+            <input type="range" class="opacity-slider" id="${safeId}_opacity" min="0" max="100" value="100">
+          </div>
+          <div class="opacity-control">
+            <label>Brightness (γ): <span id="${safeId}_gammaValue">1.0</span></label>
+            <input type="range" id="${safeId}_gamma" min="50" max="300" value="100">
+          </div>
+          <div class="opacity-control">
+            <label>Saturation: <span id="${safeId}_saturationValue">1.0</span></label>
+            <input type="range" id="${safeId}_saturation" min="0" max="200" value="100">
+          </div>
+          <div class="opacity-control">
+            <label>Contrast: <span id="${safeId}_contrastValue">0.00</span></label>
+            <input type="range" id="${safeId}_contrast" min="0" max="50" value="0">
+          </div>
+          <div style="display:flex;gap:6px;margin-top:8px;">
+            <button id="${safeId}_autoStretch" style="flex:1;padding:5px;background:#0891b2;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;">Auto-Stretch</button>
+            <button id="${safeId}_reset" style="flex:1;padding:5px;background:#6b7280;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;">Reset</button>
+          </div>
+          <p style="font-size:10px;color:#999;margin:4px 0 0;">Auto-stretch adjusts range to p2–p98</p>
+        </div>
       `;
+
+      // Header collapse toggle
+      const cogHeader = layerDiv.querySelector(`.tif-header-${safeId}`);
+      cogHeader.addEventListener('click', () => toggleLayerDetails(`${safeId}_details`));
     }
-    
+
     mapFileSection.appendChild(layerDiv);
-    
+
     // Add event listeners
     const checkbox = layerDiv.querySelector('.tif-layer-checkbox');
     const opacitySlider = layerDiv.querySelector(`#${safeId}_opacity`);
     const colormapSelect = layerDiv.querySelector(`#${safeId}_colormap`);
-    
+
     checkbox.addEventListener('change', (e) => {
       if (e.target.checked) {
         loadTifLayer(tif);
@@ -559,27 +656,93 @@ function buildLayerControls(tifFiles) {
         if (isDEM && colormapSelect) colormapSelect.disabled = true;
       }
     });
-    
-    // Opacity slider listener
+
+    // DEM: Opacity slider
     if (isDEM && opacitySlider) {
       opacitySlider.addEventListener('input', (e) => {
         const value = e.target.value;
         document.getElementById(`${safeId}_opacityValue`).textContent = value;
-        setTifOpacity(tif.id, value, safeId);
+        setTifOpacity(tif.id, value);
       });
     }
-    
-    // Colormap change listener
+
+    // DEM: Colormap change
     if (isDEM && colormapSelect) {
       colormapSelect.addEventListener('change', () => {
-        // Reload the TIF with new colormap
         if (tifLayers[tif.id]) {
           removeTifLayer(tif.id);
           loadTifLayer(tif);
         }
       });
     }
-    
+
+    // Non-DEM visual controls
+    if (!isDEM) {
+      // Opacity — immediate, no tile reload
+      if (opacitySlider) {
+        opacitySlider.addEventListener('input', (e) => {
+          document.getElementById(`${safeId}_opacityValue`).textContent = e.target.value;
+          setTifOpacity(tif.id, e.target.value);
+        });
+      }
+
+      // Gamma — slider 50–300 → 0.5–3.0
+      const gammaSlider = layerDiv.querySelector(`#${safeId}_gamma`);
+      if (gammaSlider) {
+        gammaSlider.addEventListener('change', (e) => {
+          const val = e.target.value / 100;
+          document.getElementById(`${safeId}_gammaValue`).textContent = val.toFixed(1);
+          if (!cogVisualSettings[tif.id]) cogVisualSettings[tif.id] = {};
+          cogVisualSettings[tif.id].gamma = val;
+          if (tifLayers[tif.id]) reloadCogWithSettings(tif);
+        });
+      }
+
+      // Saturation — slider 0–200 → 0.0–2.0
+      const satSlider = layerDiv.querySelector(`#${safeId}_saturation`);
+      if (satSlider) {
+        satSlider.addEventListener('change', (e) => {
+          const val = e.target.value / 100;
+          document.getElementById(`${safeId}_saturationValue`).textContent = val.toFixed(1);
+          if (!cogVisualSettings[tif.id]) cogVisualSettings[tif.id] = {};
+          cogVisualSettings[tif.id].saturation = val;
+          if (tifLayers[tif.id]) reloadCogWithSettings(tif);
+        });
+      }
+
+      // Contrast — slider 0–50 → sigmoidal threshold 0.00–0.50
+      const contrastSlider = layerDiv.querySelector(`#${safeId}_contrast`);
+      if (contrastSlider) {
+        contrastSlider.addEventListener('change', (e) => {
+          const val = e.target.value / 100;
+          document.getElementById(`${safeId}_contrastValue`).textContent = val.toFixed(2);
+          if (!cogVisualSettings[tif.id]) cogVisualSettings[tif.id] = {};
+          cogVisualSettings[tif.id].contrast = val;
+          if (tifLayers[tif.id]) reloadCogWithSettings(tif);
+        });
+      }
+
+      // Auto-Stretch button
+      const autoStretchBtn = layerDiv.querySelector(`#${safeId}_autoStretch`);
+      if (autoStretchBtn) {
+        autoStretchBtn.addEventListener('click', () => {
+          if (tifLayers[tif.id]) applyAutoStretch(tif);
+        });
+      }
+
+      // Reset button
+      const resetBtn = layerDiv.querySelector(`#${safeId}_reset`);
+      if (resetBtn) {
+        resetBtn.addEventListener('click', () => {
+          cogVisualSettings[tif.id] = {};
+          if (gammaSlider)    { gammaSlider.value = 100;    document.getElementById(`${safeId}_gammaValue`).textContent = '1.0'; }
+          if (satSlider)      { satSlider.value = 100;      document.getElementById(`${safeId}_saturationValue`).textContent = '1.0'; }
+          if (contrastSlider) { contrastSlider.value = 0;   document.getElementById(`${safeId}_contrastValue`).textContent = '0.00'; }
+          if (tifLayers[tif.id]) reloadCogWithSettings(tif);
+        });
+      }
+    }
+
     // Auto-load the first layer
     if (shouldAutoLoad) {
       loadTifLayer(tif);
@@ -735,6 +898,9 @@ if (typeof module !== 'undefined' && module.exports) {
     clearAllLayers,
     buildLayerControls,
     buildShapefileControls,
-    zoomToSite
+    zoomToSite,
+    buildColorFormula,
+    reloadCogWithSettings,
+    applyAutoStretch
   };
 }

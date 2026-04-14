@@ -758,3 +758,59 @@ body.layout-docked #layout-resize-handle {
 .edit-tool-btn:active {
   transform: translateY(0);
 }
+
+/* ─── Popout Window Modes ─── */
+
+html.cat-popout-form .navbar,
+html.cat-popout-form #map,
+html.cat-popout-form .layer-control,
+html.cat-popout-form #statsPanel,
+html.cat-popout-form .leaflet-container,
+html.cat-popout-table .navbar,
+html.cat-popout-table #map,
+html.cat-popout-table .layer-control,
+html.cat-popout-table #statsPanel,
+html.cat-popout-table .leaflet-container { display: none !important; }
+
+html.cat-popout-form #annotationFormPanel,
+html.cat-popout-table #annotationFormPanel {
+  position: static !important;
+  display: block !important;
+  max-height: none !important;
+  min-height: 100vh;
+  overflow-y: auto;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 12px;
+}
+
+/* Both popout modes show the full panel — no section-specific hiding */
+
+html.cat-popout-form body,
+html.cat-popout-table body {
+  overflow: auto !important;
+  background: #f0f4ff !important;
+}
+
+/* Waiting-for-shape indicator (form popout) */
+#popoutWaitingIndicator {
+  display: none;
+  text-align: center;
+  padding: 60px 20px;
+  color: #667eea;
+}
+#popoutWaitingIndicator.visible { display: block; }
+
+/* Pop-out button in section headers */
+.popout-btn {
+  background: none;
+  border: 1px solid #aab3e8;
+  border-radius: 4px;
+  padding: 2px 7px;
+  cursor: pointer;
+  font-size: 11px;
+  color: #667eea;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.popout-btn:hover { background: #eef0ff; }

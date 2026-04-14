@@ -226,14 +226,15 @@
       }
 
       initializeAnnotationForm();
-      loadProjectLayers();
+      if (!window._catPopoutMode) {
+        loadProjectLayers();
+        // Initialize overlay layers (shapefiles) for DB projects
+        if (typeof initializeOverlayControls === 'function') {
+          initializeOverlayControls(numericId);
+        }
+      }
       loadProjectAnnotations();
       startTimer();
-
-      // Initialize overlay layers (shapefiles) for DB projects
-      if (typeof initializeOverlayControls === 'function') {
-        initializeOverlayControls(numericId);
-      }
 
       // Start DB annotation session (best effort)
       try {
@@ -480,17 +481,27 @@
             </div>
           `;
         } else {
-          // Regular TIF (orthomosaic) - simple checkbox with consistent styling matching DEM headers
+          // Regular TIF (orthomosaic) — compact row + gear button opens right-side drawer
+          cogTifRegistry[tif.id] = tif;
           layerDiv.innerHTML = `
-            <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #333;">
-              <input type="checkbox" class="tif-layer-checkbox" data-tif-id="${tif.id}" data-cog-path="${tif.cog_path}" data-type="${tif.type}" ${shouldAutoLoad ? 'checked' : ''}>
-              <span>📷 ${tif.name}</span>
-            </label>
+            <div class="layer-header" style="display:flex;align-items:center;justify-content:space-between;padding:4px 2px;">
+              <label style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer;">
+                <input type="checkbox" class="tif-layer-checkbox" data-tif-id="${tif.id}" data-cog-path="${tif.cog_path}" data-type="${tif.type}" ${shouldAutoLoad ? 'checked' : ''}>
+                <span style="font-size:13px;font-weight:600;color:#333;">📷 ${tif.name}</span>
+              </label>
+              <button class="cog-settings-open-btn" title="COG Settings"
+                style="background:none;border:1px solid #d1d5db;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:13px;color:#555;line-height:1.4;">⚙</button>
+            </div>
           `;
+
+          layerDiv.querySelector('.cog-settings-open-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            openCogSettingsDrawer(tif);
+          });
         }
-        
+
         mapFileSection.appendChild(layerDiv);
-        
+
         // Add header click listener for DEM layers
         if (isDEM) {
           const header = layerDiv.querySelector(`.tif-header-${safeId}`);
@@ -498,40 +509,40 @@
             toggleLayerDetails(`${safeId}_details`);
           });
         }
-        
+
         // Add change listener
         const checkbox = layerDiv.querySelector('.tif-layer-checkbox');
         const opacitySlider = layerDiv.querySelector(`#${safeId}_opacity`);
         const colormapSelect = layerDiv.querySelector(`#${safeId}_colormap`);
-        
+
         checkbox.addEventListener('change', (e) => {
           if (e.target.checked) {
             loadTifLayer(tif);
-            // Enable controls for DEM
             if (isDEM && opacitySlider) opacitySlider.disabled = false;
             if (isDEM && colormapSelect) colormapSelect.disabled = false;
           } else {
             removeTifLayer(tif.id);
-            // Disable controls for DEM
             if (isDEM && opacitySlider) opacitySlider.disabled = true;
             if (isDEM && colormapSelect) colormapSelect.disabled = true;
           }
         });
-        
-        // Add opacity slider listener for DEM
+
+        // DEM: opacity slider
         if (isDEM && opacitySlider) {
           opacitySlider.addEventListener('input', (e) => {
             setTifOpacity(tif.id, e.target.value, safeId);
           });
         }
-        
-        // Add colormap change listener for DEM
+
+        // DEM: colormap
         if (isDEM && colormapSelect) {
           colormapSelect.addEventListener('change', (e) => {
             updateTifColormap(tif, safeId);
           });
         }
-        
+
+        // Non-DEM: all controls live in the drawer; nothing to wire up here
+
         // Auto-load orthomosaic TIF
         if (shouldAutoLoad) {
           loadTifLayer(tif);
@@ -827,6 +838,311 @@
       document.body.prepend(banner);
     }
 
+    // TiTiler URL params per tif.id — gamma, saturation, contrast, rescale
+    let cogVisualSettings = {};
+    // CSS pane filter settings per tif.id — sharpness, noiseReduction, grayscale, hueRotate
+    let cogPaneSettings = {};
+    // Registry: tif.id → tif object, so the drawer can look up any layer
+    let cogTifRegistry = {};
+
+    function ensureSharpenFilter() {
+      if (document.getElementById('cogFilterDefs')) return;
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.id = 'cogFilterDefs';
+      svg.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;';
+      svg.innerHTML = `<defs>
+        <filter id="cogSharpen" x="0" y="0" width="100%" height="100%">
+          <feConvolveMatrix order="3" kernelMatrix="0 0 0 0 1 0 0 0 0" preserveAlpha="true"/>
+        </filter>
+      </defs>`;
+      document.body.appendChild(svg);
+    }
+
+    function ensureCogDrawer() {
+      if (document.getElementById('cogSettingsDrawer')) return;
+      const style = document.createElement('style');
+      style.textContent = `
+        #cogSettingsDrawer {
+          position: fixed; top: 0; right: 0; width: 300px; height: 100%;
+          background: #fff; z-index: 9998;
+          transform: translateX(105%);
+          transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
+          box-shadow: -6px 0 28px rgba(0,0,0,0.14);
+          overflow-y: auto; padding: 0; box-sizing: border-box;
+          font-family: inherit;
+        }
+        #cogSettingsDrawer.cog-drawer-open { transform: translateX(0); }
+        .cog-drawer-section { padding: 12px 14px; border-bottom: 1px solid #f0f0f0; }
+        .cog-drawer-section-title { font-size: 11px; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+        .cog-drawer-row { margin-bottom: 6px; }
+        .cog-drawer-row label { display: flex; justify-content: space-between; font-size: 11px; color: #444; margin-bottom: 2px; }
+        .cog-drawer-row input[type=range] { width: 100%; height: 4px; }
+        .cog-preset-btn { flex: 1; padding: 5px 4px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer; font-size: 10px; font-weight: 600; }
+        .cog-preset-btn:hover { background: #e5e7eb; }
+        .cog-action-btn { flex: 1; padding: 6px; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600; }
+      `;
+      document.head.appendChild(style);
+      const drawer = document.createElement('div');
+      drawer.id = 'cogSettingsDrawer';
+      document.body.appendChild(drawer);
+    }
+
+    function openCogSettingsDrawer(tif) {
+      ensureSharpenFilter();
+      ensureCogDrawer();
+      const drawer = document.getElementById('cogSettingsDrawer');
+      const vs = cogVisualSettings[tif.id] || {};
+      const ps = cogPaneSettings[tif.id] || {};
+      const v  = (key, def) => vs[key] ?? def;
+      const p  = (key, def) => ps[key] ?? def;
+
+      drawer.innerHTML = `
+        <div style="position:sticky;top:0;background:#fff;z-index:1;padding:14px 14px 10px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;">
+          <div style="font-weight:700;font-size:13px;color:#111;">⚙ COG Settings</div>
+          <div style="font-size:11px;color:#888;flex:1;margin:0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${tif.name}</div>
+          <button id="cogDrawerClose" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999;line-height:1;padding:0;">✕</button>
+        </div>
+
+        <div class="cog-drawer-section">
+          <div class="cog-drawer-section-title">Opacity</div>
+          <div class="cog-drawer-row">
+            <label>Opacity <span id="d_opacityValue">${Math.round((tifLayers[tif.id]?.options?.opacity ?? 1) * 100)}</span>%</label>
+            <input type="range" id="d_opacity" min="0" max="100" value="${Math.round((tifLayers[tif.id]?.options?.opacity ?? 1) * 100)}">
+          </div>
+        </div>
+
+        <div class="cog-drawer-section">
+          <div class="cog-drawer-section-title">Image Tone</div>
+          <div class="cog-drawer-row">
+            <label>Brightness (γ) <span id="d_gammaValue">${(v('gamma', 1)).toFixed(1)}</span></label>
+            <input type="range" id="d_gamma" min="50" max="300" value="${Math.round(v('gamma', 1) * 100)}">
+          </div>
+          <div class="cog-drawer-row">
+            <label>Saturation <span id="d_saturationValue">${(v('saturation', 1)).toFixed(1)}</span></label>
+            <input type="range" id="d_saturation" min="0" max="200" value="${Math.round(v('saturation', 1) * 100)}">
+          </div>
+          <div class="cog-drawer-row">
+            <label>Contrast <span id="d_contrastValue">${v('contrast', 0)}</span></label>
+            <input type="range" id="d_contrast" min="0" max="50" value="${v('contrast', 0)}">
+          </div>
+        </div>
+
+        <div class="cog-drawer-section">
+          <div class="cog-drawer-section-title">Color Balance</div>
+          <div class="cog-drawer-row">
+            <label>Red <span id="d_gammaRValue">${(v('gammaR', 1)).toFixed(1)}</span></label>
+            <input type="range" id="d_gammaR" min="50" max="300" value="${Math.round(v('gammaR', 1) * 100)}" style="accent-color:#ef4444;">
+          </div>
+          <div class="cog-drawer-row">
+            <label>Green <span id="d_gammaGValue">${(v('gammaG', 1)).toFixed(1)}</span></label>
+            <input type="range" id="d_gammaG" min="50" max="300" value="${Math.round(v('gammaG', 1) * 100)}" style="accent-color:#22c55e;">
+          </div>
+          <div class="cog-drawer-row">
+            <label>Blue <span id="d_gammaBValue">${(v('gammaB', 1)).toFixed(1)}</span></label>
+            <input type="range" id="d_gammaB" min="50" max="300" value="${Math.round(v('gammaB', 1) * 100)}" style="accent-color:#3b82f6;">
+          </div>
+        </div>
+
+        <div class="cog-drawer-section">
+          <div class="cog-drawer-section-title">Display Effects</div>
+          <div class="cog-drawer-row">
+            <label>Sharpness <span id="d_sharpnessValue">${p('sharpness', 0)}</span></label>
+            <input type="range" id="d_sharpness" min="0" max="10" step="1" value="${p('sharpness', 0)}">
+          </div>
+<div style="display:flex;align-items:center;gap:12px;margin-top:6px;">
+            <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;">
+              <input type="checkbox" id="d_grayscale" ${p('grayscale', false) ? 'checked' : ''}> Grayscale
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;font-size:11px;flex:1;">
+              Hue <span id="d_hueValue">${p('hueRotate', 0)}</span>°
+              <input type="range" id="d_hue" min="-180" max="180" step="5" value="${p('hueRotate', 0)}" style="flex:1;">
+            </label>
+          </div>
+        </div>
+
+        <div class="cog-drawer-section">
+          <div class="cog-drawer-section-title">Presets</div>
+          <div style="display:flex;gap:4px;">
+            <button class="cog-preset-btn" id="d_presetNatural">Natural</button>
+            <button class="cog-preset-btn" id="d_presetEnhanced">Enhanced</button>
+            <button class="cog-preset-btn" id="d_presetVivid">Vivid</button>
+            <button class="cog-preset-btn" id="d_presetCoral">Coral</button>
+          </div>
+        </div>
+
+        <div class="cog-drawer-section" style="display:flex;gap:8px;">
+          <button class="cog-action-btn" id="d_autoLevels" style="background:#0891b2;">Auto Levels</button>
+          <button class="cog-action-btn" id="d_reset"      style="background:#6b7280;">Reset All</button>
+        </div>
+        <div style="padding:6px 14px 14px;font-size:10px;color:#aaa;">Auto Levels stretches range to p2–p98</div>
+      `;
+
+      // Close
+      document.getElementById('cogDrawerClose').addEventListener('click', () =>
+        drawer.classList.remove('cog-drawer-open'));
+
+      // Helpers
+      const setVis = (key, val) => {
+        if (!cogVisualSettings[tif.id]) cogVisualSettings[tif.id] = {};
+        cogVisualSettings[tif.id][key] = val;
+        if (tifLayers[tif.id]) reloadCogWithSettings(tif);
+      };
+      const setPane = (key, val) => {
+        if (!cogPaneSettings[tif.id]) cogPaneSettings[tif.id] = {};
+        cogPaneSettings[tif.id][key] = val;
+        applyPaneFilter(tif.id);
+      };
+      const q = id => document.getElementById(id);
+
+      // Opacity
+      q('d_opacity').addEventListener('input', e => {
+        q('d_opacityValue').textContent = e.target.value;
+        const layer = tifLayers[tif.id];
+        if (layer) layer.setOpacity(e.target.value / 100);
+      });
+
+      // Image Tone
+      q('d_gamma').addEventListener('change', e => { const v = e.target.value/100; q('d_gammaValue').textContent = v.toFixed(1); setVis('gamma', v); });
+      q('d_saturation').addEventListener('change', e => {
+        const v = e.target.value / 100;
+        q('d_saturationValue').textContent = v.toFixed(1);
+        q('d_grayscale').checked = (v === 0);
+        setVis('saturation', v);
+      });
+      q('d_contrast').addEventListener('change', e => { const v = parseInt(e.target.value); q('d_contrastValue').textContent = v; setVis('contrast', v); });
+
+      // Color Balance
+      q('d_gammaR').addEventListener('change', e => { const v = e.target.value/100; q('d_gammaRValue').textContent = v.toFixed(1); setVis('gammaR', v); });
+      q('d_gammaG').addEventListener('change', e => { const v = e.target.value/100; q('d_gammaGValue').textContent = v.toFixed(1); setVis('gammaG', v); });
+      q('d_gammaB').addEventListener('change', e => { const v = e.target.value/100; q('d_gammaBValue').textContent = v.toFixed(1); setVis('gammaB', v); });
+
+      // Display Effects
+      q('d_sharpness').addEventListener('input', e => { const v = parseInt(e.target.value); q('d_sharpnessValue').textContent = v; setPane('sharpness', v); });
+      // Grayscale = saturation 0 (tile reload) — no CSS filter needed
+      q('d_grayscale').addEventListener('change', e => {
+        const sat = e.target.checked ? 0 : 1;
+        if (!cogVisualSettings[tif.id]) cogVisualSettings[tif.id] = {};
+        cogVisualSettings[tif.id].saturation = sat;
+        q('d_saturation').value = sat * 100;
+        q('d_saturationValue').textContent = sat.toFixed(1);
+        if (tifLayers[tif.id]) reloadCogWithSettings(tif);
+      });
+      q('d_hue').addEventListener('input', e => { const v = parseInt(e.target.value); q('d_hueValue').textContent = v; setPane('hueRotate', v); });
+
+      // Sync drawer sliders from state (called by applyPreset)
+      const syncDrawer = () => {
+        const vs2 = cogVisualSettings[tif.id] || {};
+        const ps2 = cogPaneSettings[tif.id]   || {};
+        const vv = (k,d) => vs2[k] ?? d;
+        const pp = (k,d) => ps2[k] ?? d;
+        q('d_gamma').value = Math.round(vv('gamma',1)*100);     q('d_gammaValue').textContent     = vv('gamma',1).toFixed(1);
+        q('d_saturation').value = Math.round(vv('saturation',1)*100); q('d_saturationValue').textContent = vv('saturation',1).toFixed(1);
+        q('d_contrast').value = vv('contrast',0);               q('d_contrastValue').textContent  = vv('contrast',0);
+        q('d_gammaR').value = Math.round(vv('gammaR',1)*100);   q('d_gammaRValue').textContent    = vv('gammaR',1).toFixed(1);
+        q('d_gammaG').value = Math.round(vv('gammaG',1)*100);   q('d_gammaGValue').textContent    = vv('gammaG',1).toFixed(1);
+        q('d_gammaB').value = Math.round(vv('gammaB',1)*100);   q('d_gammaBValue').textContent    = vv('gammaB',1).toFixed(1);
+        q('d_sharpness').value = pp('sharpness',0);             q('d_sharpnessValue').textContent = pp('sharpness',0);
+        q('d_hue').value = pp('hueRotate',0);                   q('d_hueValue').textContent       = pp('hueRotate',0);
+        q('d_grayscale').checked = !!pp('grayscale',false);
+      };
+
+      const applyPreset = (visS, paneS) => {
+        cogVisualSettings[tif.id] = { ...visS };
+        cogPaneSettings[tif.id]   = { ...paneS };
+        syncDrawer();
+        applyPaneFilter(tif.id);
+        if (tifLayers[tif.id]) reloadCogWithSettings(tif);
+      };
+
+      q('d_presetNatural').addEventListener('click',  () => applyPreset({}, {}));
+      q('d_presetEnhanced').addEventListener('click', () => applyPreset({ gamma:1.2, saturation:1.3, contrast:8  }, { sharpness:2 }));
+      q('d_presetVivid').addEventListener('click',    () => applyPreset({ saturation:1.8, contrast:15           }, { sharpness:3 }));
+      q('d_presetCoral').addEventListener('click',    () => applyPreset({ gammaR:1.4, gammaG:1.0, gammaB:0.75, saturation:1.4, contrast:6 }, { sharpness:2 }));
+
+      q('d_autoLevels').addEventListener('click', () => { if (tifLayers[tif.id]) applyAutoStretch(tif); });
+
+      q('d_reset').addEventListener('click', () => {
+        applyPreset({}, {});
+        const layer = tifLayers[tif.id];
+        if (layer) { layer.setOpacity(1.0); q('d_opacity').value = 100; q('d_opacityValue').textContent = '100'; }
+        const pane = map.getPane('cogPane');
+        if (pane) pane.style.filter = '';
+      });
+
+      drawer.classList.add('cog-drawer-open');
+    }
+
+    function applyPaneFilter(tifId) {
+      const ps = cogPaneSettings[tifId] || {};
+      const filters = [];
+      const sharpness = ps.sharpness ?? 0;
+      if (sharpness > 0) {
+        const edge   = sharpness * 0.5;
+        const center = sharpness * 2 + 1;
+        const feFilter = document.querySelector('#cogSharpen feConvolveMatrix');
+        if (feFilter) feFilter.setAttribute('kernelMatrix',
+          `0 -${edge.toFixed(2)} 0 -${edge.toFixed(2)} ${center.toFixed(2)} -${edge.toFixed(2)} 0 -${edge.toFixed(2)} 0`);
+        filters.push('url(#cogSharpen)');
+      }
+      if (ps.hueRotate)          filters.push(`hue-rotate(${ps.hueRotate}deg)`);
+      // grayscale is handled via saturation=0 in cogVisualSettings (tile reload), not CSS
+      const filterStr = filters.join(' ') || 'none';
+      // Apply to layer container directly — survives layer reload via reloadCogWithSettings
+      const layer = tifLayers[tifId];
+      if (layer && layer._container) {
+        layer._container.style.filter = filterStr;
+      } else {
+        // Fallback: apply to pane so it's ready when layer loads
+        const pane = map.getPane('cogPane');
+        if (pane) pane.style.filter = filterStr;
+      }
+    }
+
+    function buildColorFormula(settings) {
+      const parts = [];
+      const gamma = settings.gamma ?? 1.0;
+      const sat   = settings.saturation ?? 1.0;
+      const cont  = settings.contrast ?? 0;
+      const gR    = settings.gammaR ?? 1.0;
+      const gG    = settings.gammaG ?? 1.0;
+      const gB    = settings.gammaB ?? 1.0;
+
+      if (gamma !== 1.0) parts.push(`gamma RGB ${gamma.toFixed(2)}`);
+      if (cont > 0)      parts.push(`sigmoidal RGB ${cont} 0.5`);
+      if (sat !== 1.0)   parts.push(`saturation ${sat.toFixed(2)}`);
+      if (gR !== 1.0)    parts.push(`gamma R ${gR.toFixed(2)}`);
+      if (gG !== 1.0)    parts.push(`gamma G ${gG.toFixed(2)}`);
+      if (gB !== 1.0)    parts.push(`gamma B ${gB.toFixed(2)}`);
+      return parts.length ? parts.join(' ') : null;
+    }
+
+    function reloadCogWithSettings(tif) {
+      const center = map.getCenter();
+      const zoom   = map.getZoom();
+      removeTifLayer(tif.id);
+      loadTifLayer(tif).then(() => {
+        map.setView(center, zoom, { animate: false });
+        applyPaneFilter(tif.id); // re-apply CSS filters to the new layer container
+      });
+    }
+
+    async function applyAutoStretch(tif) {
+      const cogPath = encodeURIComponent(toGdalPath(tif.cog_path));
+      const statsUrl = `${serverUrl}/statistics?url=${cogPath}`;
+      try {
+        const res   = await fetch(statsUrl);
+        const stats = await res.json();
+        const b1    = stats.b1 || stats['1'] || {};
+        const p2    = b1.percentile_2  ?? 0;
+        const p98   = b1.percentile_98 ?? 255;
+        if (!cogVisualSettings[tif.id]) cogVisualSettings[tif.id] = {};
+        cogVisualSettings[tif.id].rescale = `${p2},${p98}`;
+        reloadCogWithSettings(tif);
+      } catch (e) {
+        console.warn('Auto-stretch failed:', e);
+      }
+    }
+
     async function loadTifLayer(tif) {
       let cogPath = encodeURIComponent(toGdalPath(tif.cog_path));
       let isLocalCs = false;
@@ -884,7 +1200,15 @@
           tileUrl += `&bidx=1&colormap_name=${colormap}&rescale=-10,10`;
         }
       }
-      
+
+      // For non-DEM COGs, apply any stored visual settings
+      if (!isDEM) {
+        const vs = cogVisualSettings[tif.id] || {};
+        const formula = buildColorFormula(vs);
+        if (formula)  tileUrl += `&color_formula=${encodeURIComponent(formula)}`;
+        if (vs.rescale) tileUrl += `&rescale=${vs.rescale}`;
+      }
+
       console.log('🔧 Loading TIF layer:', {
         name: tif.name,
         cogPath: tif.cog_path,

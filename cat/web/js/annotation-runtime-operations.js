@@ -444,9 +444,92 @@
       }, 250);
     }
     
+    // ── Popout form save: geometry comes from BroadcastChannel, saved directly to DB ──
+    async function _saveAnnotationFromPopout() {
+      if (!window._popoutGeometry) {
+        showStatus('Waiting for a shape from the main map window…', 'info');
+        return;
+      }
+      const analyst = document.getElementById('analyst')?.value.trim();
+      const obs_year = document.getElementById('obs_year')?.value;
+      const mission_id = document.getElementById('mission_id')?.value.trim();
+      const site = document.getElementById('site')?.value.trim();
+      if (!analyst || !obs_year || !mission_id || !site) {
+        showStatus('Please fill in all required fields (marked with *)', 'error');
+        return;
+      }
+      const getV = (id) => { const el = document.getElementById(id); return el ? el.value : null; };
+      const getI = (id) => { const v = getV(id); return (v !== null && v !== '') ? parseInt(v) : null; };
+      const getF = (id) => { const v = getV(id); return (v !== null && v !== '') ? parseFloat(v) : null; };
+
+      const timeSeconds = (typeof getAnnotationTime === 'function') ? getAnnotationTime() : 0;
+      const annotationData = {
+        colony_id: 0,
+        geometry: window._popoutGeometry,
+        type: window._popoutShapeType || 'polygon',
+        analyst, obs_year: parseInt(obs_year), mission_id, site,
+        transect: getV('transect') || null,
+        segment: getI('segment'),
+        seglength: getF('seglength'),
+        segwidth: getF('segwidth'),
+        no_colony: getI('no_colony') || 0,
+        spcode: getV('spcode') || null,
+        juvenile: getI('juvenile') || 0,
+        juv_substrate: getV('juv_substrate') || null,
+        remnant: getI('remnant') || 0,
+        fragment: getI('fragment') || 0,
+        morph_code: getV('morph_code') || null,
+        ex_bound: getI('ex_bound') || 0,
+        old_dead: getI('olddead'),
+        rdcause1: getV('rdcause1') || null, rd_1: getI('rd_1'),
+        rdcause2: getV('rdcause2') || null, rd_2: getI('rd_2'),
+        rdcause3: getV('rdcause3') || null, rd_3: getI('rd_3'),
+        con_1: getV('con_1') || null, extent_1: getI('extent_1'), sev_1: getI('sev_1'),
+        con_2: getV('con_2') || null, extent_2: getI('extent_2'), sev_2: getI('sev_2'),
+        con_3: getV('con_3') || null, extent_3: getI('extent_3'), sev_3: getI('sev_3'),
+        created_at: new Date().toISOString(),
+        annotation_time_seconds: timeSeconds
+      };
+
+      try {
+        if (typeof isOracleProjectMode === 'function' && isOracleProjectMode() &&
+            typeof syncAnnotationToDb === 'function') {
+          await syncAnnotationToDb(annotationData);
+        }
+        if (window._catChannel) {
+          window._catChannel.postMessage({ type: 'annotations-changed' });
+        }
+        // Clear annotation-specific fields, keep session fields
+        ['transect','segment','seglength','segwidth','no_colony','spcode','juvenile',
+         'juv_substrate','remnant','fragment','morph_code','ex_bound','olddead',
+         'rdcause1','rd_1','rdcause2','rd_2','rdcause3','rd_3',
+         'con_1','extent_1','sev_1','con_2','extent_2','sev_2','con_3','extent_3','sev_3'
+        ].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+
+        window._popoutGeometry = null;
+        window._popoutShapeType = null;
+        // Return to waiting state
+        const wi = document.getElementById('popoutWaitingIndicator');
+        if (wi) wi.classList.add('visible');
+        const fc = document.getElementById('formSectionContent');
+        if (fc) fc.style.display = 'none';
+
+        if (typeof incrementAnnotationCount === 'function') incrementAnnotationCount();
+        if (typeof resetAnnotationTimer === 'function') resetAnnotationTimer();
+        showStatus('✅ Annotation saved!', 'success');
+        setTimeout(() => { document.getElementById('spcode')?.focus(); }, 100);
+      } catch (err) {
+        showStatus(`❌ Error saving annotation: ${err.message}`, 'error');
+      }
+    }
+
     // Save annotation (File Mode - no database)
     let _isSaving = false;
     async function saveAnnotation() {
+      // In form-popout mode, geometry comes from BroadcastChannel, not map drawing
+      if (window._catPopoutMode === 'form') {
+        return _saveAnnotationFromPopout();
+      }
       if (_isSaving) return;
       if (!currentAnnotation) {
         showStatus('Please draw a shape first', 'error');
@@ -651,6 +734,8 @@
         
         showStatus(`✅ Annotation saved! Total: ${annotations.length} (${formatTime(annotationTimeSeconds)})`, 'success');
         console.log('💾 Annotation saved to local array:', annotationData);
+        // Notify popout windows of the change
+        if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed' });
         
         // Re-enable the drawing tool AFTER save to keep workflow going
         // This is better than re-enabling immediately after drawing, as it allows

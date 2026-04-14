@@ -7,8 +7,8 @@
 # Handles auto-start on reboot and management commands
 # Auto-bootstrap: Creates CAT schema and ingests reference data on startup
 # =============================================================================
-SCRIPT_VERSION="6.0.0"
-CAT_BRANCH="cat_db_v6"
+SCRIPT_VERSION="7.0.0"
+CAT_BRANCH="cat_db_v7"
 
 echo "=============================================="
 echo "CAT Installer v${SCRIPT_VERSION}"

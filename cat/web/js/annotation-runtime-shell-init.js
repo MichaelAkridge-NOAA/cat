@@ -268,9 +268,34 @@
       }
     });
     // ========== End Timer Tracking ==========
-    
+
+    // ── Global stubs — overwritten below in normal mode, stay as no-ops in popout ──
+    // In popout mode map must be a no-op object (not null) so async layer operations
+    // like layer.addTo(map) don't throw TypeErrors when map-dependent code runs.
+    let map = window._catPopoutMode ? {
+      on: ()=>{}, off: ()=>{}, once: ()=>{},
+      addLayer: ()=>{}, removeLayer: ()=>{}, hasLayer: ()=>false, eachLayer: ()=>{},
+      fitBounds: ()=>{}, setView: ()=>{}, setZoom: ()=>{},
+      getBounds: ()=>null, getCenter: ()=>({lat:0,lng:0}), getZoom: ()=>2,
+      getPane: ()=>null, createPane: ()=>{}, getContainer: ()=>null,
+      invalidateSize: ()=>{}, panTo: ()=>{},
+      _panes: {}, _layers: {}
+    } : null;
+    let drawnItems = {
+      eachLayer: () => {},
+      clearLayers: () => {},
+      addLayer: () => {},
+      removeLayer: () => {},
+      getLayers: () => [],
+      hasLayer: () => false
+    };
+    let drawControl = null;
+    let lastDrawingTool = null;
+
+    if (!window._catPopoutMode) {
+
     // Initialize map
-    const map = L.map('map', {
+    map = L.map('map', {
       center: [0, 0],
       zoom: 2,
       zoomControl: false,  // Disable default zoom control, we'll add it to the right side
@@ -321,11 +346,8 @@
     
     // Feature group for annotations - use custom pane
     // IMPORTANT: Set pane option so all layers added to this group use annotationsPane
-    const drawnItems = new L.FeatureGroup([], { pane: 'annotationsPane' });
+    drawnItems = new L.FeatureGroup([], { pane: 'annotationsPane' });
     map.addLayer(drawnItems);
-    
-    // Track the last used drawing tool for auto-re-enable after save
-    let lastDrawingTool = null;
     
     // Update visual feedback for active drawing tool
     function updateDrawingToolVisualFeedback(activeButtonClass) {
@@ -343,7 +365,7 @@
     }
     
     // Add drawing controls - positioned in top-right for easy access
-    const drawControl = new L.Control.Draw({
+    drawControl = new L.Control.Draw({
       position: 'topright',  // Changed from 'topleft' to 'topright' for better placement
       draw: {
         polyline: {
@@ -531,6 +553,15 @@
         layer: layer,
         geometry: getFullPrecisionGeometry(layer)
       };
+
+      // Broadcast to form popout if one is open
+      if (window._catChannel) {
+        window._catChannel.postMessage({
+          type: 'new-shape',
+          geometry: currentAnnotation.geometry,
+          shapeType: type
+        });
+      }
 
       // Auto-start / resume timer on first annotation draw
       if (!timerState.isRunning) {
@@ -1203,4 +1234,4 @@
 
     // ========== End Panel Layout ==========
 
-    // Layer control functions
+    } // end if (!window._catPopoutMode) — map + drawing tools only in normal mode
