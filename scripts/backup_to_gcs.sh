@@ -27,6 +27,9 @@
 #   # Skip copying raw oracle-data (just schema export + configs)
 #   ./scripts/backup_to_gcs.sh -b gs://my-bucket --skip-oracle-data
 #
+#   # Skip Oracle Data Pump schema export (raw oracle-data + configs only)
+#   ./scripts/backup_to_gcs.sh -b gs://my-bucket --skip-schema-export
+#
 #   # Keep local backup after GCS upload (default: remove after upload)
 #   ./scripts/backup_to_gcs.sh -b gs://my-bucket --keep-local
 #
@@ -54,7 +57,7 @@ set -euo pipefail
 # ─── Configuration ───────────────────────────────────────────────────────────
 ORACLE_CONTAINER="database-oracle-free"
 CAT_CONTAINER="cat-app"
-SCHEMA_NAME="cat_user"           # resolved from .env APP_SCHEMA_NAME or default CAT_USER
+SCHEMA_NAME=""                   # resolved from .env APP_SCHEMA_NAME or default CAT_USER
 DB_SERVICE="FREEPDB1"
 
 # ─── Defaults ────────────────────────────────────────────────────────────────
@@ -63,6 +66,7 @@ GCS_PREFIX="_backup/cat"
 BACKUP_ROOT=""
 SKIP_GCS=false
 SKIP_ORA_DATA=false
+SKIP_SCHEMA_EXPORT=false
 KEEP_LOCAL=false
 DRY_RUN=false
 
@@ -74,6 +78,22 @@ warn()  { echo -e "  ${C_YELLOW}⚠️  $*${C_RESET}"; }
 err()   { echo -e "  ${C_RED}❌ $*${C_RESET}"; }
 info()  { echo -e "  ${C_GRAY}ℹ️  $*${C_RESET}"; }
 
+run_gsutil() {
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        local sudo_home
+        sudo_home=$(eval echo "~${SUDO_USER}")
+
+        if [[ -d "$sudo_home/.config/gcloud" ]]; then
+            HOME="$sudo_home" CLOUDSDK_CONFIG="$sudo_home/.config/gcloud" gsutil "$@"
+            return $?
+        fi
+
+        warn "Running under sudo without a detected user Cloud SDK config; gsutil may use root or metadata credentials."
+    fi
+
+    gsutil "$@"
+}
+
 # ─── Parse arguments ─────────────────────────────────────────────────────────
 show_help() {
     echo "Usage: $0 [options]"
@@ -84,6 +104,7 @@ show_help() {
     echo "  --backup-root DIR         Local backup root (default: ./backups)"
     echo "  --local-only              Skip GCS upload, keep backup locally"
     echo "  --skip-oracle-data        Skip copying raw oracle-data folder"
+    echo "  --skip-schema-export      Skip Oracle Data Pump schema export"
     echo "  --keep-local              Keep local backup after GCS upload"
     echo "  --dry-run                 Show plan without executing"
     echo "  -h, --help                Show this help"
@@ -97,6 +118,7 @@ while [[ $# -gt 0 ]]; do
         --backup-root)      BACKUP_ROOT="$2"; shift 2 ;;
         --local-only)       SKIP_GCS=true; shift ;;
         --skip-oracle-data) SKIP_ORA_DATA=true; shift ;;
+        --skip-schema-export) SKIP_SCHEMA_EXPORT=true; shift ;;
         --keep-local)       KEEP_LOCAL=true; shift ;;
         --dry-run)          DRY_RUN=true; shift ;;
         -h|--help)          show_help ;;
@@ -146,6 +168,22 @@ if [[ "$SKIP_GCS" == false ]]; then
         exit 1
     fi
     ok "gsutil available"
+
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        SUDO_HOME=$(eval echo "~${SUDO_USER}")
+        if [[ -d "$SUDO_HOME/.config/gcloud" ]]; then
+            info "Using Cloud SDK credentials from $SUDO_HOME/.config/gcloud"
+        else
+            warn "No Cloud SDK config found for $SUDO_USER at $SUDO_HOME/.config/gcloud"
+        fi
+    fi
+
+    if ! run_gsutil ls "$GCS_BUCKET" >/dev/null 2>&1; then
+        err "Cannot access $GCS_BUCKET with current credentials."
+        err "Run: gcloud auth login ; gcloud auth application-default login"
+        exit 1
+    fi
+    ok "GCS bucket access verified"
 fi
 
 # Read Oracle password from .env
@@ -202,42 +240,47 @@ mkdir -p "$BACKUP_DIR/reference"
 ok "Created $BACKUP_DIR"
 
 # ─── 1. Oracle Data Pump Export ──────────────────────────────────────────────
-step "1/4  Oracle schema export (Data Pump)"
+if [[ "$SKIP_SCHEMA_EXPORT" == false ]]; then
+    step "1/4  Oracle schema export (Data Pump)"
 
-info "Creating export directory in Oracle container..."
-docker exec "$ORACLE_CONTAINER" bash -c "mkdir -p /tmp/cat_backup" 2>/dev/null || true
+    info "Creating export directory in Oracle container..."
+    docker exec "$ORACLE_CONTAINER" bash -c "mkdir -p /tmp/cat_backup" 2>/dev/null || true
 
-# Create directory object + grant
-docker exec -i "$ORACLE_CONTAINER" bash -c "sqlplus -s system/${ORACLE_PASSWORD}@${DB_SERVICE}" <<'EOSQL' >/dev/null 2>&1 || true
+    # Create directory object + grant to target schema
+    docker exec -i "$ORACLE_CONTAINER" bash -c "sqlplus -s system/${ORACLE_PASSWORD}@${DB_SERVICE}" <<EOSQL >/dev/null 2>&1 || true
 WHENEVER SQLERROR CONTINUE
 CREATE OR REPLACE DIRECTORY cat_backup_dir AS '/tmp/cat_backup';
-GRANT READ, WRITE ON DIRECTORY cat_backup_dir TO GISDAT;
+GRANT READ, WRITE ON DIRECTORY cat_backup_dir TO ${SCHEMA_NAME};
 EXIT;
 EOSQL
 
-info "Running expdp for schema $SCHEMA_NAME ..."
-EXPDP_CMD="expdp system/${ORACLE_PASSWORD}@${DB_SERVICE} schemas=${SCHEMA_NAME} directory=CAT_BACKUP_DIR dumpfile=cat_export.dmp logfile=cat_export.log REUSE_DUMPFILES=YES"
+    info "Running expdp for schema $SCHEMA_NAME ..."
+    EXPDP_CMD="expdp system/${ORACLE_PASSWORD}@${DB_SERVICE} schemas=${SCHEMA_NAME} directory=CAT_BACKUP_DIR dumpfile=cat_export.dmp logfile=cat_export.log REUSE_DUMPFILES=YES"
 
-set +e
-EXPDP_OUTPUT=$(docker exec "$ORACLE_CONTAINER" bash -c "$EXPDP_CMD" 2>&1)
-EXPDP_RC=$?
-set -e
+    set +e
+    EXPDP_OUTPUT=$(docker exec "$ORACLE_CONTAINER" bash -c "$EXPDP_CMD" 2>&1)
+    EXPDP_RC=$?
+    set -e
 
-# Copy dump + log out of container
-docker cp "$ORACLE_CONTAINER:/tmp/cat_backup/cat_export.dmp" "$BACKUP_DIR/oracle-export/" 2>/dev/null || true
-docker cp "$ORACLE_CONTAINER:/tmp/cat_backup/cat_export.log" "$BACKUP_DIR/oracle-export/" 2>/dev/null || true
+    # Copy dump + log out of container
+    docker cp "$ORACLE_CONTAINER:/tmp/cat_backup/cat_export.dmp" "$BACKUP_DIR/oracle-export/" 2>/dev/null || true
+    docker cp "$ORACLE_CONTAINER:/tmp/cat_backup/cat_export.log" "$BACKUP_DIR/oracle-export/" 2>/dev/null || true
 
-# Save raw output for troubleshooting
-echo "$EXPDP_OUTPUT" > "$BACKUP_DIR/oracle-export/expdp_output.txt"
+    # Save raw output for troubleshooting
+    echo "$EXPDP_OUTPUT" > "$BACKUP_DIR/oracle-export/expdp_output.txt"
 
-if [[ $EXPDP_RC -eq 0 ]] && [[ -f "$BACKUP_DIR/oracle-export/cat_export.dmp" ]]; then
-    DMP_SIZE=$(du -h "$BACKUP_DIR/oracle-export/cat_export.dmp" | cut -f1)
-    ok "Schema export complete ($DMP_SIZE)"
-elif [[ -f "$BACKUP_DIR/oracle-export/cat_export.dmp" ]]; then
-    DMP_SIZE=$(du -h "$BACKUP_DIR/oracle-export/cat_export.dmp" | cut -f1)
-    warn "expdp returned code $EXPDP_RC but dump exists ($DMP_SIZE) — check log"
+    if [[ $EXPDP_RC -eq 0 ]] && [[ -f "$BACKUP_DIR/oracle-export/cat_export.dmp" ]]; then
+        DMP_SIZE=$(du -h "$BACKUP_DIR/oracle-export/cat_export.dmp" | cut -f1)
+        ok "Schema export complete ($DMP_SIZE)"
+    elif [[ -f "$BACKUP_DIR/oracle-export/cat_export.dmp" ]]; then
+        DMP_SIZE=$(du -h "$BACKUP_DIR/oracle-export/cat_export.dmp" | cut -f1)
+        warn "expdp returned code $EXPDP_RC but dump exists ($DMP_SIZE) — check log"
+    else
+        warn "expdp failed (code $EXPDP_RC) — check oracle-export/expdp_output.txt"
+        warn "Continuing because raw oracle-data backup may still be sufficient for full-instance restore."
+    fi
 else
-    warn "expdp failed (code $EXPDP_RC) — check oracle-export/expdp_output.txt"
+    step "1/4  Skipping schema export (--skip-schema-export)"
 fi
 
 # ─── 2. Raw Oracle data files ───────────────────────────────────────────────
@@ -324,7 +367,7 @@ if [[ "$SKIP_GCS" == false ]]; then
     step "4/4  Uploading to Google Cloud Storage"
     info "Destination: $GCS_DEST/"
 
-    if gsutil -m cp -r "$BACKUP_DIR" "$GCS_BUCKET/$GCS_PREFIX/"; then
+    if run_gsutil -m cp -r "$BACKUP_DIR" "$GCS_BUCKET/$GCS_PREFIX/"; then
         ok "Upload complete → $GCS_DEST/"
 
         if [[ "$KEEP_LOCAL" == false ]]; then
