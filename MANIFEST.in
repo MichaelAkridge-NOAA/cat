@@ -4,7 +4,7 @@ include LICENSE.md
 include requirements.txt
 
 # Include web files from package
-recursive-include cat/web *.html *.css *.js
+recursive-include cat/web *.html *.css *.js *.png *.svg
 
 # Include documentation and images from package
 recursive-include cat/docs *.png *.jpg *.ico *.md

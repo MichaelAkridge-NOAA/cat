@@ -12,7 +12,7 @@ body {
   margin: 0;
   padding: 0;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  background: linear-gradient(180deg, #0a2540 0%, #0d3a5f 30%, #10446e 60%, #134e7d 100%);
+  background: linear-gradient(180deg, var(--cat-primary-darker) 0%, #0d3a5f 30%, #10446e 60%, #134e7d 100%);
   overflow: hidden;
 }
 
@@ -63,7 +63,7 @@ body {
 
 .navbar h1 .cat-text {
   font-weight: 700;
-  color: #06b6d4;
+  color: var(--cat-accent);
 }
 
 .nav-links {
@@ -75,7 +75,7 @@ body {
 }
 
 .nav-links a {
-  color: #667eea;
+  color: var(--cat-primary);
   text-decoration: none;
   font-weight: 500;
   font-size: 13px;
@@ -84,7 +84,7 @@ body {
 }
 
 .nav-links a:hover {
-  color: #5568d3;
+  color: var(--cat-primary-dark);
 }
 
 .nav-links .btn {
@@ -160,7 +160,7 @@ body {
 
 .stat-value {
   font-weight: bold;
-  color: #667eea;
+  color: var(--cat-primary);
 }
 
 /* Custom Scrollbar */
@@ -181,3 +181,439 @@ body {
 .layer-control::-webkit-scrollbar-thumb:hover {
   background: #555;
 }
+
+/* ── Navbar / dropdown styles (moved from annotation.html) ── */
+    /* Override .nav-links overflow so dropdown menus can pop out */
+    .nav-links, .nav-menus {
+      overflow: visible !important;
+    }
+    /* Left group: logo + menus flush together */
+    .nav-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .nav-left h1 {
+      margin: 0;
+    }
+    .nav-left > a:hover h1 {
+      opacity: 0.8;
+    }
+    .nav-left > a h1 {
+      transition: opacity 0.15s;
+    }
+    /* Left-side menu bar */
+    .nav-menus {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .nav-menus .nav-dropdown-btn {
+      border: none;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #555;
+    }
+    .nav-menus .nav-dropdown-btn:hover,
+    .nav-menus .nav-dropdown-btn.open {
+      background: #e8eaff;
+    }
+    /* --- Navbar dropdown menus --- */
+    .nav-dropdown {
+      position: relative;
+      display: inline-block;
+    }
+    .nav-dropdown-btn {
+      background: none;
+      border: 1px solid #dee2e6;
+      border-radius: 5px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #495057;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .nav-dropdown-btn:hover, .nav-dropdown-btn.open {
+      background: #f0f1ff;
+      border-color: var(--cat-primary);
+      color: var(--cat-primary);
+    }
+    .nav-dropdown-btn .caret {
+      font-size: 8px;
+      opacity: 0.6;
+    }
+    .nav-dropdown-menu {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 0;
+      min-width: 180px;
+      background: white;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+      z-index: 9000;
+      padding: 4px 0;
+      animation: navDropIn 0.12s ease-out;
+    }
+    .nav-dropdown-menu.open { display: block; }
+    @keyframes navDropIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .nav-dropdown-menu .dd-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 14px;
+      font-size: 12px;
+      color: #333;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.1s;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+    }
+    .nav-dropdown-menu .dd-item:hover {
+      background: #f0f1ff;
+      color: var(--cat-primary);
+    }
+    .nav-dropdown-menu .dd-item.danger { color: var(--cat-error); }
+    .nav-dropdown-menu .dd-item.danger:hover { background: #fff0f0; color: var(--cat-error); }
+    .nav-dropdown-menu .dd-divider {
+      height: 1px;
+      background: #eee;
+      margin: 4px 0;
+    }
+    .nav-dropdown-menu .dd-label {
+      padding: 4px 14px 2px;
+      font-size: 10px;
+      font-weight: 700;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .nav-dropdown-menu kbd {
+      margin-left: auto;
+      font-size: 10px;
+      color: #aaa;
+      background: #f5f5f5;
+      padding: 1px 5px;
+      border-radius: 3px;
+      border: 1px solid #ddd;
+    }
+    /* Override .nav-links a for dropdown anchor items */
+    .nav-dropdown-menu a.dd-item {
+      text-decoration: none;
+      color: #333;
+      font-weight: normal;
+    }
+    .nav-dropdown-menu a.dd-item:hover {
+      color: var(--cat-primary);
+    }
+    /* --- Toast notifications --- */
+    #toastContainer {
+      position: fixed;
+      top: 56px;
+      right: 14px;
+      z-index: 11000;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      pointer-events: none;
+    }
+    .cat-toast {
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+      animation: toastIn 0.25s ease-out;
+      max-width: 340px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .cat-toast:hover { opacity: 0.85; }
+    .cat-toast.success { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
+    .cat-toast.error   { background: #fef2f2; color: #991b1b; border: 1px solid #fca5a5; }
+    .cat-toast.warning { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
+    .cat-toast.info    { background: #eff6ff; color: #1e40af; border: 1px solid #93c5fd; }
+    .cat-toast.exit    { animation: toastOut 0.2s ease-in forwards; }
+    @keyframes toastIn  { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
+    @keyframes toastOut { to   { opacity: 0; transform: translateX(30px); } }
+    /* Annotation count badge in navbar */
+    #navAnnotationCount {
+      padding: 3px 8px;
+      background: rgba(0,94,162,0.12);
+      color: var(--cat-primary);
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      display: none;
+    }
+
+    /* ================================================
+       Task 15 — classes extracted from former inline
+       styles (navbar section). display: values that JS
+       toggles via el.style.display are left inline in
+       the HTML; only decorative props live here.
+       ================================================ */
+    .nav-logo-link { text-decoration: none; color: inherit; }
+    .dd-menu-left { left: 0; right: auto; }
+    /* .dd-item.dd-item-static: base .nav-dropdown-menu .dd-item (defined
+       above) is a 2-class compound selector (specificity 0,0,2,0) that sets
+       cursor:pointer; a lone .dd-item-static would lose that specificity
+       fight regardless of file order, so it must be at least as specific. */
+    .dd-item.dd-item-static { cursor: default; }
+    .user-badge { font-size: 12px; color: var(--cat-primary); font-weight: 500; }
+    .time-badge { font-size: 12px; color: var(--cat-primary); font-family: var(--cat-font-mono); }
+    .placeholder-text { color: #999; font-size: 11px; }
+    .timer-badge {
+      padding: 4px 8px; background: rgba(0,169,28,0.1); color: var(--cat-success);
+      border-radius: var(--cat-radius); font-size: 12px; font-weight: 500;
+      font-family: var(--cat-font-mono); cursor: pointer; white-space: nowrap;
+    }
+    .autosave-badge {
+      padding: 4px 8px; background: rgba(0,169,28,0.1); color: var(--cat-success);
+      border-radius: var(--cat-radius); font-size: 12px; font-weight: 500; white-space: nowrap;
+    }
+    .icon-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      background: none; border: 1px solid var(--cat-border); border-radius: var(--cat-radius);
+      padding: 3px 6px; cursor: pointer; font-size: 12px; color: #495057; opacity: 0.5;
+    }
+    /* Compound selector (.btn.btn-compact / .btn.btn-form-action below) is
+       deliberate, not decorative fussiness: annotation-controls.css defines
+       a bare `.btn { padding: 10px; ... }` and loads AFTER this file, so a
+       same-specificity `.btn-compact { padding: ... }` here would lose the
+       cascade tie to that later rule (this exact trap silently broke the
+       annotation form's Save/Clear/Discard button heights during Task 15
+       and cascaded into the whole panel growing taller -- see commit notes). */
+    .btn.btn-compact { padding: 5px 10px; font-size: 12px; white-space: nowrap; }
+
+    /* ── Drawing hints bar / loading overlay / panels (Task 15) ── */
+    .drawing-hints-bar {
+      position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 10000;
+      padding: 6px 18px; background: rgba(30,30,30,0.92); color: #fff; font-size: 12px;
+      border-radius: 0 0 var(--cat-radius-lg) var(--cat-radius-lg);
+      box-shadow: var(--cat-shadow-2); pointer-events: none; white-space: nowrap;
+    }
+    .hint-kbd { background: rgba(255,255,255,0.15); padding: 1px 5px; border-radius: 3px; font-size: 11px; }
+
+    .full-loading-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(10, 37, 64, 0.95); align-items: center; justify-content: center;
+      z-index: 10000; backdrop-filter: blur(4px);
+    }
+    .full-loading-overlay-inner { text-align: center; color: white; max-width: 500px; padding: 40px; }
+    .loading-icon { font-size: 48px; margin-bottom: 20px; }
+    .loading-title { font-size: 24px; font-weight: 600; margin-bottom: 15px; }
+    .loading-message { font-size: 16px; opacity: 0.9; line-height: 1.6; }
+    .loading-progress-track {
+      margin-top: 25px; background: rgba(255,255,255,0.1); height: 4px;
+      border-radius: 2px; overflow: hidden;
+    }
+    .loading-progress-bar {
+      height: 100%; background: linear-gradient(90deg, var(--cat-accent), var(--cat-primary));
+      width: 0%; transition: width 0.3s;
+    }
+
+    /* .panel-content.upload-panel-content: base .panel-content (in
+       annotation-panels.css, loaded after this file) sets padding:15px 20px
+       at equal specificity, which would otherwise win the cascade tie. */
+    .panel-content.upload-panel-content { padding: 15px; }
+    .upload-panel-hint { margin-bottom: 10px; font-size: 13px; color: #666; }
+    .upload-file-input {
+      width: 100%; margin-bottom: 10px; padding: 8px; border: 1px solid var(--cat-border);
+      border-radius: var(--cat-radius);
+    }
+    .upload-status-box {
+      margin-top: 15px; padding: 10px; border-radius: 6px; background: rgba(255,255,255,0.05);
+    }
+    .btn-full-width { width: 100%; }
+
+    .panel-header-title-row { display: flex; align-items: center; gap: 10px; }
+    .site-badge {
+      font-size: 10px; font-weight: 600; padding: 3px 8px; background: rgba(0,94,162,0.15);
+      color: var(--cat-primary); border-radius: 3px; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .section-title-row { cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+    .cog-select {
+      width: 100%; padding: 6px; border: 1px solid var(--cat-border); border-radius: var(--cat-radius);
+      font-size: 12px;
+    }
+    /* .opacity-control.opacity-control-spaced: base .opacity-control (in
+       annotation-panels.css, loaded after this file) sets margin-top:5px
+       at equal specificity, which would otherwise win the cascade tie. */
+    .opacity-control.opacity-control-spaced { margin-top: 8px; }
+    .inline-checkbox-label { display: flex; align-items: center; gap: 8px; }
+    .inline-checkbox { width: auto; margin: 0; }
+
+    .session-tag { font-size: 9px; color: #6c757d; font-weight: normal; }
+    .drawing-mode-indicator {
+      font-size: 9px; font-weight: 600; padding: 2px 6px; border-radius: 10px;
+      background: var(--cat-primary); color: white;
+    }
+    .form-section-wrap { margin-bottom: 2px; }
+    .form-section-header {
+      display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
+      padding: 6px 8px; background: #f8f9fa; border-radius: var(--cat-radius); cursor: pointer;
+    }
+    .form-section-header-left { display: flex; align-items: center; gap: 8px; }
+    .form-section-header-right { display: flex; align-items: center; gap: 6px; }
+    .form-section-header-meta { display: flex; align-items: center; gap: 8px; }
+    .form-section-title { margin: 0; font-size: 15px; }
+    .save-hint { font-size: 9px; color: #6c757d; }
+    .save-hint-kbd {
+      background: white; padding: 1px 4px; border-radius: 2px; border: 1px solid #ccc; font-size: 9px;
+    }
+    .popout-waiting-icon { font-size: 36px; margin-bottom: 12px; }
+    .popout-waiting-title { font-weight: 600; }
+    .popout-waiting-sub { font-size: 12px; color: #999; margin-top: 6px; }
+    .copy-last-btn {
+      width: 100%; padding: 5px 10px; background: #f0f4ff; border: 1px solid #c0caf0;
+      border-radius: var(--cat-radius); cursor: pointer; font-size: 12px; color: var(--cat-primary-dark);
+    }
+    .hint-muted { color: #888; }
+    .form-actions-row { display: flex; gap: 5px; align-items: flex-end; }
+    .btn.btn-form-action { padding: 6px 15px; font-size: 12px; }
+    .annotations-list-wrap { margin-bottom: 2px; }
+    .annotations-list-header {
+      display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;
+      padding: 8px; background: #f8f9fa; border-radius: var(--cat-radius); cursor: pointer;
+    }
+    .annotations-list-header-left { display: flex; align-items: center; gap: 15px; }
+    .annotations-list-title { margin: 0; font-size: 15px; }
+    .annotations-list-header-right { display: flex; align-items: center; gap: 6px; }
+    .annotation-stats-box {
+      padding: 4px 8px; margin-bottom: 4px;
+      background: linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%);
+      border: 1px solid #bae6fd; border-radius: var(--cat-radius); font-size: 11px; color: #0c4a6e;
+    }
+    .annotation-filter-wrap { padding: 4px 0 6px 0; }
+    .annotation-filter-input {
+      width: 100%; padding: 4px 8px; font-size: 11px; border: 1px solid var(--cat-border);
+      border-radius: var(--cat-radius); box-sizing: border-box;
+    }
+    .table-empty-cell { text-align: center; padding: 20px; color: #6c757d; }
+    /* .modal-content.modal-content-wide: base .modal-content (in
+       annotation-panels.css, loaded after this file) sets max-width:900px
+       at equal specificity, which would otherwise win the cascade tie. */
+    .modal-content.modal-content-wide { max-width: 700px; }
+    .modal-hint-text { margin-bottom: 15px; color: #aaa; font-size: 13px; }
+    .layer-management-list { max-height: 400px; overflow-y: auto; }
+    .layer-management-empty { text-align: center; padding: 40px; color: #666; }
+
+    /* ── Settings modals (species filter / timer / auto-save / map display) ── */
+    .settings-modal {
+      position: fixed; inset: 0; z-index: 20000; background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(3px); align-items: center; justify-content: center;
+    }
+    .settings-modal-box {
+      background: #fff; border-radius: 12px; width: 92%;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden;
+    }
+    .settings-modal-box--sm { max-width: 420px; }
+    .settings-modal-box--md { max-width: 480px; }
+    .settings-modal-box--lg { max-width: 520px; padding: 0; }
+    .settings-modal-header {
+      padding: 18px 24px; background: linear-gradient(135deg, var(--cat-primary-darker), #1a365d); color: #fff;
+    }
+    .settings-modal-header-row { display: flex; justify-content: space-between; align-items: center; }
+    .settings-modal-title { margin: 0; font-size: 16px; }
+    .settings-modal-close { background: none; border: none; color: #fff; font-size: 20px; cursor: pointer; padding: 0 4px; }
+    .settings-modal-subtitle { font-size: 12px; opacity: 0.8; margin-top: 4px; }
+    .settings-modal-body { padding: 20px 24px; }
+    .settings-modal-body--scroll { max-height: 60vh; overflow-y: auto; }
+    .settings-group { margin-bottom: 16px; }
+    .settings-group-title { font-weight: 600; font-size: 13px; color: #374151; margin-bottom: 8px; }
+    .settings-group-sub { font-size: 12px; color: #6b7280; margin-bottom: 10px; }
+    .settings-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .settings-grid-gap { display: grid; gap: 6px; }
+    .settings-preview-box {
+      background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px;
+      font-size: 12px; color: #6b7280;
+    }
+    .settings-modal-footer {
+      padding: 14px 24px; border-top: 1px solid #e5e7eb; display: flex;
+      justify-content: space-between; align-items: center;
+    }
+    .settings-modal-footer--end { justify-content: flex-end; }
+    .settings-footer-actions { display: flex; gap: 8px; }
+    .settings-btn-ghost {
+      padding: 6px 14px; border: 1px solid #d1d5db; background: #fff; border-radius: 6px;
+      cursor: pointer; font-size: 12px; color: #6b7280;
+    }
+    .settings-btn-cancel {
+      padding: 6px 14px; border: 1px solid #d1d5db; background: #fff; border-radius: 6px;
+      cursor: pointer; font-size: 12px;
+    }
+    .settings-btn-primary {
+      padding: 6px 14px; border: none; background: var(--cat-primary); color: #fff;
+      border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .settings-btn-primary:hover { background: var(--cat-primary-dark); }
+    .settings-toggle-row {
+      display: flex; align-items: center; justify-content: space-between; padding: 10px 12px;
+      border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 8px; cursor: pointer; font-size: 13px;
+    }
+    .settings-toggle-row-title { font-weight: 600; color: #374151; }
+    .settings-toggle-row-sub { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+    .settings-note-spaced { margin-bottom: 8px; }
+    .settings-checkbox { accent-color: var(--cat-primary); width: 18px; height: 18px; }
+    .settings-box { padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 8px; }
+    .settings-subrow { display: flex; align-items: center; justify-content: space-between; cursor: pointer; font-size: 13px; }
+    .settings-idle-row { margin-top: 8px; padding-top: 8px; border-top: 1px solid #f3f4f6; }
+    .settings-idle-label { font-size: 12px; color: #6b7280; }
+    .settings-select {
+      margin-left: 6px; padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 12px;
+    }
+    .settings-status-box {
+      background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px;
+      font-size: 12px; color: #6b7280; margin-top: 4px;
+    }
+    .settings-radio-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; }
+    .settings-radio-option {
+      display: flex; align-items: center; justify-content: center; gap: 4px; padding: 8px;
+      border: 1px solid #e5e7eb; border-radius: 6px; cursor: pointer; font-size: 12px;
+      background: #fff; transition: all 0.15s;
+    }
+    .settings-radio-accent { accent-color: var(--cat-primary); }
+    .settings-select-inline { font-size: 13px; font-weight: 600; color: #374151; }
+    .settings-select-inline .settings-select { margin-left: 8px; }
+    .settings-note { font-size: 11px; color: #9ca3af; margin-top: 4px; }
+    .settings-slider-row { padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 8px; }
+    .settings-slider-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+    .settings-slider-title { font-weight: 600; color: #374151; font-size: 13px; }
+    .settings-slider-value { font-size: 12px; color: #6b7280; font-weight: 600; }
+    .settings-slider-note { font-size: 11px; color: #9ca3af; margin-bottom: 8px; }
+    .settings-slider { width: 100%; accent-color: var(--cat-primary); }
+    .settings-slider-scale { display: flex; justify-content: space-between; font-size: 10px; color: #9ca3af; margin-top: 2px; }
+    .zoom-inc-row { padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 8px; }
+    .zoom-inc-title { font-weight: 600; color: #374151; font-size: 13px; margin-bottom: 6px; }
+    .zoom-inc-note { font-size: 11px; color: #9ca3af; margin-bottom: 10px; }
+    .zoom-inc-options { display: flex; gap: 6px; }
+    .zoom-inc-label { flex: 1; text-align: center; cursor: pointer; }
+    .zd-btn {
+      padding: 8px 4px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 11px;
+      font-weight: 600; transition: all .15s;
+    }
+    .zd-btn-icon { font-size: 16px; }
+    .zd-btn-sub { font-size: 10px; color: #9ca3af; }

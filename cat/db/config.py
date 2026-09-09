@@ -50,3 +50,29 @@ def validate_oracle_settings(settings: DatabaseSettings) -> None:
 
     if missing:
         raise ValueError(f"Missing required Oracle settings: {', '.join(missing)}")
+
+
+@dataclass(frozen=True)
+class AuthSettings:
+    bootstrap_admin_username: str = ""
+    bootstrap_admin_email: str = ""
+    bootstrap_admin_password: str = ""
+    session_max_age_hours: int = 24 * 7
+    session_cookie_name: str = "cat_session"
+    session_cookie_secure: bool = False
+
+
+def get_auth_settings() -> AuthSettings:
+    try:
+        max_age_hours = int(os.getenv("CAT_AUTH_SESSION_MAX_AGE_HOURS", "168").strip())
+    except ValueError:
+        max_age_hours = 24 * 7
+
+    return AuthSettings(
+        bootstrap_admin_username=os.getenv("CAT_AUTH_BOOTSTRAP_ADMIN_USERNAME", "").strip(),
+        bootstrap_admin_email=os.getenv("CAT_AUTH_BOOTSTRAP_ADMIN_EMAIL", "").strip(),
+        bootstrap_admin_password=os.getenv("CAT_AUTH_BOOTSTRAP_ADMIN_PASSWORD", ""),
+        session_max_age_hours=max_age_hours,
+        session_cookie_name=os.getenv("CAT_AUTH_SESSION_COOKIE_NAME", "cat_session").strip(),
+        session_cookie_secure=_parse_bool_env("CAT_AUTH_SESSION_COOKIE_SECURE", default=False),
+    )

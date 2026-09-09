@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+rasterio
+shapely
+pyproj
+numpy>=1.26,<3
+opencv-python-headless>=4.9,<5
+segment-geospatial[samgeo3]>=1.0.0

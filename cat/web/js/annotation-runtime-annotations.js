@@ -180,9 +180,15 @@
         map.setView(selectedLayer.getLatLng(), 18);
       }
       
-      // Open popup if exists
-      if (selectedLayer.openPopup) {
-        selectedLayer.openPopup();
+      // Open the interactive popup (Edit/Shape/Delete buttons) at the
+      // layer's center. selectedLayer.openPopup() is a no-op here since
+      // this layer never had bindPopup() called on it -- showAnnotationPopup()
+      // builds a fresh map-level popup on demand instead.
+      if (typeof showAnnotationPopup === 'function') {
+        const latlng = selectedLayer.getBounds
+          ? selectedLayer.getBounds().getCenter()
+          : (selectedLayer.getLatLng ? selectedLayer.getLatLng() : null);
+        if (latlng) showAnnotationPopup(selectedLayer, latlng);
       }
       
       console.log('✅ Zoomed to annotation', index);
@@ -494,8 +500,10 @@
           debounceTimer = setTimeout(() => {
             dropdown.innerHTML = '<div style="padding: 8px; text-align: center; color: #888;">Searching...</div>';
             dropdown.style.display = 'block';
-            
-            fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10&cache=1`)
+
+            // Task 9: apply Settings > Species Filters here too (table inline edit).
+            const fqs = typeof window.getSpeciesFilterQueryString === 'function' ? window.getSpeciesFilterQueryString() : '';
+            fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10&cache=1${fqs}`)
               .then(res => res.json())
               .then(data => {
                 tableResults = data.results || [];
@@ -896,8 +904,10 @@
     
     function searchEditSpecies(query) {
       const dropdown = document.getElementById('edit-species-autocomplete');
-      
-      fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10&cache=1`)
+
+      // Task 9: apply Settings > Species Filters here too (edit modal).
+      const fqs = typeof window.getSpeciesFilterQueryString === 'function' ? window.getSpeciesFilterQueryString() : '';
+      fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10&cache=1${fqs}`)
         .then(res => res.json())
         .then(data => {
           editAutocompleteResults = data.results || [];
@@ -1116,12 +1126,20 @@
       // Disable any previous editing
       if (currentEditingLayer && currentEditingLayer.editing) {
         currentEditingLayer.editing.disable();
+        // Restore pointer events disabled during editing (see below)
+        if (currentEditingLayer._path) currentEditingLayer._path.style.pointerEvents = '';
       }
       
       // Enable editing on this layer
       if (targetLayer.editing) {
         targetLayer.editing.enable();
         currentEditingLayer = targetLayer;
+
+        // Task 7 fix: the edited shape lives in annotationsPane (z-index 650),
+        // ABOVE markerPane (600) where leaflet-draw places the vertex handles,
+        // so the shape's SVG path intercepted every mousedown and vertices could
+        // not be dragged. Let pointer events pass through the path while editing.
+        if (targetLayer._path) targetLayer._path.style.pointerEvents = 'none';
         
         // Zoom to the annotation
         if (targetLayer.getBounds) {
@@ -1209,6 +1227,8 @@
         layerToSave.editing.disable();
         if (typeof _removeStaleEditHandles === 'function') _removeStaleEditHandles(layerToSave);
       }
+      // Restore pointer events disabled during editing (see enableGeometryEdit)
+      if (layerToSave._path) layerToSave._path.style.pointerEvents = '';
 
       // Update the annotation's geometry with new coordinates
       const ann = annotations[index];
@@ -1249,19 +1269,99 @@
           }, 100);
         }
         
-        // Mark unsaved changes and trigger save
+        // Mark unsaved changes and persist
         hasUnsavedChanges = true;
-        if (isOracleProjectMode()) {
+        if (isOracleProjectMode() && typeof syncAnnotationToDb === 'function' &&
+            typeof getDbAnnotationId === 'function' && getDbAnnotationId(ann)) {
+          // Task 7 fix: differential sync — PUT just this annotation.
+          // The previous saveProject() call here used POST bulk-replace, which
+          // deletes and re-inserts EVERY row (new annotation_ids), staling all
+          // local _dbAnnotationIds so later PUTs/undo restores would 404.
           setAutoSaveBadge('pending', '🔵 Unsaved changes');
-        }
-        
-        // Persist the changes
-        if (typeof saveProject === 'function') {
+          syncAnnotationToDb(ann)
+            .then(synced => {
+              // Refresh version tracking on the shared local object so the next
+              // PUT sends the current version (annotations[] and the layer both
+              // reference `ann`)
+              ann._dbAnnotationId = synced._dbAnnotationId;
+              ann._dbAnnotationVersion = synced._dbAnnotationVersion;
+              ann._syncStatus = 'synced';
+              // Keep projectAnnotations' version tracking in step for change polling
+              if (typeof getProjectAnnotations === 'function') {
+                const pa = getProjectAnnotations();
+                const idx = pa ? pa.findIndex(a =>
+                  a === ann || (a._dbAnnotationId && a._dbAnnotationId === synced._dbAnnotationId)) : -1;
+                if (idx >= 0) {
+                  pa[idx]._dbAnnotationVersion = synced._dbAnnotationVersion;
+                  pa[idx].geometry = ann.geometry;
+                }
+              }
+              // Record our own write so the multi-user poll ignores it
+              if (typeof _recordSyncedByMe === 'function') {
+                _recordSyncedByMe(synced._dbAnnotationId, synced._dbAnnotationVersion);
+              }
+              hasUnsavedChanges = false;
+              lastSaveTime = Date.now();
+              setAutoSaveBadge('saved', '✅ Saved');
+              console.log('✅ Geometry updated for annotation', index);
+              showStatus('✅ Geometry saved', 'success');
+            })
+            .catch(err => {
+              console.error('Geometry sync failed:', err);
+              // Task 7 round 2 fix (Finding 2): recover instead of retrying the
+              // same doomed request forever.
+              if (err.isConflict) {
+                // Another write bumped the version; adopt the server's version
+                // number but keep OUR geometry as the retry payload
+                // (last-writer-wins, acceptable for a single-user session).
+                if (err.serverAnnotation && err.serverAnnotation._dbAnnotationVersion != null) {
+                  ann._dbAnnotationVersion = err.serverAnnotation._dbAnnotationVersion;
+                }
+              } else if (err.isNotFound) {
+                // Server row is gone (e.g. deleted concurrently) — drop the
+                // stale identity so the retry re-POSTs this as a new annotation.
+                // getDbAnnotationId() falls back through annotation_id/id too
+                // (normalizeDbAnnotationResponse mirrors the db id onto both),
+                // so all three must be cleared or the next sync would still
+                // resolve the old id and PUT instead of POST.
+                delete ann._dbAnnotationId;
+                delete ann._dbAnnotationVersion;
+                delete ann.annotation_id;
+                delete ann.id;
+              }
+              // Mark pending (not synced) so the 30s differential auto-save
+              // retries this geometry save instead of the edit being silently lost.
+              ann._syncStatus = 'pending';
+              setAutoSaveBadge('pending', '🔵 Unsaved changes');
+              showStatus(`❌ Failed to save geometry: ${err.message}`, 'error');
+            });
+        } else if (isOracleProjectMode()) {
+          // Task 7 round 2 fix (Finding 1): the annotation hasn't been synced
+          // yet (no _dbAnnotationId), so there is nothing to PUT and calling
+          // saveProject() here would bulk-replace every row (id churn). Just
+          // update the local annotation in place — normalizeAnnotationForDb
+          // reads ann.geometry, which was already updated above, so the
+          // pending differential auto-save POST will carry the moved vertex.
+          ann._syncStatus = 'pending';
+          if (typeof getProjectAnnotations === 'function') {
+            const pa = getProjectAnnotations();
+            const idx = pa ? pa.findIndex(a => a === ann) : -1;
+            if (idx >= 0) {
+              pa[idx].geometry = ann.geometry;
+              pa[idx]._syncStatus = 'pending';
+            }
+          }
+          hasUnsavedChanges = true;
+          setAutoSaveBadge('pending', '🔵 Unsaved changes');
+          console.log('✅ Geometry updated locally for annotation', index, '(will sync)');
+          showStatus('✅ Geometry saved', 'success');
+        } else if (typeof saveProject === 'function') {
           saveProject();
+          console.log('✅ Geometry updated for annotation', index);
+          showStatus('✅ Geometry saved', 'success');
+        } else {
+          console.log('✅ Geometry updated for annotation', index);
         }
-        
-        console.log('✅ Geometry updated for annotation', index);
-        showStatus('✅ Geometry saved', 'success');
       }
       
       // Remove button container
@@ -1310,6 +1410,8 @@
         currentEditingLayer.editing.disable();
         if (typeof _removeStaleEditHandles === 'function') _removeStaleEditHandles(currentEditingLayer);
       }
+      // Restore pointer events disabled during editing (see enableGeometryEdit)
+      if (currentEditingLayer._path) currentEditingLayer._path.style.pointerEvents = '';
 
       // Reset style (preserve 7px line weight for consistency)
       if (currentEditingLayer.setStyle) {
@@ -1346,10 +1448,16 @@
         const dbId = typeof getDbAnnotationId === 'function' ? getDbAnnotationId(ann) : null;
         if (dbId) {
           try {
-            await fetch(`${serverUrl}/api/db/projects/${currentProject.project_id}/annotations/${dbId}`, {
+            await catFetch(`${serverUrl}/api/db/projects/${currentProject.project_id}/annotations/${dbId}`, {
               method: 'DELETE'
-            });
-          } catch (err) { console.warn('Delete API call failed:', err); }
+            }, 'Deleting annotation');
+          } catch (err) {
+            // catFetch already toasted the failure — don't remove the
+            // annotation locally / claim success if the DB delete failed
+            // (previously this swallowed the error and always reported success).
+            console.warn('Delete API call failed:', err);
+            return;
+          }
         }
         annotations.splice(index, 1);
         updateAnnotationTable();

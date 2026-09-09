@@ -296,6 +296,44 @@ window.catValidateRequired = function (fieldIds) {
 })();
 
 
+// ─── Uniform API fetch error handling ───────────────────────────────────────
+// fetch() with uniform failure UX: toast + loading-overlay dismissal.
+// Rethrows so call sites keep control flow. `context` names the action
+// for the user, e.g. "Saving annotation".
+// (window._catToast is defined in annotation-runtime-navbar.js and is the
+// app's real toast function; window.showStatus is an alias for it.)
+
+async function catFetch(url, options, context) {
+  const label = context || 'Request';
+  let resp;
+  try {
+    resp = await fetch(url, options);
+  } catch (err) {
+    _catFetchFail(label, 'network error — is the server reachable?');
+    throw err;
+  }
+  if (!resp.ok) {
+    let detail = resp.statusText;
+    try {
+      const body = await resp.clone().json();
+      if (body && body.detail) detail = String(body.detail);
+    } catch (_) { /* non-JSON body */ }
+    _catFetchFail(label, detail + ' (HTTP ' + resp.status + ')');
+    throw new Error(label + ' failed: ' + detail);
+  }
+  return resp;
+}
+
+function _catFetchFail(label, detail) {
+  const overlay = document.getElementById('fullLoadingOverlay');
+  if (overlay) overlay.style.display = 'none';
+  if (typeof window._catToast === 'function') {
+    window._catToast(label + ' failed: ' + detail, 'error');
+  }
+}
+window.catFetch = catFetch;
+
+
 // ─── Minimap ────────────────────────────────────────────────────────────────
 // Lightweight overview minimap showing current viewport on a zoomed-out view.
 // Call catInitMinimap(mainMap) after the main map is ready.
@@ -335,10 +373,18 @@ window.catValidateRequired = function (fieldIds) {
       touchZoom: false
     }).setView(mainMap.getCenter(), Math.max(mainMap.getZoom() - 5, 0));
 
-    // Add a simple tile layer (OpenStreetMap as fallback background)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
-      maxZoom: 20
-    }).addTo(miniMap);
+    // Offline-safe minimap background: mirror same-origin COG tile layers
+    // from the main map instead of an external basemap (gov networks).
+    const _miniBaseUrls = new Set();
+    function _mirrorTileLayer(lyr) {
+      if (lyr instanceof L.TileLayer && lyr._url && lyr._url.indexOf('/tiles/') !== -1
+          && !_miniBaseUrls.has(lyr._url)) {
+        _miniBaseUrls.add(lyr._url);
+        L.tileLayer(lyr._url, Object.assign({}, lyr.options, { attribution: '' })).addTo(miniMap);
+      }
+    }
+    mainMap.eachLayer(_mirrorTileLayer);
+    mainMap.on('layeradd', function (e) { _mirrorTileLayer(e.layer); });
 
     // Viewport rectangle
     viewRect = L.rectangle(mainMap.getBounds(), {

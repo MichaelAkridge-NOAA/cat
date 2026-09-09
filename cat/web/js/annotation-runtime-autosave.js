@@ -31,6 +31,11 @@
       }
       if (autoSaveInProgress) return;
       autoSaveInProgress = true;
+      // Task A2 Step 3: explicit window-scoped in-flight flag so callers in
+      // other files (e.g. saveProjectAndAnnotations in shell-init.js) can
+      // check it without depending on autoSaveInProgress's shared-scope
+      // visibility. Always reset in the finally below.
+      window._catAutoSaveInFlight = true;
       setAutoSaveBadge('saving', '⏳ Auto-saving…');
       try {
         // Differential sync: only send annotations that aren't already synced (Fix 2a)
@@ -66,8 +71,44 @@
             if (idx >= 0) applySyncedAnnotation(idx, synced);
             layer.annotationData = synced;
           } catch (err) {
+            // Task 7 round 2 fix (Finding 2): recover from 409/404 instead of
+            // re-sending the same stale request forever on every retry.
+            if (err.isConflict) {
+              // Adopt the server's version; keep our geometry/properties as
+              // the retry payload (last-writer-wins, single-user session).
+              if (err.serverAnnotation && err.serverAnnotation._dbAnnotationVersion != null) {
+                layer.annotationData._dbAnnotationVersion = err.serverAnnotation._dbAnnotationVersion;
+              } else if (err.currentVersion != null) {
+                // Server didn't echo the row, but the 409 payload carried the current
+                // version — advance to it so the retry isn't a no-op stuck on a stale version.
+                layer.annotationData._dbAnnotationVersion = err.currentVersion;
+              }
+              // Surface the reconciliation (throttled: at most once per 10s) instead of
+              // silently overwriting — the user should know a concurrent change was merged.
+              if (typeof showStatus === 'function') {
+                var _now = Date.now();
+                if (!window._catLastConflictToast || _now - window._catLastConflictToast > 10000) {
+                  window._catLastConflictToast = _now;
+                  showStatus('This annotation changed elsewhere — reloaded the latest version and reapplied your edit.', 'info');
+                }
+              }
+              layer.annotationData._syncStatus = 'pending';
+            } else if (err.isNotFound) {
+              // Row no longer exists server-side — drop the stale identity so
+              // the next attempt re-POSTs this as a new annotation.
+              // getDbAnnotationId() falls back through annotation_id/id too
+              // (normalizeDbAnnotationResponse mirrors the db id onto both),
+              // so all three must be cleared or the next sync would still
+              // resolve the old id and PUT instead of POST.
+              delete layer.annotationData._dbAnnotationId;
+              delete layer.annotationData._dbAnnotationVersion;
+              delete layer.annotationData.annotation_id;
+              delete layer.annotationData.id;
+              layer.annotationData._syncStatus = 'pending';
+            } else {
+              layer.annotationData._syncStatus = 'error';
+            }
             errors.push(err);
-            layer.annotationData._syncStatus = 'error';
           }
         }
 
@@ -124,6 +165,7 @@
         }
       } finally {
         autoSaveInProgress = false;
+        window._catAutoSaveInFlight = false;
       }
     }
 

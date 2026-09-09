@@ -1,6 +1,8 @@
 // Extracted from annotation-file-mode-runtime.js (Phase 2b: core)
     // Configuration
-    const serverUrl = 'http://localhost:8000';
+    // Same-origin: the API is always served by the host that served this page.
+    // A hardcoded host breaks proxied deployments (Cloud Workstations, etc.).
+    const serverUrl = window.location.origin;
     let currentCOG = null;
     let currentAnnotation = null;
     let annotations = [];
@@ -92,6 +94,13 @@
     }
     
     function startTimer() {
+      // Task A2 Step 4: this is the existing isRunning guard that makes
+      // startTimer() idempotent against the double auto-start mechanism
+      // (direct call from loadProjectFromDatabase/loadProjectFromFile in
+      // annotation-runtime-project-layers.js + the settings poller in
+      // annotation-runtime-settings-app.js). timerState.isRunning is the
+      // single source of truth for "is the timer running" — reused here
+      // rather than introducing a parallel window._catTimerRunning flag.
       if (timerState.isRunning && !timerState.isPaused) {
         console.log('⏱️ Timer already running');
         return;
@@ -208,8 +217,7 @@
 
     async function initializeStorageBackend() {
       try {
-        const response = await fetch(`${serverUrl}/api/config`);
-        if (!response.ok) return;
+        const response = await catFetch(`${serverUrl}/api/config`, undefined, 'Loading app configuration');
         const config = await response.json();
         if (config?.storage_backend) {
           storageBackend = config.storage_backend;

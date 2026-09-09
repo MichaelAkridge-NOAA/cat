@@ -65,12 +65,25 @@ async function _undoAdd(op) {
     (ann._dbAnnotationId && a._dbAnnotationId === ann._dbAnnotationId) ||
     (ann._localId && a._localId === ann._localId)
   );
-  if (index < 0) { showStatus('⚠️ Could not find annotation to undo', 'error'); return; }
+  // Throw (instead of silently returning) so undoLastAction re-pushes the op
+  // and the undo/redo stacks stay consistent (Task 7 fix)
+  if (index < 0) throw new Error('Could not find annotation to undo');
+
+  // Use the LIVE annotation for DB-state decisions: the op snapshot was taken
+  // at save time, BEFORE auto-save assigned _dbAnnotationId/_syncStatus, and
+  // the sync replaces the array entry with a new object (Task 7 fix)
+  const live = projectAnnotations[index];
+  const dbId = live._dbAnnotationId || live.annotation_id || live.id || null;
+  if (dbId) op.annotation._dbAnnotationId = dbId; // let redo restore by id
 
   const isOracle = typeof isOracleProjectMode === 'function' && isOracleProjectMode();
-  const needsDbDelete = ann._dbAnnotationId && ann._syncStatus === 'synced';
+  // Task 7 round 2 fix (Finding 3): delete by DB id regardless of _syncStatus —
+  // an annotation can carry a _dbAnnotationId while pending/error (e.g. a PUT
+  // that failed after the row existed server-side) and the server row must
+  // still be removed on undo, or it orphans in the DB.
+  const needsDbDelete = !!dbId;
   if (needsDbDelete && isOracle && typeof deleteAnnotationFromDb === 'function') {
-    await deleteAnnotationFromDb(ann);
+    await deleteAnnotationFromDb(live);
   }
 
   // Remove from map
@@ -78,14 +91,25 @@ async function _undoAdd(op) {
   if (drawnItems) {
     drawnItems.eachLayer(layer => {
       if (!layer.annotationData) return;
-      if (layer.annotationData === ann ||
-          (ann._dbAnnotationId && layer.annotationData._dbAnnotationId === ann._dbAnnotationId)) {
+      if (layer.annotationData === live || layer.annotationData === ann ||
+          (dbId && layer.annotationData._dbAnnotationId === dbId) ||
+          (ann._localId && layer.annotationData._localId === ann._localId)) {
         drawnItems.removeLayer(layer);
       }
     });
   }
 
   removeAnnotationFromProject(index);
+  // Also remove from the parallel `annotations` array driving the table/navbar
+  // count — removeAnnotationFromProject only touches projectAnnotations (Task 7 fix)
+  if (typeof annotations !== 'undefined' && annotations !== projectAnnotations) {
+    const ai = annotations.findIndex(a =>
+      a === live || a === ann ||
+      (dbId && a._dbAnnotationId === dbId) ||
+      (ann._localId && a._localId === ann._localId)
+    );
+    if (ai !== -1) annotations.splice(ai, 1);
+  }
   updateAnnotationTable();
   showStatus('↩️ Undo: annotation removed', 'success');
 }
@@ -155,6 +179,11 @@ async function _redoAdd(op) {
   const newIndex = projectAnnotations.length;
   data._displayIndex = newIndex + 1;
   projectAnnotations.push(data);
+  // Also push into the parallel `annotations` array driving the table/navbar
+  // count (Task 7 fix — mirrors saveAnnotation's dual-array handling)
+  if (typeof annotations !== 'undefined' && annotations !== projectAnnotations) {
+    annotations.push(data);
+  }
 
   // Re-add to map
   if (ann.geometry && typeof L !== 'undefined') {

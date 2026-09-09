@@ -13,6 +13,13 @@
 #   1. Oracle initializes and runs scripts from /container-entrypoint-initdb.d
 #   2. CAT user and tables are created automatically
 #   3. CAT app starts and loads reference data from CSV files
+#
+# SAM3 segmentation service (optional, GPU-accelerated):
+#   The `deploy.resources.reservations.devices` GPU reservation on
+#   sam3-service requires the NVIDIA Container Toolkit configured on the
+#   host (`nvidia-ctk runtime configure`). For CPU-only local development,
+#   create a docker-compose.override.yml that removes sam3-service's
+#   `deploy:` block and set CAT_SAM3_DEVICE=cpu in your .env.
 # =============================================================================
 
 services:
@@ -62,6 +69,9 @@ services:
     depends_on:
       database-oracle-free:
         condition: service_healthy
+      sam3-service:
+        condition: service_started
+        required: false
     environment:
       # Database connection (for DB mode)
       # CAT uses CAT_DB_* and CAT_STORAGE_BACKEND env vars
@@ -94,7 +104,20 @@ services:
       
       # Auto-bootstrap: create tables and ingest reference data on startup
       - CAT_AUTO_BOOTSTRAP=${CAT_AUTO_BOOTSTRAP:-true}
-      
+
+      # User login/sessions (Oracle mode only)
+      - CAT_AUTH_BOOTSTRAP_ADMIN_USERNAME=${CAT_AUTH_BOOTSTRAP_ADMIN_USERNAME:-}
+      - CAT_AUTH_BOOTSTRAP_ADMIN_EMAIL=${CAT_AUTH_BOOTSTRAP_ADMIN_EMAIL:-}
+      - CAT_AUTH_BOOTSTRAP_ADMIN_PASSWORD=${CAT_AUTH_BOOTSTRAP_ADMIN_PASSWORD:-}
+      - CAT_AUTH_SESSION_MAX_AGE_HOURS=${CAT_AUTH_SESSION_MAX_AGE_HOURS:-168}
+      - CAT_AUTH_SESSION_COOKIE_NAME=${CAT_AUTH_SESSION_COOKIE_NAME:-cat_session}
+      - CAT_AUTH_SESSION_COOKIE_SECURE=${CAT_AUTH_SESSION_COOKIE_SECURE:-false}
+
+      # SAM3 AI segmentation (optional; requires sam3-service to be healthy)
+      - CAT_SEGMENTATION_ENABLED=${CAT_SEGMENTATION_ENABLED:-false}
+      - CAT_SEGMENTATION_SERVICE_URL=${CAT_SEGMENTATION_SERVICE_URL:-http://sam3-service:8100}
+      - CAT_SEGMENTATION_TIMEOUT_S=${CAT_SEGMENTATION_TIMEOUT_S:-90}
+
     ports:
       - "${CAT_HOST_PORT:-8000}:8000"
     volumes:
@@ -109,7 +132,10 @@ services:
       
       # Mount reference data for ingestion
       - ./cat/data/reference:/app/cat/data/reference:ro
-      
+
+      # Shared VRT cache (LOCAL_CS rasters) - read-write, sam3-service mounts read-only
+      - cat-vrt-cache:/home/catuser/.cat/vrt_cache
+
       # Optional: mount config for overrides
       # - ./cat/config.yaml:/app/cat/config.yaml:ro
     networks:
@@ -120,6 +146,64 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s  # Allow time for bootstrap
+
+  # ---------------------------------------------------------------------------
+  # SAM3 Segmentation Service (GPU-accelerated, optional)
+  # ---------------------------------------------------------------------------
+  # This service only starts when explicitly requested via
+  # `docker compose --profile sam3 up -d` (or COMPOSE_PROFILES=sam3 in
+  # .env) — the `profiles:` entry below keeps the default
+  # `docker compose up` path (this file's documented primary command)
+  # working unchanged on non-GPU hosts.
+  sam3-service:
+    container_name: sam3-service
+    restart: unless-stopped
+    profiles: ["sam3"]
+    build:
+      context: ./services/sam3-service
+      dockerfile: Dockerfile
+    environment:
+      - SAM3_CHECKPOINT_PATH=${CAT_SAM3_CHECKPOINT_PATH:-/models/sam3/checkpoint.pt}
+      - SAM3_DEVICE=${CAT_SAM3_DEVICE:-cuda}
+      - SAM3_CONFIDENCE_THRESHOLD=${CAT_SAM3_CONFIDENCE_THRESHOLD:-0.5}
+      - SAM3_MASK_THRESHOLD=${CAT_SAM3_MASK_THRESHOLD:-0.5}
+      - SAM3_MAX_CROP_PX=${CAT_SAM3_MAX_CROP_PX:-4096}
+      - SAM3_MAX_TILED_PX=${CAT_SAM3_MAX_TILED_PX:-16384}
+      - SAM3_TILE_SIZE_PX=${CAT_SAM3_TILE_SIZE_PX:-1024}
+      - SAM3_TILE_OVERLAP_PX=${CAT_SAM3_TILE_OVERLAP_PX:-128}
+      - SAM3_REQUEST_TIMEOUT_S=${CAT_SAM3_REQUEST_TIMEOUT_S:-120}
+      # Internal ViT resolution -- MUST stay at 1008 (the model's trained
+      # default). The backbone's rotary position embeddings are precomputed
+      # for this exact grid size and are not recomputed if changed --
+      # raising this crashes inference (AssertionError in vitdet.py's RoPE
+      # broadcast). Do not change without confirming the installed
+      # segment-geospatial/sam3 version handles other values.
+      - SAM3_RESOLUTION=${CAT_SAM3_RESOLUTION:-1008}
+      # GCS/GDAL settings (for public bucket access) — same values cat-app uses,
+      # needed since /vsigs/ paths resolved for GCS-hosted COGs are handed to this service.
+      - GS_NO_SIGN_REQUEST=YES
+      - GDAL_HTTP_MERGE_CONSECUTIVE_RANGES=YES
+      - GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR
+      - CPL_VSIL_CURL_ALLOWED_EXTENSIONS=.tif,.tiff
+    volumes:
+      - ./data:/app/data:ro
+      - cat-vrt-cache:/home/catuser/.cat/vrt_cache:ro
+      - ${CAT_SAM3_CHECKPOINT_DIR:-./models/sam3}:/models/sam3:ro
+    networks:
+      - cat-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
 
   # ---------------------------------------------------------------------------
   # ORDS (Optional - Oracle REST Data Services)
@@ -138,6 +222,9 @@ volumes:
   # Application logs
   cat-logs:
     name: cat-logs
+  # Shared VRT cache (LOCAL_CS reprojection) - written by cat-app, read by sam3-service
+  cat-vrt-cache:
+    name: cat-vrt-cache
 
 # =============================================================================
 # Networks

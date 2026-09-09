@@ -526,8 +526,16 @@
     // Save annotation (File Mode - no database)
     let _isSaving = false;
     async function saveAnnotation() {
-      // In form-popout mode, geometry comes from BroadcastChannel, not map drawing
-      if (window._catPopoutMode === 'form') {
+      // In popout mode, geometry comes from BroadcastChannel (the popout has no map
+      // of its own to draw on), not from a locally-drawn Leaflet layer. This used to
+      // check for a mode literally named 'form', a name that predates the merge of
+      // the separate form/table popouts into the single 'panel' mode opened by
+      // openAnnotationPopout() (window._catPopoutMode is always 'panel' today, never
+      // 'form') - so this branch was silent dead code and every save attempt from the
+      // popout fell through to the currentAnnotation-based path below, which is never
+      // set in a popout (confirmed: saving from the popout previously did nothing but
+      // show "Please draw a shape first").
+      if (window._catPopoutMode) {
         return _saveAnnotationFromPopout();
       }
       if (_isSaving) return;
@@ -631,6 +639,12 @@
       
       // File mode: just add to local annotations array
       try {
+        // Stable local identity for undo/redo: the undo op snapshots a copy at
+        // push time, and the DB sync later REPLACES the array entry with the
+        // server response object — _localId (round-tripped through
+        // properties_json) is the only link that survives (Task 7 fix).
+        annotationData._localId = 'loc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+
         // Attach annotation data to the layer
         layer.annotationData = annotationData;
 
@@ -839,28 +853,20 @@
           layer.eachLayer(l => {
             l.options.objectId = feature.id;
             l.feature = feature;  // Store feature data on layer
+            l.annotationData = feature;  // Needed by showAnnotationPopup()
             drawnItems.addLayer(l);
-            
+
             // Remove any existing click handlers before adding new one
             l.off('click');
-            
-            // Add click handler for editing
+
+            // Add click handler for editing -- opens the interactive
+            // popup (Edit/Shape/Delete buttons) directly, same as the
+            // DB/project-mode load path.
             l.on('click', function(e) {
               L.DomEvent.stopPropagation(e);  // Prevent map click
-              selectAnnotationForEdit(feature.id);
+              showAnnotationPopup(l, e.latlng);
             });
-            
-            // Add popup with info
-            const popup = `
-              <b>ID:</b> ${feature.id}<br>
-              <b>Type:</b> ${feature.properties.SHAPE}<br>
-              <b>Species:</b> ${feature.properties.SPCODE || 'N/A'}<br>
-              <b>Site:</b> ${feature.properties.SITE}<br>
-              <b>Analyst:</b> ${feature.properties.ANALYST}<br>
-              <small style="color: #666;">Click to edit</small>
-            `;
-            l.bindPopup(popup);
-            
+
             // Add label if labels are enabled
             if (labelsVisible) {
               addLabelToAnnotation(l);
@@ -876,9 +882,10 @@
         
       } catch (error) {
         console.error('Error loading annotations:', error);
+        showStatus('Error loading annotations', 'error');
       }
     }
-    
+
     // Refresh annotations - clears and reloads from database
     async function refreshAnnotations() {
       if (!currentCOG && !isOracleProjectMode()) return;
@@ -974,17 +981,6 @@
               L.DomEvent.stopPropagation(e);
               showAnnotationPopup(l, e.latlng);
             });
-            
-            // Add popup
-            const spcode = ann.spcode || ann.SPCODE || ann.species_code || '';
-            const popup = `
-              <b>ID:</b> ${ann._dbAnnotationId || ann.id || (index + 1)}<br>
-              <b>Species:</b> ${spcode || 'N/A'}<br>
-              <b>Site:</b> ${ann.site || ann.SITE || 'N/A'}<br>
-              <b>Analyst:</b> ${ann.analyst || ann.ANALYST || 'N/A'}<br>
-              <small style="color: #666;">Click to edit</small>
-            `;
-            l.bindPopup(popup);
             
             // Add label if labels are enabled
             if (labelsVisible) {

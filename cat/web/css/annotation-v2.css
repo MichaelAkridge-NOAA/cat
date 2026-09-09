@@ -101,13 +101,13 @@
   color: #fff;
 }
 .v2-tool-btn-bulk {
-  background: #ecfdf5;
-  color: #059669;
-  border-color: #a7f3d0;
+  background: var(--cat-surface, #fff);
+  color: var(--cat-primary, #005ea2);
+  border-color: var(--cat-border, #dfe1e2);
 }
 .v2-tool-btn-bulk.active {
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  border-color: #059669;
+  background: var(--cat-primary, #005ea2);
+  border-color: var(--cat-primary-dark, #1a4480);
 }
 .v2-tool-btn-centroid {
   background: #fef3c7;
@@ -119,12 +119,12 @@
   border-color: #d97706;
 }
 .v2-tool-btn-undo {
-  background: #fef2f2;
-  color: #dc2626;
-  border-color: #fecaca;
+  background: var(--cat-surface, #fff);
+  color: var(--cat-error, #d54309);
+  border-color: var(--cat-border, #dfe1e2);
 }
 .v2-tool-btn-undo:hover {
-  background: #fee2e2;
+  background: rgba(213, 67, 9, 0.08);
 }
 
 /* ─── Layer Toolbar Buttons ─── */
@@ -138,7 +138,7 @@
 }
 .v2-tool-btn-layers {
   background: #eff6ff;
-  color: #2563eb;
+  color: var(--cat-primary);
   border-color: #bfdbfe;
 }
 .v2-tool-btn-layers:hover {
@@ -186,7 +186,7 @@
 }
 .annotation-panel .resize-handle:hover::after,
 .annotation-panel .resize-handle.dragging::after {
-  background: #667eea;
+  background: var(--cat-primary);
 }
 
 /* Table height control buttons */
@@ -208,14 +208,14 @@
   font-weight: 600;
 }
 .table-size-btn:hover {
-  background: #667eea;
+  background: var(--cat-primary);
   color: #fff;
-  border-color: #667eea;
+  border-color: var(--cat-primary);
 }
 .table-size-btn.active {
-  background: #667eea;
+  background: var(--cat-primary);
   color: #fff;
-  border-color: #667eea;
+  border-color: var(--cat-primary);
 }
 
 /* ─── Sortable Table Headers ─── */
@@ -226,7 +226,7 @@
   padding-right: 18px;
 }
 .annotation-table th.sortable:hover {
-  background: #5568d3;
+  background: var(--cat-primary-dark);
 }
 .annotation-table th.sortable::after {
   content: '⇅';
@@ -275,7 +275,7 @@
 
 /* ─── Keyboard Nav Highlight for Table Cells ─── */
 .annotation-table td.kb-focus {
-  outline: 3px solid #667eea;
+  outline: 3px solid var(--cat-primary);
   outline-offset: -2px;
   background: #eef2ff !important;
   box-shadow: inset 0 0 0 2px rgba(102, 126, 234, 0.3);
@@ -292,7 +292,7 @@
   height: 0;
   border-style: solid;
   border-width: 0 12px 12px 0;
-  border-color: transparent #667eea transparent transparent;
+  border-color: transparent var(--cat-primary) transparent transparent;
 }
 
 /* Cell copy indicator */
@@ -306,7 +306,7 @@
 
 /* Multi-select cells */
 .annotation-table td.kb-focus.multi-select {
-  outline: 2px dashed #667eea;
+  outline: 2px dashed var(--cat-primary);
   background: #f3f4f6 !important;
 }
 
@@ -406,7 +406,7 @@
 .batch-fill-content .batch-input-row input:focus,
 .batch-fill-content .batch-input-row select:focus {
   outline: none;
-  border-color: #667eea;
+  border-color: var(--cat-primary);
   box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.15);
 }
 .batch-fill-actions {
@@ -447,9 +447,9 @@
   transition: all 0.15s;
 }
 .v2-defaults-bar button:hover {
-  background: #667eea;
+  background: var(--cat-primary);
   color: #fff;
-  border-color: #667eea;
+  border-color: var(--cat-primary);
 }
 
 /* ─── Undo Toast ─── */
