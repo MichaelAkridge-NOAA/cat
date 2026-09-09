@@ -135,3 +135,4 @@ backups/
 # Exports directory
 exports/
 .superpowers/
+run.txt

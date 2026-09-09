@@ -54,12 +54,14 @@ On first startup the system auto-bootstraps: Oracle init scripts create the sche
 ### 1. Clone & Configure
 
 ```bash
-git clone -b cat_db_v7 https://github.com/MichaelAkridge-NOAA/cat.git
+git clone -b cat_db_v10 https://github.com/MichaelAkridge-NOAA/cat.git
 cd cat
-
+mkdir -p models
 # Create your .env from the template and set passwords
 cp .env.example .env
 nano .env   # <-- change ORACLE_PASSWORD and APP_SCHEMA_PASSWORD
+
+gcloud auth login
 ```
 
 ### 2. Start
