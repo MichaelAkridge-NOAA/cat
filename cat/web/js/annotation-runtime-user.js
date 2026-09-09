@@ -27,81 +27,46 @@
         el.addEventListener('change', persist);
         el.addEventListener('blur', persist);
       });
-      return;
-      
-      /* Removed database authentication code
+
+      // If still empty after project metadata + localStorage, fall back to the
+      // logged-in user's display name (Oracle mode only — CatAuth is a no-op
+      // no-network call when auth isn't enabled).
+      if (!window.CatAuth) return;
+      const analystField = document.getElementById('analyst');
+      if (!analystField || analystField.value) return;
       try {
-        const response = await fetch(`${serverUrl}/api/auth/me`);
-        if (response.ok) {
-          const user = await response.json();
-          if (user && user.username) {
-            // Update navbar to show logged-in user
-            const userBadge = document.getElementById('currentUserBadge');
-            const usernameSpan = document.getElementById('currentUsername');
-            const logoutBtn = document.getElementById('logoutBtn');
-            
-            if (userBadge && usernameSpan) {
-              usernameSpan.textContent = user.username;
-              userBadge.style.display = 'inline-block';
-            }
-            
-            if (logoutBtn) {
-              logoutBtn.style.display = 'inline';
-            }
-            
-            // Auto-fill the analyst field with username
-            const analystField = document.getElementById('analyst');
-            if (analystField && !analystField.value) {
-              // Use first 10 characters of username (or create initials)
-              let analystValue = user.username;
-              
-              // If username is too long, try to create initials
-              if (analystValue.length > 10) {
-                // Try to create initials from username (e.g., "john.doe" -> "JD")
-                const parts = analystValue.split(/[._-]/);
-                if (parts.length > 1) {
-                  analystValue = parts.map(p => p[0].toUpperCase()).join('');
-                } else {
-                  // Just truncate to 10 chars
-                  analystValue = analystValue.substring(0, 10);
-                }
-              }
-              
-              analystField.value = analystValue.toUpperCase();
-              markFieldAsAutofilled(analystField);
-              console.log('✅ Auto-filled analyst field with:', analystValue);
-            }
-            
-            // Set username for timer and load cumulative stats
-            timerState.username = user.username;
-            loadTotalTime();
-          }
-        } else if (response.status === 401) {
-          console.log('⚠️ User not logged in - analyst field not auto-filled');
+        const config = await CatAuth.getConfig();
+        if (!config.auth_enabled) return;
+        const data = await CatAuth.fetchCurrentUser();
+        if (data && data.user && !analystField.value) {
+          analystField.value = data.user.username.toUpperCase();
+          markFieldAsAutofilled(analystField);
+          timerState.username = data.user.username;
+          loadTotalTime();
         }
       } catch (error) {
         console.warn('Could not fetch current user:', error);
-        // Non-fatal error - user can still manually enter analyst name
       }
-      */
     }
-    
+
     // Logout function
     async function logout() {
+      if (window.CatAuth) {
+        await CatAuth.logout();
+        return false;
+      }
       try {
         const response = await fetch(`${serverUrl}/api/auth/logout`, {
           method: 'POST',
           credentials: 'include'
         });
-        
+
         if (response.ok) {
-          // Redirect to auth page
-          window.location.href = '/auth';
+          window.location.href = '/login.html';
         }
       } catch (error) {
         console.error('Logout error:', error);
-        // Still redirect even if there's an error
-        window.location.href = '/auth';
+        window.location.href = '/login.html';
       }
       return false; // Prevent default link behavior
     }

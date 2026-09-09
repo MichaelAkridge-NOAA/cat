@@ -288,6 +288,122 @@ DDL_BLOCKS: List[str] = [
     END;
     """,
     # -----------------------------------------------------------------
+    # User accounts + sessions
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[
+            CREATE TABLE cat_users (
+                user_id       NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                username      VARCHAR2(120) NOT NULL,
+                email         VARCHAR2(255) NOT NULL,
+                password_hash VARCHAR2(255) NOT NULL,
+                display_name  VARCHAR2(120),
+                role          VARCHAR2(20) DEFAULT 'annotator' NOT NULL,
+                is_active     NUMBER(1) DEFAULT 1 NOT NULL,
+                preferences_json CLOB,
+                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login    TIMESTAMP,
+                CONSTRAINT uq_cat_users_username UNIQUE (username),
+                CONSTRAINT uq_cat_users_email UNIQUE (email),
+                CONSTRAINT ck_cat_users_role CHECK (role IN ('admin', 'annotator'))
+            )
+        ]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[
+            CREATE TABLE cat_sessions (
+                session_id   NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                user_id      NUMBER NOT NULL,
+                token_hash   VARCHAR2(64) NOT NULL,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at   TIMESTAMP NOT NULL,
+                last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_cat_sessions_token UNIQUE (token_hash),
+                CONSTRAINT fk_cat_sessions_user
+                    FOREIGN KEY (user_id)
+                    REFERENCES cat_users(user_id)
+                    ON DELETE CASCADE
+            )
+        ]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[CREATE INDEX idx_cat_sessions_expires ON cat_sessions(expires_at)]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    # -----------------------------------------------------------------
+    # Ownership columns on projects/annotations — safe to re-run;
+    # ORA-01430 = column already exists
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_projects ADD (owner_user_id NUMBER)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_annotations ADD (created_by_user_id NUMBER)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    # ORA-02275 = referential constraint already exists
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[
+            ALTER TABLE cat_projects ADD CONSTRAINT fk_cat_projects_owner
+                FOREIGN KEY (owner_user_id) REFERENCES cat_users(user_id) ON DELETE SET NULL
+        ]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -2275 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[
+            ALTER TABLE cat_annotations ADD CONSTRAINT fk_cat_annotations_owner
+                FOREIGN KEY (created_by_user_id) REFERENCES cat_users(user_id) ON DELETE SET NULL
+        ]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -2275 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[CREATE INDEX idx_cat_projects_owner ON cat_projects(owner_user_id)]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[CREATE INDEX idx_cat_annotations_owner ON cat_annotations(created_by_user_id)]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    # -----------------------------------------------------------------
     # Schema migrations tracking table
     # -----------------------------------------------------------------
     """
@@ -335,6 +451,127 @@ DDL_BLOCKS: List[str] = [
     ON (dst.migration_id = src.mid)
     WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
     """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0006' AS mid, 'User auth: cat_users, cat_sessions, ownership FKs on projects/annotations' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
+    # -----------------------------------------------------------------
+    # Scope project-name uniqueness per-owner instead of globally — now
+    # that projects belong to users, two different users independently
+    # surveying e.g. "AGR-472 2025 Survey" shouldn't collide on name.
+    # ORA-02443 = constraint does not exist (guards the DROP for re-runs).
+    # ORA-02261 = a unique/PK constraint on these columns already exists.
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_projects DROP CONSTRAINT uq_cat_projects_name';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -2443 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[
+            ALTER TABLE cat_projects ADD CONSTRAINT uq_cat_projects_name_owner
+                UNIQUE (project_name, owner_user_id)
+        ]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -2261 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0007' AS mid, 'Scope project_name uniqueness to (project_name, owner_user_id) instead of globally' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
+    # -----------------------------------------------------------------
+    # Audit trail: who last modified a project/annotation, separate from
+    # who created it (owner_user_id / created_by_user_id) and separate from
+    # the domain fields observer_name (field diver) / created_by (analyst
+    # free-text). created_at/updated_at already exist on both tables.
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_projects ADD (last_mod_by_user_id NUMBER)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_annotations ADD (last_mod_by_user_id NUMBER)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[
+            ALTER TABLE cat_projects ADD CONSTRAINT fk_cat_projects_last_mod_by
+                FOREIGN KEY (last_mod_by_user_id) REFERENCES cat_users(user_id) ON DELETE SET NULL
+        ]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -2275 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[
+            ALTER TABLE cat_annotations ADD CONSTRAINT fk_cat_annotations_last_mod_by
+                FOREIGN KEY (last_mod_by_user_id) REFERENCES cat_users(user_id) ON DELETE SET NULL
+        ]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -2275 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0008' AS mid, 'Audit trail: last_mod_by_user_id on projects/annotations' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
+    # -----------------------------------------------------------------
+    # Fuller user profile fields for admin user management
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_users ADD (first_name VARCHAR2(120))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_users ADD (last_name VARCHAR2(120))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_users ADD (initials VARCHAR2(10))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0009' AS mid, 'User profile: first_name, last_name, initials on cat_users' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
     # -----------------------------------------------------------------
     # Coral species reference table
     # -----------------------------------------------------------------
@@ -379,12 +616,68 @@ DDL_BLOCKS: List[str] = [
             IF SQLCODE != -955 THEN RAISE; END IF;
     END;
     """,
+    # -----------------------------------------------------------------
+    # Tag overlay layers as transect/segment (vs generic imported overlays)
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_overlay_layers ADD (layer_type VARCHAR2(30))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0010' AS mid, 'Overlay layers: layer_type column for transect/segment tagging' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
 ]
+
+
+def _seed_bootstrap_admin() -> None:
+    """Idempotently create a first admin user from CAT_AUTH_BOOTSTRAP_ADMIN_* env vars, if set."""
+    try:
+        from .config import get_auth_settings
+        from .auth import hash_password
+
+        auth_settings = get_auth_settings()
+        if not (
+            auth_settings.bootstrap_admin_username
+            and auth_settings.bootstrap_admin_email
+            and auth_settings.bootstrap_admin_password
+        ):
+            return
+
+        password_hash = hash_password(auth_settings.bootstrap_admin_password)
+        execute(
+            """
+            MERGE INTO cat_users dst
+            USING (
+                SELECT :username AS u, :email AS e, :password_hash AS p, :display_name AS d FROM DUAL
+            ) src
+            ON (dst.username = src.u)
+            WHEN NOT MATCHED THEN INSERT (username, email, password_hash, display_name, role)
+                VALUES (src.u, src.e, src.p, src.d, 'admin')
+            """,
+            {
+                "username": auth_settings.bootstrap_admin_username,
+                "email": auth_settings.bootstrap_admin_email,
+                "password_hash": password_hash,
+                "display_name": auth_settings.bootstrap_admin_username,
+            },
+        )
+    except Exception:
+        # Bootstrap admin seeding is optional — never fail startup because of it.
+        pass
 
 
 def bootstrap_schema() -> dict:
     for ddl in DDL_BLOCKS:
         execute(ddl)
+
+    _seed_bootstrap_admin()
 
     # Read back the applied migrations for the summary
     try:
@@ -417,5 +710,7 @@ def bootstrap_schema() -> dict:
             "cat_site_visits",
             "cat_coral_species",
             "cat_schema_migrations",
+            "cat_users",
+            "cat_sessions",
         ],
     }

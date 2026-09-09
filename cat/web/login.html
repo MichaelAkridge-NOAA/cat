@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CAT: Log In</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1.0">
+  <link rel="stylesheet" href="css/cat-theme.css" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; font-family: var(--cat-font);
+      background: var(--cat-surface-alt); color: var(--cat-ink); }
+
+    .header-band { color: #fff; padding: 40px 20px; text-align: center; }
+    .header-band img { width: 72px; height: 72px; object-fit: contain; }
+    .header-band .acronym { display: block; font-size: 28px; font-weight: 800;
+      letter-spacing: -0.5px; margin-top: var(--cat-space-2); }
+    .header-band .tagline { display: block; font-size: 13px; opacity: 0.85;
+      margin-top: 4px; }
+
+    .auth-wrap { max-width: 420px; margin: -32px auto 60px; padding: 0 20px; position: relative; }
+    .auth-card { padding: var(--cat-space-5); }
+    .auth-card h1 { margin: 0 0 var(--cat-space-4); font-size: 22px; }
+    .auth-tabs { display: flex; gap: var(--cat-space-2); margin-bottom: var(--cat-space-4); }
+    .auth-tab { flex: 1; text-align: center; padding: 10px; border-radius: var(--cat-radius);
+      border: 1px solid var(--cat-border); cursor: pointer; background: var(--cat-surface);
+      font-weight: 600; color: var(--cat-ink); }
+    .auth-tab.is-active { background: var(--cat-primary); color: #fff; border-color: var(--cat-primary); }
+    label { display: block; font-weight: 600; margin: var(--cat-space-3) 0 var(--cat-space-1); font-size: 13px; }
+    input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--cat-border);
+      border-radius: var(--cat-radius); font: 14px var(--cat-font); }
+    .auth-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--cat-space-2); }
+    .auth-error { color: var(--cat-error); font-size: 13px; margin-top: var(--cat-space-2); min-height: 18px; }
+    .auth-submit { margin-top: var(--cat-space-4); width: 100%; justify-content: center; }
+    form { display: none; }
+    form.is-active { display: block; }
+  </style>
+</head>
+<body>
+  <div class="header-band">
+    <img src="/logo2.png" alt="CAT Logo">
+    <span class="acronym">CAT</span>
+    <span class="tagline">Coral Annotation Tool</span>
+  </div>
+
+  <div class="auth-wrap">
+    <div class="cat-card auth-card">
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab is-active" id="tabLogin">Log In</button>
+        <button type="button" class="auth-tab" id="tabSignup">Sign Up</button>
+      </div>
+
+      <form id="loginForm" class="is-active">
+        <label for="loginUsername">Username</label>
+        <input type="text" id="loginUsername" autocomplete="username" required>
+        <label for="loginPassword">Password</label>
+        <input type="password" id="loginPassword" autocomplete="current-password" required>
+        <div class="auth-error" id="loginError"></div>
+        <button type="submit" class="cat-btn cat-btn--primary auth-submit">Log In</button>
+      </form>
+
+      <form id="signupForm">
+        <label for="signupUsername">Username</label>
+        <input type="text" id="signupUsername" autocomplete="username" required minlength="3">
+        <div class="auth-row">
+          <div>
+            <label for="signupFirstName">First name</label>
+            <input type="text" id="signupFirstName" autocomplete="given-name">
+          </div>
+          <div>
+            <label for="signupLastName">Last name</label>
+            <input type="text" id="signupLastName" autocomplete="family-name">
+          </div>
+        </div>
+        <div class="auth-row">
+          <div>
+            <label for="signupInitials">Initials</label>
+            <input type="text" id="signupInitials" maxlength="10" placeholder="e.g. JD">
+          </div>
+          <div>
+            <label for="signupDisplayName">Display name</label>
+            <input type="text" id="signupDisplayName" autocomplete="name" placeholder="Defaults to first + last name">
+          </div>
+        </div>
+        <label for="signupEmail">Email</label>
+        <input type="email" id="signupEmail" autocomplete="email" required>
+        <label for="signupPassword">Password</label>
+        <input type="password" id="signupPassword" autocomplete="new-password" required minlength="8">
+        <div class="auth-error" id="signupError"></div>
+        <button type="submit" class="cat-btn cat-btn--primary auth-submit">Create Account</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    var tabLogin = document.getElementById('tabLogin');
+    var tabSignup = document.getElementById('tabSignup');
+    var loginForm = document.getElementById('loginForm');
+    var signupForm = document.getElementById('signupForm');
+
+    tabLogin.addEventListener('click', function () {
+      tabLogin.classList.add('is-active'); tabSignup.classList.remove('is-active');
+      loginForm.classList.add('is-active'); signupForm.classList.remove('is-active');
+    });
+    tabSignup.addEventListener('click', function () {
+      tabSignup.classList.add('is-active'); tabLogin.classList.remove('is-active');
+      signupForm.classList.add('is-active'); loginForm.classList.remove('is-active');
+    });
+
+    function nextUrl() {
+      var params = new URLSearchParams(window.location.search);
+      return params.get('next') || '/';
+    }
+
+    loginForm.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var errorEl = document.getElementById('loginError');
+      errorEl.textContent = '';
+      fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          username: document.getElementById('loginUsername').value,
+          password: document.getElementById('loginPassword').value
+        })
+      }).then(function (r) {
+        return r.json().then(function (data) { return { ok: r.ok, data: data }; });
+      }).then(function (result) {
+        if (!result.ok) {
+          errorEl.textContent = (result.data && result.data.detail) || 'Login failed';
+          return;
+        }
+        window.location.href = nextUrl();
+      }).catch(function () {
+        errorEl.textContent = 'Network error';
+      });
+    });
+
+    signupForm.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var errorEl = document.getElementById('signupError');
+      errorEl.textContent = '';
+      fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          username: document.getElementById('signupUsername').value,
+          email: document.getElementById('signupEmail').value,
+          first_name: document.getElementById('signupFirstName').value || null,
+          last_name: document.getElementById('signupLastName').value || null,
+          initials: document.getElementById('signupInitials').value || null,
+          display_name: document.getElementById('signupDisplayName').value || null,
+          password: document.getElementById('signupPassword').value
+        })
+      }).then(function (r) {
+        return r.json().then(function (data) { return { ok: r.ok, data: data }; });
+      }).then(function (result) {
+        if (!result.ok) {
+          errorEl.textContent = (result.data && result.data.detail) || 'Signup failed';
+          return;
+        }
+        // Auto-login after signup
+        return fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            username: document.getElementById('signupUsername').value,
+            password: document.getElementById('signupPassword').value
+          })
+        }).then(function () { window.location.href = nextUrl(); });
+      }).catch(function () {
+        errorEl.textContent = 'Network error';
+      });
+    });
+  </script>
+</body>
+</html>

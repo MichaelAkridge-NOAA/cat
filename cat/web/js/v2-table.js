@@ -1240,7 +1240,10 @@
               el.addEventListener('mouseover', () => { dd.querySelectorAll('.bu-sp-item').forEach(x => x.classList.remove('bu-sp-sel')); el.classList.add('bu-sp-sel'); selIdx = parseInt(el.dataset.i); });
             });
             dd.style.display = 'block';
-          }).catch(() => { dd.style.display = 'none'; });
+          }).catch(() => {
+            dd.innerHTML = '<div style="padding:8px 12px; color:#dc2626; font-size:12px;">Search failed</div>';
+            dd.style.display = 'block';
+          });
       }, 150);
     });
 
@@ -1269,6 +1272,14 @@
       const ann = annotations[idx];
       ann[field] = value;
       if (ann.properties) ann.properties[field] = value;
+      // Task 9 fix: mark dirty so the Task 8 differential auto-save (runAutoSave(),
+      // annotation-runtime-autosave.js) actually persists this edit. Bulk update only
+      // ever mutated the in-memory annotation/layer objects and set the page-wide
+      // hasUnsavedChanges flag; auto-save's own dirty check is per-annotation
+      // (`_syncStatus !== 'synced'`), which stayed 'synced' from the last save, so
+      // bulk-edited fields were silently never written to Oracle - confirmed via a
+      // bulk-edit-then-GET-/annotations round trip against project 21 before this fix.
+      if (ann._syncStatus === 'synced') ann._syncStatus = 'pending';
       count++;
     });
 
@@ -1282,6 +1293,7 @@
         if (annIdx >= 0 && selectedRows.has(annIdx)) {
           layer.annotationData[field] = value;
           if (layer.annotationData.properties) layer.annotationData.properties[field] = value;
+          if (layer.annotationData._syncStatus === 'synced') layer.annotationData._syncStatus = 'pending';
           if (refreshLabels) addLabelToAnnotation(layer);
           // Update layer color when species completeness changes (orange ↔ blue)
           if (field === 'spcode' && layer.setStyle && typeof getAnnotationLayerStyle === 'function') {

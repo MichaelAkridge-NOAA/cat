@@ -94,7 +94,15 @@ services:
       
       # Auto-bootstrap: create tables and ingest reference data on startup
       - CAT_AUTO_BOOTSTRAP=${CAT_AUTO_BOOTSTRAP:-true}
-      
+
+      # User login/sessions (Oracle mode only)
+      - CAT_AUTH_BOOTSTRAP_ADMIN_USERNAME=${CAT_AUTH_BOOTSTRAP_ADMIN_USERNAME:-}
+      - CAT_AUTH_BOOTSTRAP_ADMIN_EMAIL=${CAT_AUTH_BOOTSTRAP_ADMIN_EMAIL:-}
+      - CAT_AUTH_BOOTSTRAP_ADMIN_PASSWORD=${CAT_AUTH_BOOTSTRAP_ADMIN_PASSWORD:-}
+      - CAT_AUTH_SESSION_MAX_AGE_HOURS=${CAT_AUTH_SESSION_MAX_AGE_HOURS:-168}
+      - CAT_AUTH_SESSION_COOKIE_NAME=${CAT_AUTH_SESSION_COOKIE_NAME:-cat_session}
+      - CAT_AUTH_SESSION_COOKIE_SECURE=${CAT_AUTH_SESSION_COOKIE_SECURE:-false}
+
     ports:
       - "${CAT_HOST_PORT:-8000}:8000"
     volumes:

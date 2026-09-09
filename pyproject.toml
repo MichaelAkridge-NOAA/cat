@@ -38,6 +38,8 @@ dependencies = [
   "pyogrio>=0.7",
   "rtree>=1.0",
   "oracledb>=2.4.1",
+  "bcrypt>=4.0",
+  "email-validator>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -67,8 +69,10 @@ include = ["cat*"]
 [tool.setuptools.package-data]
 cat = [
   "web/*.html",
-  "web/*.css",
-  "web/*.js",
+  "web/css/*.css",
+  "web/js/*.js",
+  "web/vendor/*/*",
+  "web/vendor/*/images/*",
   "docs/*.png",
   "docs/*.ico",
   "data/reference/*.csv",

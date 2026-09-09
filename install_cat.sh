@@ -7,8 +7,8 @@
 # Handles auto-start on reboot and management commands
 # Auto-bootstrap: Creates CAT schema and ingests reference data on startup
 # =============================================================================
-SCRIPT_VERSION="7.0.0"
-CAT_BRANCH="cat_db_v7"
+SCRIPT_VERSION="8.0.0"
+CAT_BRANCH="cat_db_v8"
 
 echo "=============================================="
 echo "CAT Installer v${SCRIPT_VERSION}"
@@ -267,7 +267,7 @@ DB_SERVICE_NAME=FREEPDB1
 CAT_STORAGE_BACKEND=oracle
 CAT_HOST=0.0.0.0
 CAT_PORT=8000
-CAT_HOST_PORT=8000
+CAT_HOST_PORT=80
 ORACLE_HOST_PORT=1521
 
 # Auto-bootstrap on startup (creates tables and loads reference data)
@@ -279,6 +279,12 @@ ENVFILE
 else
     echo "  ✓ .env file already exists"
 fi
+
+# Load .env into this shell so $CAT_HOST_PORT etc. reflect the actual config below
+set -a
+# shellcheck disable=SC1091
+source "$CAT_INSTALL_DIR/.env"
+set +a
 
 # =============================================================================
 # Step 6: Build Docker images
@@ -300,10 +306,14 @@ echo "[Step 7/10] Creating management scripts..."
 sudo -u "$ACTUAL_USER" cat > "$CAT_INSTALL_DIR/cat-start.sh" << 'STARTSCRIPT'
 #!/bin/bash
 cd "$(dirname "$0")"
+set -a
+[ -f .env ] && source .env
+set +a
+PORT="${CAT_HOST_PORT:-80}"
 echo "Starting CAT services..."
 docker compose -f docker-compose.cat.yml up -d
 echo "✓ CAT services started"
-echo "Access CAT at: http://localhost:8000"
+echo "Access CAT at: http://localhost:${PORT}"
 docker compose -f docker-compose.cat.yml ps
 STARTSCRIPT
 chmod +x "$CAT_INSTALL_DIR/cat-start.sh"
@@ -333,13 +343,17 @@ chmod +x "$CAT_INSTALL_DIR/cat-restart.sh"
 sudo -u "$ACTUAL_USER" cat > "$CAT_INSTALL_DIR/cat-status.sh" << 'STATUSSCRIPT'
 #!/bin/bash
 cd "$(dirname "$0")"
+set -a
+[ -f .env ] && source .env
+set +a
+PORT="${CAT_HOST_PORT:-80}"
 echo "CAT Service Status:"
 docker compose -f docker-compose.cat.yml ps
 echo ""
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health 2>/dev/null || echo "000")
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/health" 2>/dev/null || echo "000")
 if echo "$HTTP_CODE" | grep -q '^2'; then
     echo "  ✓ CAT app responding (HTTP $HTTP_CODE)"
-    echo "  Access: http://localhost:8000"
+    echo "  Access: http://localhost:${PORT}"
 else
     echo "  ✗ CAT app not responding (HTTP $HTTP_CODE)"
 fi
@@ -362,6 +376,10 @@ chmod +x "$CAT_INSTALL_DIR/cat-logs.sh"
 sudo -u "$ACTUAL_USER" bash -c "cat > '$CAT_INSTALL_DIR/cat-diagnostics.sh'" << 'DIAGSCRIPT'
 #!/bin/bash
 CAT_DIR="$(dirname "$0")"
+set -a
+[ -f "$CAT_DIR/.env" ] && source "$CAT_DIR/.env"
+set +a
+PORT="${CAT_HOST_PORT:-80}"
 echo "=== CAT Diagnostics ==="
 echo ""
 echo "--- Container Status ---"
@@ -370,9 +388,9 @@ echo ""
 echo "--- Health Checks ---"
 ORACLE_HEALTH=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' database-oracle-free 2>/dev/null || echo "not running")
 echo "  Oracle: $ORACLE_HEALTH"
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health 2>/dev/null || echo "000")
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/health" 2>/dev/null || echo "000")
 if echo "$HTTP_CODE" | grep -qE '^2'; then
-    echo "  CAT app: OK (HTTP $HTTP_CODE) → http://localhost:8000"
+    echo "  CAT app: OK (HTTP $HTTP_CODE) → http://localhost:${PORT}"
 else
     echo "  CAT app: NOT reachable (HTTP $HTTP_CODE)"
 fi
@@ -384,11 +402,11 @@ CLUSTER=$(grep -E '^search|^domain' /etc/resolv.conf 2>/dev/null \
 echo "  hostname:       $HOSTNAME"
 echo "  DNS domain:     ${CLUSTER:-(not detected)}"
 if [ -n "$CLUSTER" ]; then
-    echo "  Expected URL:   https://8000-${HOSTNAME}.${CLUSTER}"
+    echo "  Expected URL:   https://${PORT}-${HOSTNAME}.${CLUSTER}"
     echo "  ✓ Use that URL in your Cloud Workstation browser tab"
 else
     echo "  ✗ Could not auto-detect Cloud Workstation domain"
-    echo "    Run: cat-set-url.sh https://8000-HOSTNAME.CLUSTER.cloudworkstations.dev"
+    echo "    Run: cat-set-url.sh https://${PORT}-HOSTNAME.CLUSTER.cloudworkstations.dev"
 fi
 echo ""
 echo "--- Oracle Data Directory ---"
@@ -409,13 +427,17 @@ chmod +x "$CAT_INSTALL_DIR/cat-diagnostics.sh"
 # Set-URL script (for Cloud Workstation URL override)
 sudo -u "$ACTUAL_USER" bash -c "cat > '$CAT_INSTALL_DIR/cat-set-url.sh'" << 'SETURLSCRIPT'
 #!/bin/bash
-# Usage: cat-set-url.sh https://8000-HOSTNAME.CLUSTER.cloudworkstations.dev
+# Usage: cat-set-url.sh https://80-HOSTNAME.CLUSTER.cloudworkstations.dev
 CAT_DIR="$(dirname "$0")"
+set -a
+[ -f "$CAT_DIR/.env" ] && source "$CAT_DIR/.env"
+set +a
+PORT="${CAT_HOST_PORT:-80}"
 if [ -z "$1" ]; then
-    echo "Usage: $0 https://8000-HOSTNAME.CLUSTER.cloudworkstations.dev"
+    echo "Usage: $0 https://${PORT}-HOSTNAME.CLUSTER.cloudworkstations.dev"
     echo ""
     echo "Sets the Cloud Workstation external URL for CAT."
-    echo "Find your URL in the Cloud Workstations web console → port 8000 forwarding link."
+    echo "Find your URL in the Cloud Workstations web console → port ${PORT} forwarding link."
     [ -f "$CAT_DIR/.env.custom" ] && echo "Current: $(cat $CAT_DIR/.env.custom)" || echo "(not set)"
     exit 1
 fi
@@ -476,9 +498,97 @@ docker compose -f docker-compose.cat.yml up -d >> "\$LOG_FILE" 2>&1 || true
 echo "CAT start complete" >> "\$LOG_FILE"
 HOOKEOF
     sudo chmod +x "$STARTUP_HOOK"
-    AUTO_START_STATUS="ENABLED via /etc/workstation-startup.d/"
-    echo "  ✓ Cloud Workstation startup hook installed: $STARTUP_HOOK"
-    echo "    CAT will start automatically on workstation boot."
+    echo "  ✓ Cloud Workstation startup hook installed: $STARTUP_HOOK (ephemeral, covers the current session)"
+
+    # --- Persistent hook: Cloud Workstations wipes /etc, /usr and /var and
+    # recreates them from the base image on every stop/start, so the hook
+    # above (and Docker itself) only survives until the NEXT stop/start.
+    # Only $HOME persists, so install a dispatcher there that Cloud
+    # Workstations re-runs, as the user account, on every boot.
+    echo "  Installing persistent auto-start hook (survives stop/start)..."
+    HOOK_DIR="$ACTUAL_HOME/.customize_environment.d"
+    sudo -u "$ACTUAL_USER" mkdir -p "$HOOK_DIR"
+    sudo -u "$ACTUAL_USER" mkdir -p "$ACTUAL_HOME/.workstation"
+
+    install_customize_dispatcher() {
+        local hook="$1"
+        # Preserve a pre-existing non-dispatcher hook by moving it into the drop-in dir.
+        if [ -f "$hook" ] && ! grep -q 'customize_environment.d dispatcher' "$hook" 2>/dev/null; then
+            sudo -u "$ACTUAL_USER" cp "$hook" "$HOOK_DIR/00-original-$(basename "$hook").sh"
+            sudo chmod +x "$HOOK_DIR/00-original-$(basename "$hook").sh"
+        fi
+        sudo bash -c "cat > '$hook'" << 'DISPATCH'
+#!/bin/bash
+# customize_environment.d dispatcher - runs as the user once per workstation start.
+# Executes each drop-in in ~/.customize_environment.d/ as ROOT via sudo so multiple
+# tools can register persistent privileged boot actions without overwriting each other.
+set -uo pipefail
+HOOK_DIR="${HOME}/.customize_environment.d"
+[ -d "$HOOK_DIR" ] || exit 0
+for _f in "$HOOK_DIR"/*; do
+    [ -f "$_f" ] || continue
+    if command -v sudo >/dev/null 2>&1; then
+        sudo -n bash "$_f" || true
+    else
+        bash "$_f" || true
+    fi
+done
+DISPATCH
+        sudo chmod +x "$hook"
+        sudo chown "$ACTUAL_USER:$ACTUAL_USER" "$hook"
+    }
+    install_customize_dispatcher "$ACTUAL_HOME/.workstation/customize_environment"
+    install_customize_dispatcher "$ACTUAL_HOME/.customize_environment"
+    sudo chown "$ACTUAL_USER:$ACTUAL_USER" "$ACTUAL_HOME/.workstation"
+
+    sudo bash -c "cat > '$HOOK_DIR/50-start-cat.sh'" << DROPINEOF
+#!/bin/bash
+# Re-provisions Docker (if the container reset wiped it) and starts CAT on every boot.
+set -uo pipefail
+LOG_FILE="/var/log/cat-bootstrap.log"
+echo "=== CAT persistent hook \$(date '+%Y-%m-%d %H:%M:%S %Z') ===" >> "\$LOG_FILE"
+
+CAT_DIR="$CAT_INSTALL_DIR"
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker missing after reset, reinstalling..." >> "\$LOG_FILE"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update >> "\$LOG_FILE" 2>&1 || true
+    mkdir -p /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>>"\$LOG_FILE" || true
+    echo "deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \$(lsb_release -cs) stable" \\
+        > /etc/apt/sources.list.d/docker.list
+    apt-get update >> "\$LOG_FILE" 2>&1 || true
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >> "\$LOG_FILE" 2>&1 || true
+    usermod -aG docker $ACTUAL_USER 2>/dev/null || true
+fi
+
+# Wait up to 2 min for the docker socket and the compose file to be ready
+for i in \$(seq 1 24); do
+    [ -f "\$CAT_DIR/docker-compose.cat.yml" ] && [ -S /var/run/docker.sock ] && break
+    sleep 5
+done
+
+[ ! -f "\$CAT_DIR/docker-compose.cat.yml" ] && { echo "docker-compose.cat.yml not found" >> "\$LOG_FILE"; exit 0; }
+[ ! -S /var/run/docker.sock ] && { echo "docker socket never became available" >> "\$LOG_FILE"; exit 0; }
+
+cd "\$CAT_DIR"
+if docker compose -f docker-compose.cat.yml ps | grep -q 'Up'; then
+    echo "CAT already running" >> "\$LOG_FILE"
+    exit 0
+fi
+
+echo "Starting CAT services..." >> "\$LOG_FILE"
+docker compose -f docker-compose.cat.yml up -d >> "\$LOG_FILE" 2>&1 || true
+echo "CAT start complete" >> "\$LOG_FILE"
+DROPINEOF
+    sudo chmod +x "$HOOK_DIR/50-start-cat.sh"
+    sudo chown -R "$ACTUAL_USER:$ACTUAL_USER" "$HOOK_DIR"
+
+    AUTO_START_STATUS="ENABLED (ephemeral /etc/workstation-startup.d/ for this session + persistent ~/.customize_environment.d/ hook that survives stop/start)"
+    echo "  ✓ Persistent boot hook installed: $ACTUAL_HOME/.workstation/customize_environment"
+    echo "    Drop-in: $HOOK_DIR/50-start-cat.sh (reinstalls Docker if wiped, then starts CAT)"
+    echo "    CAT will start automatically on workstation boot, including after stop/start."
 
 # --- Method 2: systemd (non-Cloud-Workstation Linux) -----------------------
 elif [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
@@ -582,7 +692,7 @@ fi
 
 APP_READY=false
 for i in {1..30}; do
-    if curl -sf "http://localhost:8000/health" >/dev/null 2>&1; then
+    if curl -sf "http://localhost:${CAT_HOST_PORT:-80}/health" >/dev/null 2>&1; then
         APP_READY=true
         break
     fi
@@ -593,7 +703,7 @@ done
 if [ "$APP_READY" = true ]; then
     echo "  ✓ CAT services started successfully"
     echo "  Triggering site reference data seed..."
-    curl -sf -X POST "http://localhost:${CAT_HOST_PORT:-8000}/api/sites/seed" \
+    curl -sf -X POST "http://localhost:${CAT_HOST_PORT:-80}/api/sites/seed" \
         -o /dev/null && echo "  ✓ Site data seeded" || echo "  ⚠️  Seed endpoint not reachable yet (will auto-seed on next restart)"
 else
     echo "  ⚠️  CAT health endpoint not reachable yet. Check with: $CAT_INSTALL_DIR/cat-status.sh"
@@ -605,7 +715,7 @@ fi
 echo "[Step 10/10] Installation complete!"
 
 # Auto-detect Cloud Workstation URL
-DETECTED_URL=$(detect_workstation_url "${CAT_HOST_PORT:-8000}" 2>/dev/null || echo "")
+DETECTED_URL=$(detect_workstation_url "${CAT_HOST_PORT:-80}" 2>/dev/null || echo "")
 
 echo ""
 echo "=============================================="
@@ -616,7 +726,7 @@ echo "📁 Installation Directory: $CAT_INSTALL_DIR"
 echo "📁 Data Directory: $CAT_DATA_DIR"
 echo "🌿 Branch: $CAT_BRANCH"
 echo ""
-echo "🌐 Access CAT at: http://localhost:8000"
+echo "🌐 Access CAT at: http://localhost:${CAT_HOST_PORT:-80}"
 if [ -n "$DETECTED_URL" ]; then
     echo "   Cloud Workstation URL: $DETECTED_URL"
 else
@@ -641,6 +751,9 @@ echo "   Environment: $CAT_INSTALL_DIR/.env"
 echo "   Compose:     $CAT_INSTALL_DIR/docker-compose.cat.yml"
 echo ""
 echo "🔄 Auto-start on boot: $AUTO_START_STATUS"
+if [ -f "$ACTUAL_HOME/.customize_environment.d/50-start-cat.sh" ]; then
+    echo "   Persistent hook log: /var/log/cat-bootstrap.log"
+fi
 if [ "$HAS_SYSTEMD" = true ] && command -v systemctl >/dev/null 2>&1; then
     echo "   Manage: sudo systemctl [start|stop|status] cat.service"
 fi

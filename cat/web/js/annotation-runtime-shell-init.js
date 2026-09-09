@@ -4,7 +4,15 @@
         alert('No project loaded');
         return;
       }
-      
+
+      // Task A2 Step 3: a manual Save click while an autosave/retry is already
+      // in flight would otherwise silently no-op (or race it) — tell the user
+      // their changes are already covered by the in-progress save instead.
+      if (window._catAutoSaveInFlight) {
+        if (typeof showStatus === 'function') showStatus('A save is already in progress — your changes are included.', 'info');
+        return;
+      }
+
       try {
         // Prepare annotations data
         const annotationsToSave = [];
@@ -28,19 +36,28 @@
         }
 
         if (storageBackend === 'oracle') {
-          const dbPayload = {
-            annotations: annotationsToSave.map(normalizeAnnotationForDb)
-          };
-
-          const dbResponse = await fetch(`${serverUrl}/api/db/projects/${projectId}/annotations/bulk-replace`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(dbPayload)
-          });
-
-          if (!dbResponse.ok) {
-            const error = await dbResponse.json().catch(() => ({}));
-            throw new Error(error.detail || 'Failed to save annotations to database');
+          // Task 8 fix: this used to POST /annotations/bulk-replace, which
+          // deletes and recreates every annotation on the project on every
+          // manual Save click. That silently churned every row's id/version
+          // even for annotations nothing had touched, breaking the
+          // optimistic-locking and undo/redo identity Task 7's differential
+          // sync (runAutoSave) depends on. Manual Save now drives the exact
+          // same differential POST-new/PUT-changed path as auto-save, so the
+          // two save flows can't disagree about what "saved" means.
+          hasUnsavedChanges = true;
+          await runAutoSave();
+          if (hasUnsavedChanges) {
+            // runAutoSave failed; it already put the badge into its error
+            // state (and, past the retry budget, the degraded-mode banner)
+            // and has a retry scheduled. Nothing more to do here — don't
+            // claim success.
+            // Task 11: this manual Save click previously ended here with no
+            // user-visible feedback at all beyond the small badge — add a
+            // toast so a deliberate Save action always gets a response.
+            if (typeof showStatus === 'function') {
+              showStatus('❌ Save failed — annotations could not be saved to the server. Will retry automatically.', 'error');
+            }
+            return;
           }
 
           // Best-effort session summary update
@@ -60,9 +77,6 @@
             }
           }
 
-          hasUnsavedChanges = false;
-          lastSaveTime = Date.now();
-          setAutoSaveBadge('saved', '✅ Saved');
           showStatus(`✅ Saved ${annotationsToSave.length} annotation(s) to Oracle project #${projectId}`, 'success');
           return;
         }
@@ -181,15 +195,43 @@
       // DB mode project bootstrap via URL parameter: ?project_id=123
       const urlParams = new URLSearchParams(window.location.search);
       const dbProjectId = urlParams.get('project_id') || urlParams.get('db_project_id');
+      // Oracle mode has no useful "no project loaded" state on this page —
+      // projects are opened from the project manager, not uploaded here.
+      // Send the user there instead of showing an empty annotator. Skip the
+      // redirect if a project was just handed off via the localStorage
+      // bridge above (e.g. a one-off local file opened from the project
+      // manager without a numeric project_id).
+      if (storageBackend === 'oracle' && !dbProjectId && !storedProject) {
+        window.location.href = '/project_creator.html';
+        return;
+      }
       if (storageBackend === 'oracle' && dbProjectId) {
         try {
           await loadProjectFromDatabase(dbProjectId);
-          startAutoSave();
+          // Task 8 fix: honor the persisted "Auto-save enabled" preference
+          // (Settings → Auto-save) on load. Previously this unconditionally
+          // called startAutoSave() regardless of what the user had saved,
+          // so disabling auto-save never survived a page reload — the
+          // interval always re-armed as soon as a project loaded.
+          let autoSaveEnabled = true;
+          try {
+            const saved = JSON.parse(localStorage.getItem('cat_autosave_settings') || '{}');
+            if (saved.enabled === false) autoSaveEnabled = false;
+          } catch (e) { /* fall back to enabled */ }
+          if (autoSaveEnabled) {
+            startAutoSave();
+          } else {
+            console.log('⏸️ Auto-save disabled in settings — not starting');
+          }
         } catch (error) {
           console.error('Error loading DB project:', error);
-          const overlay = document.getElementById('loadingOverlay');
+          const overlay = document.getElementById('fullLoadingOverlay');
           if (overlay) overlay.style.display = 'none';
           document.getElementById('uploadStatus').innerHTML = `<span style="color: #ef4444;">❌ DB load failed: ${error.message}</span>`;
+          // Task 11: uploadStatus lives inside the (often collapsed) upload
+          // panel, so a failed initial project load could go unnoticed.
+          // Also raise a toast, consistent with catFetch's failure UX.
+          if (typeof showStatus === 'function') showStatus(`❌ Failed to load project: ${error.message}`, 'error');
         }
       }
       
@@ -221,7 +263,20 @@
       // Stop auto-save timer
       if (autoSaveIntervalId) clearInterval(autoSaveIntervalId);
 
-      // Final best-effort save for Oracle mode (sendBeacon for async)
+      // Final best-effort save for Oracle mode (sendBeacon for async).
+      // Task 8 review note: this is the one remaining save path that still
+      // uses bulk-replace (delete-all-then-reinsert) instead of the
+      // differential POST-new/PUT-changed sync the manual Save button and
+      // auto-save now share. That's intentional, not an oversight:
+      // sendBeacon is fire-and-forget POST-only with no response handling,
+      // so it cannot sequence per-annotation PUTs/DELETEs the way
+      // runAutoSave() does, and bulk-replace's DELETE-then-INSERT semantics
+      // (see /annotations/bulk-replace in cat/api/db_projects.py) mean this
+      // payload must include every current annotation, not just the dirty
+      // ones -- omitting a synced-but-unchanged annotation would delete it
+      // outright. The known cost: ids/versions of already-synced rows churn
+      // on unload, which can 404 a stale reference held by another open
+      // window/popout (it self-heals via Task 7's 404-recovery re-POST).
       if (isOracleProjectMode() && hasUnsavedChanges && currentProject?.project_id) {
         const annotationsToSave = [];
         drawnItems.eachLayer(layer => {
@@ -452,6 +507,29 @@
       }
     }
 
+    // Show/hide the drawing hints bar (#drawingHintsBar in annotation.html).
+    // Called with a layerType ('polyline'|'polygon'|'rectangle') to show, or null to hide.
+    // (Task 7 fix: this function was referenced by the draw:drawstart/drawstop/canceled
+    // handlers below but never defined, so the hints bar never appeared.)
+    function showDrawingHints(tool) {
+      const bar = document.getElementById('drawingHintsBar');
+      if (!bar) return;
+      if (!tool) {
+        bar.style.display = 'none';
+        return;
+      }
+      const finishEl = document.getElementById('drawingHintFinish');
+      if (finishEl) {
+        const finishText = {
+          polygon: 'double-click to finish',
+          polyline: 'click last point to finish',
+          rectangle: 'release mouse to finish'
+        };
+        finishEl.textContent = finishText[tool] || 'double-click to finish';
+      }
+      bar.style.display = 'block';
+    }
+
     // Listen for when drawing tools are activated
     map.on('draw:drawstart', function(e) {
       // Store the type of tool being used
@@ -649,12 +727,41 @@
       }
     }, 500); // Delay to ensure toolbar is rendered
     
+    // Backspace mid-draw removes the last placed vertex (Task 7 fix: the drawing
+    // hints bar advertises "Backspace undo vertex" but nothing bound the key —
+    // leaflet-draw only exposes deleteLastVertex() via its "Delete last point" link).
+    document.addEventListener('keydown', function(e) {
+      if (e.key !== 'Backspace') return;
+      // Never hijack Backspace while typing in a form control
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || document.activeElement?.isContentEditable) return;
+      const activeMode = drawControl && drawControl._toolbars && drawControl._toolbars.draw
+        ? drawControl._toolbars.draw._activeMode
+        : null;
+      const handler = activeMode && activeMode.handler;
+      if (handler && typeof handler.deleteLastVertex === 'function') {
+        e.preventDefault();
+        handler.deleteLastVertex();
+      }
+    });
+
     // Add global ESC key handler to cancel drawing tools AND discard unsaved annotations
     document.addEventListener('keydown', function(e) {
       if (e.key !== 'Escape') return;
       // Skip if a modal is open
       if (document.getElementById('editModal')?.classList.contains('active')) return;
       if (document.getElementById('catConfirmOverlay')?.style.display === 'flex') return;
+      // Task 9 review fix: this handler fires before annotation-runtime-
+      // settings-app.js's own Escape-to-close handler (script load order),
+      // and both are plain (non-capturing) document keydown listeners, so
+      // stopPropagation() in the settings handler can't stop this one from
+      // also running. Without this guard, pressing Escape to close a
+      // settings modal ALSO cancelled the active drawing tool and silently
+      // discarded any unsaved annotation underneath it.
+      const openSettingsModal = ['speciesFilterModal', 'timerSettingsModal',
+        'autoSaveSettingsModal', 'mapDisplaySettingsModal']
+        .find(id => document.getElementById(id)?.style.display === 'flex');
+      if (openSettingsModal) return;
 
       // Close any open autocomplete dropdown (but keep going — single-press discard)
       const openDropdown = document.querySelector('.species-autocomplete-dropdown.active');

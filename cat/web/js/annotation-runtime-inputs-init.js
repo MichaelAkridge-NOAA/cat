@@ -97,8 +97,14 @@
     
     function searchSpecies(query) {
       const dropdown = document.getElementById('species-autocomplete');
-      
-      fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10`)
+
+      // Task 9 fix: this is the main annotation form's species field - the one place
+      // most users actually hit - and it never applied the Settings > Species Filters
+      // at all (only the rarely-used bulk-update dropdown did, and even that was
+      // broken - see getSpeciesFilterQueryString's comment). Saving a species filter
+      // previously had no visible effect anywhere a user would notice it.
+      const fqs = typeof window.getSpeciesFilterQueryString === 'function' ? window.getSpeciesFilterQueryString() : '';
+      fetch(`/api/coral/species/search?q=${encodeURIComponent(query)}&limit=10${fqs}`)
         .then(res => res.json())
         .then(data => {
           autocompleteResults = data.results || [];

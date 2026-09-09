@@ -1,4 +1,16 @@
 // Extracted from annotation-file-mode-runtime.js (Phase 2c: project/layers)
+    // Single source of truth for whether a project load should auto-start
+    // the timer, reading the same 'cat_timer_settings' key and default
+    // (autoStart: false) as annotation-runtime-settings-app.js.
+    function shouldAutoStartTimer() {
+      try {
+        const saved = JSON.parse(localStorage.getItem('cat_timer_settings') || '{}');
+        return saved.autoStart === true;
+      } catch (e) {
+        return false;
+      }
+    }
+
     function transformDbSnapshotToProject(snapshot) {
       const project = snapshot.project || {};
       const assets = Array.isArray(snapshot.assets) ? snapshot.assets : [];
@@ -93,10 +105,26 @@
           body: JSON.stringify(putBody)
         });
         if (resp.status === 409) {
-          const conflictData = await resp.json().catch(() => ({}));
+          const body = await resp.json().catch(() => ({}));
+          // Task 7 round 2 fix: FastAPI wraps HTTPException(detail=...) as
+          // {"detail": {...}} — current_annotation lives at body.detail.
+          // current_annotation, not body.current_annotation, so this always
+          // read null before and conflict recovery could never adopt the
+          // server's version.
+          const conflictData = body.detail || body;
           const err = new Error(`Conflict: annotation #${annotationId} was modified by another user`);
           err.isConflict = true;
           err.serverAnnotation = conflictData.current_annotation ? normalizeDbAnnotationResponse(conflictData.current_annotation) : null;
+          // Task A2 Step 2: the 409 body always carries current_version (see
+          // db_projects.py update_annotation), even on the rare occasions
+          // current_annotation fails to normalize/parse — expose it so callers
+          // can advance the stale version without a valid serverAnnotation.
+          err.currentVersion = conflictData.current_version != null ? conflictData.current_version : null;
+          throw err;
+        }
+        if (resp.status === 404) {
+          const err = new Error(`Annotation #${annotationId} no longer exists server-side`);
+          err.isNotFound = true;
           throw err;
         }
         if (!resp.ok) {
@@ -122,6 +150,41 @@
 
     function getProjectAnnotations() {
       return projectAnnotations;
+    }
+
+    // Task 7 fix: these three helpers are required by annotation-undo.js but
+    // were never defined anywhere — getDrawnItems() threw a ReferenceError on
+    // every undo/redo of an add, and the typeof-guards on the other two made
+    // the server-side delete/restore silently no-op.
+    function getDrawnItems() {
+      return drawnItems;
+    }
+
+    async function deleteAnnotationFromDb(annotation) {
+      if (!isOracleProjectMode()) return null;
+      const annotationId = getDbAnnotationId(annotation);
+      if (!annotationId) return null;
+      const resp = await fetch(`${serverUrl}/api/db/projects/${currentProject.project_id}/annotations/${annotationId}`, {
+        method: 'DELETE'
+      });
+      if (!resp.ok) {
+        const e = await resp.json().catch(() => ({}));
+        throw new Error(e.detail || `Failed to delete annotation #${annotationId}`);
+      }
+      return resp.json();
+    }
+
+    async function restoreAnnotationInDb(annotationId) {
+      if (!isOracleProjectMode() || !annotationId) return null;
+      const resp = await fetch(`${serverUrl}/api/db/projects/${currentProject.project_id}/annotations/${annotationId}/restore`, {
+        method: 'POST'
+      });
+      if (!resp.ok) {
+        const e = await resp.json().catch(() => ({}));
+        throw new Error(e.detail || `Failed to restore annotation #${annotationId}`);
+      }
+      const result = await resp.json();
+      return normalizeDbAnnotationResponse(result.annotation);
     }
 
     function removeAnnotationFromProject(index) {
@@ -174,7 +237,7 @@
         throw new Error('Invalid database project_id');
       }
 
-      const overlay = document.getElementById('loadingOverlay');
+      const overlay = document.getElementById('fullLoadingOverlay');
       const loadingTitle = document.getElementById('loadingTitle');
       const loadingMessage = document.getElementById('loadingMessage');
       const loadingProgress = document.getElementById('loadingProgress');
@@ -234,7 +297,13 @@
         }
       }
       loadProjectAnnotations();
-      startTimer();
+      // Task 8 fix: this used to call startTimer() unconditionally, so the
+      // timer always ran from page load regardless of the persisted
+      // Settings -> Timer "auto-start" preference (default: off). Honor the
+      // same setting annotation-runtime-settings-app.js's _initSettingsOnLoad
+      // poller reads, so there's exactly one source of truth for whether the
+      // timer should start itself.
+      if (shouldAutoStartTimer()) startTimer();
 
       // Start DB annotation session (best effort)
       try {
@@ -271,7 +340,7 @@
         formData.append('file', file);  // Send the actual file, not just text
         
         // Show full-screen loading overlay
-        const overlay = document.getElementById('loadingOverlay');
+        const overlay = document.getElementById('fullLoadingOverlay');
         const loadingTitle = document.getElementById('loadingTitle');
         const loadingMessage = document.getElementById('loadingMessage');
         const loadingProgress = document.getElementById('loadingProgress');
@@ -337,9 +406,10 @@
         
         // Load existing annotations
         loadProjectAnnotations();
-        
-        // Start the timer automatically
-        startTimer();
+
+        // Task 8 fix: only auto-start if the user's Timer Settings say so
+        // (see the matching fix + comment in loadProjectFromDatabase above).
+        if (shouldAutoStartTimer()) startTimer();
         
         // Update progress - complete
         loadingProgress.style.width = '100%';
@@ -358,12 +428,14 @@
         
       } catch (error) {
         console.error('Error loading project:', error);
-        
+
         // Hide overlay and show error
-        const overlay = document.getElementById('loadingOverlay');
+        const overlay = document.getElementById('fullLoadingOverlay');
         if (overlay) overlay.style.display = 'none';
-        
+
         document.getElementById('uploadStatus').innerHTML = `<span style="color: #ef4444;">❌ Error: ${error.message}</span>`;
+        // Task 11: also raise a toast — uploadStatus text alone is easy to miss.
+        if (typeof showStatus === 'function') showStatus(`❌ Failed to load project: ${error.message}`, 'error');
       }
     }
     
@@ -374,40 +446,62 @@
         const siteField = document.getElementById('site');
         const obsYearField = document.getElementById('obs_year');
         const missionIdField = document.getElementById('mission_id');
-        
-        // Analyst field - from project.metadata.observer, then localStorage
-        if (analystField && currentProject.metadata?.observer) {
-          analystField.value = currentProject.metadata.observer;
-        } else if (analystField && !analystField.value) {
-          const saved = localStorage.getItem('cat_analyst');
-          if (saved) {
-            analystField.value = saved;
-            markFieldAsAutofilled(analystField);
-          }
+
+        // Analyst = who is annotating right now (this tool session), which is
+        // a distinct person from the project's observer (the field diver who
+        // did the survey — metadata, unrelated to who's using the annotator).
+        // Always defaults to the logged-in user, always editable.
+        if (analystField && !analystField.value) {
+          fillAnalystFromLoginOrLocalStorage(analystField);
         }
-        
+
         // Site field - from project.site
         if (siteField && currentProject.site) {
           siteField.value = currentProject.site;
         }
-        
+
         // Observation year - from project.year
         if (obsYearField && currentProject.year) {
           obsYearField.value = currentProject.year;
         }
-        
+
         // Mission ID - from project.cruise
         if (missionIdField && currentProject.cruise) {
           missionIdField.value = currentProject.cruise;
         }
-        
+
         console.log('✅ Annotation form initialized with project data:', {
-          analyst: currentProject.metadata?.observer,
+          observer: currentProject.observer,
           site: currentProject.site,
           obs_year: currentProject.year,
           mission_id: currentProject.cruise
         });
       }
+    }
+
+    function fillAnalystFromLoginOrLocalStorage(analystField) {
+      function fromLocalStorage() {
+        if (analystField.value) return;
+        const saved = localStorage.getItem('cat_analyst');
+        if (saved) {
+          analystField.value = saved;
+          markFieldAsAutofilled(analystField);
+        }
+      }
+      if (!window.CatAuth) { fromLocalStorage(); return; }
+      CatAuth.getConfig().then(function (config) {
+        if (!config.auth_enabled) { fromLocalStorage(); return; }
+        return CatAuth.fetchCurrentUser().then(function (data) {
+          // analyst is a short code field (maxlength 10, e.g. "DTP", "LG")
+          // — prefer username over the longer display_name here.
+          if (data && data.user && !analystField.value) {
+            analystField.value = data.user.username.toUpperCase();
+            markFieldAsAutofilled(analystField);
+          } else {
+            fromLocalStorage();
+          }
+        });
+      }).catch(fromLocalStorage);
     }
     
     function loadProjectLayers() {
@@ -651,7 +745,7 @@
       
       if (!shapefilePath) {
         console.error('No shapefile path found for:', shapefile.name);
-        alert(`Missing path for shapefile: ${shapefile.name}`);
+        showStatus(`Missing path for shapefile: ${shapefile.name}`, 'error');
         const checkbox = document.querySelector(`[data-shapefile-name="${shapefile.name}"]`);
         if (checkbox) checkbox.checked = false;
         return;
@@ -669,7 +763,7 @@
         if (!response.ok) {
           const errorText = await response.text();
           console.error(`❌ Shapefile load failed (${response.status}):`, errorText);
-          alert(`Failed to load shapefile: ${shapefile.name}\nError: ${errorText}`);
+          showStatus(`Failed to load shapefile: ${shapefile.name} — ${errorText}`, 'error');
           // Uncheck the box
           const checkbox = document.querySelector(`[data-shapefile-name="${shapefile.name}"]`);
           if (checkbox) checkbox.checked = false;
@@ -682,7 +776,7 @@
         
         if (!geojson.features || geojson.features.length === 0) {
           console.warn('⚠️ Shapefile has no features');
-          alert(`Shapefile "${shapefile.name}" is empty (no features)`);
+          showStatus(`Shapefile "${shapefile.name}" is empty (no features)`, 'error');
           const checkbox = document.querySelector(`[data-shapefile-name="${shapefile.name}"]`);
           if (checkbox) checkbox.checked = false;
           return;
@@ -737,7 +831,7 @@
         }
       } catch (error) {
         console.error('Error loading shapefile:', error);
-        alert(`Error loading shapefile: ${shapefile.name}`);
+        showStatus(`Error loading shapefile: ${shapefile.name}`, 'error');
         // Uncheck the box
         const checkbox = document.querySelector(`[data-shapefile-name="${shapefile.name}"]`);
         if (checkbox) checkbox.checked = false;
