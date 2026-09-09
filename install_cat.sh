@@ -166,34 +166,12 @@ echo "  ✓ Prerequisites installed"
 
 if [ "$CAT_INSTALL_VARIANT" = "gpu" ]; then
     echo "[GPU setup] Checking NVIDIA GPU and configuring NVIDIA Container Toolkit..."
-    NVIDIA_SMI=""
-    for candidate in \
-        /usr/bin/nvidia-smi \
-        /usr/local/bin/nvidia-smi \
-        /usr/local/nvidia/bin/nvidia-smi \
-        /usr/local/cuda/bin/nvidia-smi \
-        /opt/nvidia/bin/nvidia-smi; do
-        if [ -x "$candidate" ]; then
-            NVIDIA_SMI="$candidate"
-            break
-        fi
-    done
-    if [ -z "$NVIDIA_SMI" ]; then
-        NVIDIA_SMI=$(sudo -u "$ACTUAL_USER" -H bash -lic 'command -v nvidia-smi' 2>/dev/null | tail -n 1 || true)
-    fi
-    if [ -z "$NVIDIA_SMI" ] || [ ! -x "$NVIDIA_SMI" ]; then
-        NVIDIA_SMI=$(find -L /usr/local /opt /usr -xdev -type f -name nvidia-smi -perm -111 -print -quit 2>/dev/null || true)
-    fi
-    if [ -z "$NVIDIA_SMI" ]; then
-        echo "  ERROR: nvidia-smi was not found in the system paths or $ACTUAL_USER's login environment."
-        echo "         Use a workstation/host with an NVIDIA GPU and driver installed."
+    # Cloud Workstations mount the driver libraries into the user's shell
+    # environment. sudo removes that environment, so validate as that user.
+    if ! sudo -u "$ACTUAL_USER" -H bash -ic 'nvidia-smi --query-gpu=name --format=csv,noheader'; then
+        echo "  ERROR: NVIDIA GPU is not available in $ACTUAL_USER's interactive environment."
         exit 1
     fi
-    echo "  Using NVIDIA utility: $NVIDIA_SMI"
-    "$NVIDIA_SMI" --query-gpu=name --format=csv,noheader || {
-        echo "  ERROR: NVIDIA GPU is not available to this host."
-        exit 1
-    }
 fi
 
 # Docker must be installed before configuring its NVIDIA runtime.
