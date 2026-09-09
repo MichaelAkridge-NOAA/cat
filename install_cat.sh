@@ -166,14 +166,19 @@ echo "  ✓ Prerequisites installed"
 
 if [ "$CAT_INSTALL_VARIANT" = "gpu" ]; then
     echo "[GPU setup] Checking NVIDIA GPU and configuring NVIDIA Container Toolkit..."
-    if ! command -v nvidia-smi >/dev/null 2>&1; then
+    NVIDIA_SMI=$(PATH="/usr/local/nvidia/bin:/usr/local/cuda/bin:/opt/nvidia/bin:/usr/bin:/bin:$PATH" command -v nvidia-smi || true)
+    if [ -z "$NVIDIA_SMI" ]; then
         echo "  ERROR: nvidia-smi was not found. Use a workstation/host with an NVIDIA GPU and driver installed."
         exit 1
     fi
-    nvidia-smi --query-gpu=name --format=csv,noheader || {
+    "$NVIDIA_SMI" --query-gpu=name --format=csv,noheader || {
         echo "  ERROR: NVIDIA GPU is not available to this host."
         exit 1
     }
+fi
+
+# Docker must be installed before configuring its NVIDIA runtime.
+configure_nvidia_container_toolkit() {
     if ! command -v nvidia-ctk >/dev/null 2>&1; then
         curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
             | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
@@ -189,7 +194,7 @@ if [ "$CAT_INSTALL_VARIANT" = "gpu" ]; then
     sudo nvidia-ctk runtime configure --runtime=docker
     sudo systemctl restart docker 2>/dev/null || sudo service docker restart 2>/dev/null || true
     echo "  ✓ NVIDIA Container Toolkit configured"
-fi
+}
 
 # =============================================================================
 # Step 2: Install Docker if not present
@@ -216,6 +221,10 @@ if ! command -v docker &> /dev/null; then
 else
     echo "[Step 2/10] Docker already installed"
     docker --version
+fi
+
+if [ "$CAT_INSTALL_VARIANT" = "gpu" ]; then
+    configure_nvidia_container_toolkit
 fi
 
 # =============================================================================
