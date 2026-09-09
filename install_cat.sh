@@ -9,11 +9,32 @@
 # =============================================================================
 SCRIPT_VERSION="10.0.0"
 CAT_BRANCH="cat_db_v10"
+CAT_INSTALL_VARIANT="${CAT_INSTALL_VARIANT:-base}"
+
+case "$CAT_INSTALL_VARIANT" in
+    base)
+        COMPOSE_FILES=(-f docker-compose.cat.yml)
+        COMPOSE_FILE_LABEL="docker-compose.cat.yml"
+        ;;
+    gpu)
+        COMPOSE_FILES=(-f docker-compose.cat.yml -f docker-compose.sam3.yml)
+        COMPOSE_FILE_LABEL="docker-compose.cat.yml + docker-compose.sam3.yml"
+        ;;
+    *)
+        echo "ERROR: CAT_INSTALL_VARIANT must be 'base' or 'gpu' (got: $CAT_INSTALL_VARIANT)"
+        exit 1
+        ;;
+esac
+
+cat_compose() {
+    docker compose "${COMPOSE_FILES[@]}" "$@"
+}
 
 echo "=============================================="
 echo "CAT Installer v${SCRIPT_VERSION}"
 echo "Coral Annotation Tool with Oracle DB"
 echo "Branch: ${CAT_BRANCH}"
+echo "Install variant: ${CAT_INSTALL_VARIANT}"
 echo "=============================================="
 echo ""
 
@@ -143,6 +164,33 @@ sudo apt-get install -y \
 }
 echo "  ✓ Prerequisites installed"
 
+if [ "$CAT_INSTALL_VARIANT" = "gpu" ]; then
+    echo "[GPU setup] Checking NVIDIA GPU and configuring NVIDIA Container Toolkit..."
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        echo "  ERROR: nvidia-smi was not found. Use a workstation/host with an NVIDIA GPU and driver installed."
+        exit 1
+    fi
+    nvidia-smi --query-gpu=name --format=csv,noheader || {
+        echo "  ERROR: NVIDIA GPU is not available to this host."
+        exit 1
+    }
+    if ! command -v nvidia-ctk >/dev/null 2>&1; then
+        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+            | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+        curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+            | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+            | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
+        sudo apt-get update
+        sudo apt-get install -y nvidia-container-toolkit || {
+            echo "  ERROR: Failed to install NVIDIA Container Toolkit"
+            exit 1
+        }
+    fi
+    sudo nvidia-ctk runtime configure --runtime=docker
+    sudo systemctl restart docker 2>/dev/null || sudo service docker restart 2>/dev/null || true
+    echo "  ✓ NVIDIA Container Toolkit configured"
+fi
+
 # =============================================================================
 # Step 2: Install Docker if not present
 # =============================================================================
@@ -234,6 +282,19 @@ if [ ! -f "$CAT_INSTALL_DIR/docker-compose.cat.yml" ]; then
     echo "         Verify the source branch and rerun the installer."
     exit 1
 fi
+if [ "$CAT_INSTALL_VARIANT" = "gpu" ] && [ ! -f "$CAT_INSTALL_DIR/docker-compose.sam3.yml" ]; then
+    echo "  ERROR: docker-compose.sam3.yml not found in $CAT_INSTALL_DIR"
+    echo "         Verify the source branch and rerun the GPU installer."
+    exit 1
+fi
+
+sudo -u "$ACTUAL_USER" bash -c "cat > '$CAT_INSTALL_DIR/cat-compose.sh'" << COMPOSESCRIPT
+#!/bin/bash
+set -euo pipefail
+cd "\$(dirname "\$0")"
+exec docker compose ${COMPOSE_FILES[*]} "\$@"
+COMPOSESCRIPT
+chmod +x "$CAT_INSTALL_DIR/cat-compose.sh"
 
 echo "  ✓ CAT files ready"
 
@@ -291,7 +352,7 @@ set +a
 # =============================================================================
 echo "[Step 6/10] Building Docker images..."
 cd "$CAT_INSTALL_DIR"
-docker compose -f docker-compose.cat.yml build || {
+cat_compose build || {
     echo "  ERROR: Failed to build Docker images"
     exit 1
 }
@@ -311,10 +372,10 @@ set -a
 set +a
 PORT="${CAT_HOST_PORT:-80}"
 echo "Starting CAT services..."
-docker compose -f docker-compose.cat.yml up -d
+./cat-compose.sh up -d
 echo "✓ CAT services started"
 echo "Access CAT at: http://localhost:${PORT}"
-docker compose -f docker-compose.cat.yml ps
+./cat-compose.sh ps
 STARTSCRIPT
 chmod +x "$CAT_INSTALL_DIR/cat-start.sh"
 
@@ -323,7 +384,7 @@ sudo -u "$ACTUAL_USER" cat > "$CAT_INSTALL_DIR/cat-stop.sh" << 'STOPSCRIPT'
 #!/bin/bash
 cd "$(dirname "$0")"
 echo "Stopping CAT services..."
-docker compose -f docker-compose.cat.yml down
+./cat-compose.sh down
 echo "✓ CAT services stopped"
 STOPSCRIPT
 chmod +x "$CAT_INSTALL_DIR/cat-stop.sh"
@@ -333,9 +394,9 @@ sudo -u "$ACTUAL_USER" cat > "$CAT_INSTALL_DIR/cat-restart.sh" << 'RESTARTSCRIPT
 #!/bin/bash
 cd "$(dirname "$0")"
 echo "Restarting CAT services..."
-docker compose -f docker-compose.cat.yml restart
+./cat-compose.sh restart
 echo "✓ CAT services restarted"
-docker compose -f docker-compose.cat.yml ps
+./cat-compose.sh ps
 RESTARTSCRIPT
 chmod +x "$CAT_INSTALL_DIR/cat-restart.sh"
 
@@ -348,7 +409,7 @@ set -a
 set +a
 PORT="${CAT_HOST_PORT:-80}"
 echo "CAT Service Status:"
-docker compose -f docker-compose.cat.yml ps
+./cat-compose.sh ps
 echo ""
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/health" 2>/dev/null || echo "000")
 if echo "$HTTP_CODE" | grep -q '^2'; then
@@ -359,7 +420,7 @@ else
 fi
 echo ""
 echo "Recent logs (last 20 lines):"
-docker compose -f docker-compose.cat.yml logs --tail=20
+./cat-compose.sh logs --tail=20
 STATUSSCRIPT
 chmod +x "$CAT_INSTALL_DIR/cat-status.sh"
 
@@ -368,7 +429,7 @@ sudo -u "$ACTUAL_USER" cat > "$CAT_INSTALL_DIR/cat-logs.sh" << 'LOGSSCRIPT'
 #!/bin/bash
 cd "$(dirname "$0")"
 echo "Following CAT logs (Ctrl+C to exit)..."
-docker compose -f docker-compose.cat.yml logs -f
+./cat-compose.sh logs -f
 LOGSSCRIPT
 chmod +x "$CAT_INSTALL_DIR/cat-logs.sh"
 
@@ -383,7 +444,7 @@ PORT="${CAT_HOST_PORT:-80}"
 echo "=== CAT Diagnostics ==="
 echo ""
 echo "--- Container Status ---"
-docker compose -f "$CAT_DIR/docker-compose.cat.yml" ps 2>/dev/null
+"$CAT_DIR/cat-compose.sh" ps 2>/dev/null
 echo ""
 echo "--- Health Checks ---"
 ORACLE_HEALTH=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' database-oracle-free 2>/dev/null || echo "not running")
@@ -417,10 +478,10 @@ OWNER=$(stat -c '%U (%u)' "$ORACLE_DATA" 2>/dev/null || echo "unknown")
 echo "  Owner: $OWNER (should be 54321 for Oracle container)"
 echo ""
 echo "--- Recent CAT App Logs ---"
-docker compose -f "$CAT_DIR/docker-compose.cat.yml" logs --tail=15 cat-app 2>/dev/null
+"$CAT_DIR/cat-compose.sh" logs --tail=15 cat-app 2>/dev/null
 echo ""
 echo "--- Recent Oracle Logs ---"
-docker compose -f "$CAT_DIR/docker-compose.cat.yml" logs --tail=10 database-oracle-free 2>/dev/null
+"$CAT_DIR/cat-compose.sh" logs --tail=10 database-oracle-free 2>/dev/null
 DIAGSCRIPT
 chmod +x "$CAT_INSTALL_DIR/cat-diagnostics.sh"
 
@@ -487,14 +548,14 @@ done
 
 [ ! -f "\$CAT_DIR/docker-compose.cat.yml" ] && { echo "docker-compose.cat.yml not found" >> "\$LOG_FILE"; exit 0; }
 
-if docker compose -f "\$CAT_DIR/docker-compose.cat.yml" ps | grep -q 'Up'; then
+if "\$CAT_DIR/cat-compose.sh" ps | grep -q 'Up'; then
     echo "CAT already running" >> "\$LOG_FILE"
     exit 0
 fi
 
 echo "Starting CAT services..." >> "\$LOG_FILE"
 cd "\$CAT_DIR"
-docker compose -f docker-compose.cat.yml up -d >> "\$LOG_FILE" 2>&1 || true
+./cat-compose.sh up -d >> "\$LOG_FILE" 2>&1 || true
 echo "CAT start complete" >> "\$LOG_FILE"
 HOOKEOF
     sudo chmod +x "$STARTUP_HOOK"
@@ -573,13 +634,13 @@ done
 [ ! -S /var/run/docker.sock ] && { echo "docker socket never became available" >> "\$LOG_FILE"; exit 0; }
 
 cd "\$CAT_DIR"
-if docker compose -f docker-compose.cat.yml ps | grep -q 'Up'; then
+if ./cat-compose.sh ps | grep -q 'Up'; then
     echo "CAT already running" >> "\$LOG_FILE"
     exit 0
 fi
 
 echo "Starting CAT services..." >> "\$LOG_FILE"
-docker compose -f docker-compose.cat.yml up -d >> "\$LOG_FILE" 2>&1 || true
+./cat-compose.sh up -d >> "\$LOG_FILE" 2>&1 || true
 echo "CAT start complete" >> "\$LOG_FILE"
 DROPINEOF
     sudo chmod +x "$HOOK_DIR/50-start-cat.sh"
@@ -605,8 +666,8 @@ RemainAfterExit=yes
 WorkingDirectory=$CAT_INSTALL_DIR
 User=$ACTUAL_USER
 Group=$ACTUAL_USER
-ExecStart=/usr/bin/docker compose -f docker-compose.cat.yml up -d
-ExecStop=/usr/bin/docker compose -f docker-compose.cat.yml down
+ExecStart=$CAT_INSTALL_DIR/cat-compose.sh up -d
+ExecStop=$CAT_INSTALL_DIR/cat-compose.sh down
 Restart=on-failure
 RestartSec=10s
 
@@ -655,7 +716,7 @@ if [ -n "$(ls -A "$ORACLE_DATA_DIR" 2>/dev/null)" ]; then
     if [ "$ORACLE_RUNNING" != "true" ]; then
         echo "  ⚠️  oracle-data directory is non-empty from a previous install attempt."
         echo "     Cleaning stale data to allow fresh Oracle initialization..."
-        docker compose -f docker-compose.cat.yml down -v 2>/dev/null || true
+        cat_compose down -v 2>/dev/null || true
         sudo rm -rf "${ORACLE_DATA_DIR:?}"/*
         # Re-apply correct ownership after wipe
         sudo chown 54321:54321 "$ORACLE_DATA_DIR"
@@ -664,7 +725,7 @@ if [ -n "$(ls -A "$ORACLE_DATA_DIR" 2>/dev/null)" ]; then
     fi
 fi
 
-docker compose -f docker-compose.cat.yml up -d database-oracle-free || {
+cat_compose up -d database-oracle-free || {
     echo "  ERROR: Failed to start Oracle container"
     exit 1
 }
@@ -673,11 +734,11 @@ echo "  Waiting for Oracle to become healthy (this can take several minutes on f
 if ! wait_for_container_health "database-oracle-free" 90 5; then
     echo "  ERROR: Oracle did not become healthy in time"
     echo "  Last Oracle logs:"
-    docker compose -f docker-compose.cat.yml logs --tail=100 database-oracle-free || true
+    cat_compose logs --tail=100 database-oracle-free || true
     exit 1
 fi
 
-docker compose -f docker-compose.cat.yml up -d cat-app || {
+cat_compose up -d cat-app || {
     echo "  ERROR: Failed to start CAT app container"
     exit 1
 }
@@ -686,7 +747,7 @@ echo "  Waiting for CAT app health..."
 if ! wait_for_container_health "cat-app" 60 3; then
     echo "  ERROR: CAT app did not become healthy in time"
     echo "  Last CAT app logs:"
-    docker compose -f docker-compose.cat.yml logs --tail=100 cat-app || true
+    cat_compose logs --tail=100 cat-app || true
     exit 1
 fi
 
@@ -748,7 +809,7 @@ echo "   Set URL:     $CAT_INSTALL_DIR/cat-set-url.sh <URL>"
 echo ""
 echo "⚙️  Configuration:"
 echo "   Environment: $CAT_INSTALL_DIR/.env"
-echo "   Compose:     $CAT_INSTALL_DIR/docker-compose.cat.yml"
+echo "   Compose:     $CAT_INSTALL_DIR/$COMPOSE_FILE_LABEL"
 echo ""
 echo "🔄 Auto-start on boot: $AUTO_START_STATUS"
 if [ -f "$ACTUAL_HOME/.customize_environment.d/50-start-cat.sh" ]; then
@@ -761,6 +822,11 @@ echo ""
 echo "⚠️  IMPORTANT NEXT STEPS:"
 echo "   1. Edit $CAT_INSTALL_DIR/.env"
 echo "   2. Change ORACLE_PASSWORD and APP_SCHEMA_PASSWORD"
-echo "   3. Run: $CAT_INSTALL_DIR/cat-restart.sh"
+if [ "$CAT_INSTALL_VARIANT" = "gpu" ]; then
+    echo "   3. Set CAT_SAM3_CHECKPOINT_DIR to the host directory containing the SAM3 checkpoint"
+    echo "   4. Run: $CAT_INSTALL_DIR/cat-restart.sh"
+else
+    echo "   3. Run: $CAT_INSTALL_DIR/cat-restart.sh"
+fi
 echo ""
 echo "=============================================="

@@ -156,8 +156,15 @@ works unaffected either way.
 For a full automated install (Docker, systemd auto-start, management scripts):
 
 ```bash
+# Base stack (Oracle + CAT app)
 sudo bash install_cat.sh
+
+# GPU stack (Oracle + CAT app + SAM3; requires an NVIDIA GPU)
+sudo bash install_cat_gpu.sh
 ```
+
+Before starting the GPU stack, set `CAT_SAM3_CHECKPOINT_DIR` in `.env` to the
+host directory containing the local SAM3 checkpoint.
 
 See [docs/DEPLOYMENT_PLAN.md](docs/DEPLOYMENT_PLAN.md) for architecture details.
 
