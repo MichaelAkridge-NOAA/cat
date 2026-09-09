@@ -1240,7 +1240,10 @@
               el.addEventListener('mouseover', () => { dd.querySelectorAll('.bu-sp-item').forEach(x => x.classList.remove('bu-sp-sel')); el.classList.add('bu-sp-sel'); selIdx = parseInt(el.dataset.i); });
             });
             dd.style.display = 'block';
-          }).catch(() => { dd.style.display = 'none'; });
+          }).catch(() => {
+            dd.innerHTML = '<div style="padding:8px 12px; color:#dc2626; font-size:12px;">Search failed</div>';
+            dd.style.display = 'block';
+          });
       }, 150);
     });
 
@@ -1269,6 +1272,14 @@
       const ann = annotations[idx];
       ann[field] = value;
       if (ann.properties) ann.properties[field] = value;
+      // Task 9 fix: mark dirty so the Task 8 differential auto-save (runAutoSave(),
+      // annotation-runtime-autosave.js) actually persists this edit. Bulk update only
+      // ever mutated the in-memory annotation/layer objects and set the page-wide
+      // hasUnsavedChanges flag; auto-save's own dirty check is per-annotation
+      // (`_syncStatus !== 'synced'`), which stayed 'synced' from the last save, so
+      // bulk-edited fields were silently never written to Oracle - confirmed via a
+      // bulk-edit-then-GET-/annotations round trip against project 21 before this fix.
+      if (ann._syncStatus === 'synced') ann._syncStatus = 'pending';
       count++;
     });
 
@@ -1282,6 +1293,7 @@
         if (annIdx >= 0 && selectedRows.has(annIdx)) {
           layer.annotationData[field] = value;
           if (layer.annotationData.properties) layer.annotationData.properties[field] = value;
+          if (layer.annotationData._syncStatus === 'synced') layer.annotationData._syncStatus = 'pending';
           if (refreshLabels) addLabelToAnnotation(layer);
           // Update layer color when species completeness changes (orange ↔ blue)
           if (field === 'spcode' && layer.setStyle && typeof getAnnotationLayerStyle === 'function') {
@@ -1321,6 +1333,7 @@
     injectBatchFillModal();
     injectSelectionBar();
     injectBulkUpdateModal();
+    injectSelectByAttributeModal();
     initKeyboardShortcuts();
     // Apply initial column visibility
     setTimeout(applyColumnVisibility, 150);
@@ -1367,6 +1380,87 @@
     _filterQuery = query || '';
     _applyFilter(_filterQuery);
   };
+
+  // ===================================================================
+  //  SELECT BY ATTRIBUTE — add every row matching field=value to the
+  //  existing bulk-selection Set (selectedRows), reusing the same
+  //  checkbox/row-highlight update and bulk-update/delete/export code
+  //  paths the checkbox and lasso selections already use.
+  // ===================================================================
+  function injectSelectByAttributeModal() {
+    if (document.getElementById('v2SelectByAttrModal')) return;
+    const modal = document.createElement('div');
+    modal.className = 'batch-fill-modal';
+    modal.id = 'v2SelectByAttrModal';
+    modal.innerHTML = `
+      <div class="batch-fill-content" style="max-width:400px;">
+        <h3 style="margin:0 0 16px; font-size:16px; color:#1e293b;">Select by Attribute</h3>
+        <div style="margin-bottom:12px;">
+          <label style="display:block; font-size:12px; font-weight:600; color:#374151; margin-bottom:4px;">Field:</label>
+          <select id="selectByAttrField" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;"></select>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="display:block; font-size:12px; font-weight:600; color:#374151; margin-bottom:4px;">Equals value:</label>
+          <input type="text" id="selectByAttrValue" placeholder="e.g. ACER" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;">
+        </div>
+        <div class="batch-fill-actions">
+          <button class="btn btn-secondary" id="selectByAttrCancelBtn">Cancel</button>
+          <button class="btn btn-primary" id="selectByAttrApplyBtn">Select Matches</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
+    document.getElementById('selectByAttrCancelBtn').addEventListener('click', () => modal.classList.remove('active'));
+    document.getElementById('selectByAttrApplyBtn').addEventListener('click', _applySelectByAttribute);
+    document.getElementById('selectByAttrValue').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') _applySelectByAttribute();
+    });
+  }
+
+  window.openSelectByAttributeModal = function () {
+    injectSelectByAttributeModal();
+    const select = document.getElementById('selectByAttrField');
+    select.innerHTML = COLUMNS
+      .filter(c => c.field !== 'actions')
+      .map(c => `<option value="${c.field}">${c.label}</option>`)
+      .join('');
+    document.getElementById('selectByAttrValue').value = '';
+    document.getElementById('v2SelectByAttrModal').classList.add('active');
+    setTimeout(() => document.getElementById('selectByAttrValue')?.focus(), 100);
+  };
+
+  function _applySelectByAttribute() {
+    const field = document.getElementById('selectByAttrField').value;
+    const value = document.getElementById('selectByAttrValue').value.trim().toLowerCase();
+    if (!value) {
+      if (typeof showStatus === 'function') showStatus('Enter a value to match', 'warning');
+      return;
+    }
+    if (typeof annotations === 'undefined') return;
+
+    let matched = 0;
+    annotations.forEach((ann, idx) => {
+      const raw = ann ? ann[field] : undefined;
+      const cellValue = (raw === null || raw === undefined) ? '' : String(raw).trim().toLowerCase();
+      if (cellValue !== value) return;
+      matched++;
+      selectedRows.add(idx);
+      const row = document.querySelector(`#annotationTableBody tr[data-index="${idx}"]`);
+      if (row) {
+        row.classList.add('bulk-selected');
+        const cb = row.querySelector('.row-select-cb');
+        if (cb) cb.checked = true;
+      }
+    });
+
+    updateSelectionUI();
+    document.getElementById('v2SelectByAttrModal').classList.remove('active');
+    if (typeof showStatus === 'function') {
+      showStatus(`Selected ${matched} annotation${matched !== 1 ? 's' : ''} matching ${field} = "${value}"`,
+        matched > 0 ? 'success' : 'warning');
+    }
+  }
 
   // ===================================================================
   //  EXPORT CSV

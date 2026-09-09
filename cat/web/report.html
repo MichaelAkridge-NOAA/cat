@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CAT: Project Report</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1.0, width=device-width">
+  <link rel="stylesheet" href="css/cat-theme.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--cat-font);
+      background: var(--cat-surface-alt);
+      color: var(--cat-ink);
+      min-height: 100vh;
+    }
+
+    /* ─── Header band ─── */
+    .header-band {
+      /* background comes from the shared elevated band in cat-theme.css */
+      color: #fff;
+      padding: 40px 20px;
+    }
+    .header-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    .header-inner img {
+      width: 88px;
+      height: 88px;
+      object-fit: contain;
+      flex-shrink: 0;
+    }
+    .brand { display: flex; flex-direction: column; gap: 4px; }
+    .brand .acronym {
+      font-size: 36px;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -0.5px;
+    }
+    .brand .full-name {
+      font-size: 18px;
+      font-weight: 600;
+      opacity: 0.95;
+    }
+    .brand .tagline {
+      font-size: 13px;
+      opacity: 0.8;
+      margin-top: 6px;
+      line-height: 1.5;
+      max-width: 560px;
+    }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 32px 20px 20px; }
+
+    /* ─── Report layout ─── */
+    .report-titlebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--cat-space-3);
+      margin-bottom: var(--cat-space-4);
+    }
+    #reportProjectTitle {
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--cat-ink);
+    }
+    .report-actions { display: flex; gap: var(--cat-space-2); }
+
+    #reportSummary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--cat-space-3);
+      margin-bottom: var(--cat-space-4);
+    }
+    .stat-tile {
+      flex: 1 1 200px;
+      min-width: 180px;
+    }
+    .stat-tile .stat-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      color: var(--cat-ink-soft);
+    }
+    .stat-tile .stat-value {
+      font-size: 30px;
+      font-weight: 800;
+      line-height: 1.1;
+      margin-top: 4px;
+      color: var(--cat-primary);
+    }
+    .stat-tile .stat-sub {
+      font-size: 12px;
+      color: var(--cat-ink-soft);
+      margin-top: 6px;
+      line-height: 1.4;
+    }
+
+    .report-section { margin-bottom: var(--cat-space-4); }
+    .report-section h2 {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: var(--cat-space-3);
+      color: var(--cat-ink);
+    }
+    .chart-group { margin-bottom: var(--cat-space-4); }
+    .chart-group:last-child { margin-bottom: 0; }
+    .chart-group h3 {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: var(--cat-space-2);
+      color: var(--cat-ink);
+    }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 180px 1fr 48px;
+      align-items: center;
+      gap: var(--cat-space-2);
+      margin-bottom: 6px;
+      font-size: 13px;
+    }
+    .bar-row .bar-label {
+      color: var(--cat-ink);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .bar-track {
+      background: var(--cat-surface-alt);
+      border-radius: var(--cat-radius);
+      overflow: hidden;
+      height: 18px;
+    }
+    .bar-fill {
+      background: var(--cat-primary);
+      height: 100%;
+      border-radius: var(--cat-radius);
+      min-width: 2px;
+    }
+    .bar-row .bar-count {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: var(--cat-ink-soft);
+      font-weight: 600;
+    }
+
+    .report-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-bottom: var(--cat-space-3);
+    }
+    .report-table caption {
+      text-align: left;
+      font-weight: 700;
+      font-size: 14px;
+      padding-bottom: var(--cat-space-2);
+      color: var(--cat-ink);
+    }
+    .report-table th, .report-table td {
+      text-align: left;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--cat-border);
+    }
+    .report-table th {
+      color: var(--cat-ink-soft);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .report-table td.count-cell {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .table-wrap { overflow-x: auto; }
+
+    #reportMissing {
+      font-size: 13px;
+      color: var(--cat-ink-soft);
+      background: var(--cat-surface);
+      border: 1px solid var(--cat-border);
+      border-left: 4px solid var(--cat-warning);
+      border-radius: var(--cat-radius);
+      padding: var(--cat-space-3);
+      margin-bottom: var(--cat-space-4);
+    }
+
+    #reportEmpty {
+      font-size: 15px;
+      color: var(--cat-ink-soft);
+      text-align: center;
+      padding: var(--cat-space-5) var(--cat-space-3);
+    }
+    #reportError {
+      font-size: 15px;
+      color: var(--cat-error);
+      background: var(--cat-surface);
+      border: 1px solid var(--cat-border);
+      border-radius: var(--cat-radius);
+      padding: var(--cat-space-4);
+      margin-bottom: var(--cat-space-4);
+    }
+
+    /* ─── Print: clean one-pager (hide nav/action/footer chrome) ─── */
+    @page { size: auto; margin: 12mm; }
+
+    @media print {
+      .header-band,
+      .report-actions,
+      .cat-footer { display: none !important; }
+
+      body { background: #fff !important; color: #000; }
+      .container { max-width: 100%; padding: 0; }
+      #reportProjectTitle { font-size: 20px; }
+
+      /* Flatten cards for ink-friendly printing */
+      .cat-card,
+      .stat-tile,
+      .report-section {
+        box-shadow: none !important;
+        border: 1px solid #ccc !important;
+      }
+      .bar-fill { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+      /* Avoid splitting a breakdown group / table across pages, and never
+         leave a section heading orphaned at the bottom of a page. */
+      .chart-group,
+      .table-wrap,
+      .stat-tile { break-inside: avoid; page-break-inside: avoid; }
+      h1, h2, h3 { break-after: avoid; page-break-after: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header-band">
+    <div class="header-inner">
+      <img src="/logo2.png" alt="CAT Logo">
+      <div class="brand">
+        <span class="acronym">CAT</span>
+        <span class="full-name">Project Report</span>
+        <span class="tagline">Annotation summary for a single project.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <main>
+      <div class="report-titlebar">
+        <div id="reportProjectTitle">Loading report…</div>
+        <div class="report-actions">
+          <button id="exportCsvBtn" class="cat-btn" type="button">
+            <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#download"/></svg> Export CSV
+          </button>
+          <button id="printBtn" class="cat-btn" type="button" title="Opens your browser's print dialog — choose &quot;Save as PDF&quot; there to export a PDF">
+            <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#printer"/></svg> Print / Save as PDF
+          </button>
+        </div>
+      </div>
+
+      <div id="reportError" style="display:none;"></div>
+
+      <div id="reportSummary"></div>
+
+      <div id="reportMissing" style="display:none;"></div>
+
+      <div id="reportEmpty" style="display:none;">No annotations yet for this project.</div>
+
+      <div id="reportCharts"></div>
+
+      <div id="reportTables"></div>
+    </main>
+
+    <footer class="cat-footer">
+      <p><strong>CAT: Coral Annotation Tool</strong> — NOAA Pacific Islands Fisheries Science Center, Ecosystem Sciences Division.</p>
+      <p>This application is a scientific product and is not official communication of the National Oceanic and
+         Atmospheric Administration or the United States Department of Commerce. All NOAA project content is
+         provided on an "as is" basis, and the user assumes responsibility for its use.</p>
+      <p><a href="https://github.com/MichaelAkridge-NOAA/cat">Source repository</a> ·
+         <a href="/docs">API documentation</a></p>
+    </footer>
+  </div>
+
+  <script src="js/cat-nav.js"></script>
+  <script src="js/cat-auth.js"></script>
+  <script>
+    // This page calls /api/db/projects/{id}/report, which requires auth in
+    // Oracle mode — redirect to login rather than let that call 401 silently.
+    if (window.CatAuth) { CatAuth.requireLogin(); }
+  </script>
+  <script src="js/report.js"></script>
+</body>
+</html>

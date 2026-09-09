@@ -13,9 +13,24 @@
     window.isAnnotationComplete = isAnnotationComplete;
 
     function getAnnotationLayerStyle(ann) {
-      return isAnnotationComplete(ann)
-        ? { color: '#3388ff', weight: 7, opacity: 0.8, fillOpacity: 0.3 }
-        : { color: '#e67e22', weight: 7, opacity: 0.9, fillOpacity: 0.25, dashArray: '6 4' };
+      // Flat format (file mode / normalized) or nested properties (DB/GeoJSON mode) —
+      // same pattern as isAnnotationComplete() above.
+      const detectionMethod = ann && (ann.detection_method ||
+        (ann.properties && ann.properties.detection_method));
+      const base = (detectionMethod && String(detectionMethod).indexOf('sam3-') === 0)
+        ? { color: '#06b6d4', weight: 7, opacity: 0.85, fillOpacity: 0.25, dashArray: '2 6' }
+        : isAnnotationComplete(ann)
+          ? { color: '#3388ff', weight: 7, opacity: 0.8, fillOpacity: 0.3 }
+          : { color: '#e67e22', weight: 7, opacity: 0.9, fillOpacity: 0.25, dashArray: '6 4' };
+
+      // Attribute-driven symbology (annotation-runtime-symbology.js): when a
+      // color-by mode is active, override just the color/fillColor so the
+      // dash-pattern cues above (SAM3, incomplete) still read correctly.
+      if (typeof window.catSymbologyColorFor === 'function') {
+        const symColor = window.catSymbologyColorFor(ann);
+        if (symColor) return Object.assign({}, base, { color: symColor, fillColor: symColor });
+      }
+      return base;
     }
     window.getAnnotationLayerStyle = getAnnotationLayerStyle;
 
@@ -358,9 +373,9 @@
     function toggleAnnotationSection(sectionId) {
       const content = document.getElementById(sectionId + 'Content');
       const icon = document.getElementById(sectionId + 'Icon');
-      
+
       content.classList.toggle('collapsed');
-      
+
       // Rotate icon
       if (content.classList.contains('collapsed')) {
         icon.textContent = '▶';
@@ -368,5 +383,146 @@
         icon.textContent = '▼';
       }
     }
-    
+
+    // Task 10 de-stub fix: statsPanel (#statTotal/#statLines/#statBoxes/
+    // #statPolygons + species breakdown, populated by updateStatistics() in
+    // annotation-runtime-operations.js) was fully wired up and kept live on
+    // every save/delete, but nothing ever showed it -- no navbar item, no
+    // toggle, permanently display:none. Wired a Display-menu toggle rather
+    // than deleting the panel, since the stats logic behind it is real and
+    // already maintained.
+    function toggleStatsPanel() {
+      const panel = document.getElementById('statsPanel');
+      if (!panel) return;
+      const showing = panel.style.display !== 'none';
+      if (showing) {
+        panel.style.display = 'none';
+      } else {
+        if (typeof updateStatistics === 'function') updateStatistics();
+        panel.style.display = 'block';
+        if (typeof bringPanelToFront === 'function') bringPanelToFront('statsPanel');
+      }
+    }
+    window.toggleStatsPanel = toggleStatsPanel;
+
+    // ── Floating panel drag + z-order (Task 9) ──
+    // uploadPanel / mapLayersPanel / statsPanel are small floating windows
+    // (position:absolute, fixed width) — made freely draggable + bring-to-front here.
+    // annotationFormPanel is intentionally excluded: its CSS is an anchored
+    // full-width bottom bar (float mode) or full-height right sidebar (dock mode,
+    // annotation-panels.css body.layout-docked rule), not a floating window, and
+    // popout mode forces it to position:static — free dragging would fight all
+    // three of those layouts. No call site raises it via bringPanelToFront()
+    // either, so it is excluded from drag AND bring-to-front by design.
+    let _panelTopZ = 1000;
+
+    // A drag that ends with the pointer back over the drag handle (the common case,
+    // since the handle tracks the cursor) would otherwise fire a native 'click' right
+    // after mouseup and trigger the header's onclick (e.g. togglePanel's collapse
+    // toggle) even though the user only meant to move the panel. Swallow exactly one
+    // click on the handle that just finished a real drag, via a document-level
+    // capturing listener (ancestor capture always runs before the target's own
+    // onclick, regardless of listener registration order).
+    let _suppressClickOn = null;
+    document.addEventListener('click', function(e) {
+      if (_suppressClickOn && (e.target === _suppressClickOn || _suppressClickOn.contains(e.target))) {
+        e.stopPropagation();
+        e.preventDefault();
+        _suppressClickOn = null;
+      }
+    }, true);
+
+    function bringPanelToFront(panelId) {
+      const panel = document.getElementById(panelId);
+      if (!panel) return;
+      _panelTopZ += 1;
+      panel.style.zIndex = String(_panelTopZ);
+    }
+    window.bringPanelToFront = bringPanelToFront;
+
+    function makePanelDraggable(panelId, handleSelector) {
+      const panel = document.getElementById(panelId);
+      if (!panel) return;
+      const handle = panel.querySelector(handleSelector || '.panel-header') || panel;
+
+      let pointerDown = false;
+      let dragging = false;
+      let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+      const DRAG_THRESHOLD = 4; // px — below this, treat as a plain click (e.g. collapse toggle)
+
+      handle.addEventListener('mousedown', function(e) {
+        if (e.button !== 0) return;
+        // Don't hijack interactive controls inside the header/handle.
+        if (e.target.closest && e.target.closest('button, input, select, textarea, a')) return;
+        // Popout/dock modes force position:static on these panels — dragging is meaningless there.
+        if (getComputedStyle(panel).position === 'static') return;
+
+        pointerDown = true;
+        dragging = false;
+        const rect = panel.getBoundingClientRect();
+        startX = e.clientX;
+        startY = e.clientY;
+        startLeft = rect.left;
+        startTop = rect.top;
+      });
+
+      document.addEventListener('mousemove', function(e) {
+        if (!pointerDown) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+
+        if (!dragging) {
+          if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+          // Movement exceeded threshold: commit to a drag. Switch the panel to
+          // explicit left/top positioning (it may be anchored via right/bottom)
+          // and bring it to front.
+          dragging = true;
+          panel.classList.add('panel-dragging');
+          bringPanelToFront(panelId);
+          panel.style.right = 'auto';
+          panel.style.bottom = 'auto';
+          document.body.style.userSelect = 'none';
+        }
+
+        let newLeft = startLeft + dx;
+        let newTop = startTop + dy;
+        // Clamp so the panel can't be dragged fully off-screen and become unreachable.
+        const minVisible = 60;
+        const maxLeft = window.innerWidth - minVisible;
+        const maxTop = window.innerHeight - 40;
+        newLeft = Math.max(-(panel.offsetWidth - minVisible), Math.min(newLeft, maxLeft));
+        newTop = Math.max(0, Math.min(newTop, maxTop));
+        panel.style.left = newLeft + 'px';
+        panel.style.top = newTop + 'px';
+      });
+
+      document.addEventListener('mouseup', function() {
+        if (!pointerDown) return;
+        pointerDown = false;
+        if (dragging) {
+          dragging = false;
+          panel.classList.remove('panel-dragging');
+          document.body.style.userSelect = '';
+          _suppressClickOn = handle;
+          // Safety net: if no click follows (e.g. mouseup happened over a
+          // different element), don't leave the next unrelated click suppressed.
+          setTimeout(function() {
+            if (_suppressClickOn === handle) _suppressClickOn = null;
+          }, 0);
+        }
+      });
+
+      // Raise on any interaction within the panel body too, not just the drag handle.
+      panel.addEventListener('mousedown', function() {
+        bringPanelToFront(panelId);
+      }, true);
+    }
+    window.makePanelDraggable = makePanelDraggable;
+
+    document.addEventListener('DOMContentLoaded', function() {
+      makePanelDraggable('uploadPanel');
+      makePanelDraggable('mapLayersPanel');
+      makePanelDraggable('statsPanel', 'h4');
+    });
+
     // Smart Grid Mode: Advanced multi-coral segmentation with all enhancements

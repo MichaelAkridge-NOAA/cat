@@ -622,3 +622,131 @@ async def export_shapefile(data: Dict = Body(...)):
         import traceback
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error exporting shapefile: {str(e)}")
+
+
+def _annotations_to_geodataframe(annotations: list):
+    """
+    Shared conversion used by the KML/GeoPackage export endpoints below.
+    Unlike export_shapefile()'s field set, these formats have no DBF-style
+    10-character field name limit, so full annotation field names are kept.
+    """
+    import geopandas as gpd
+    from shapely.geometry import shape
+
+    features = []
+    for ann in annotations:
+        if "geometry" not in ann:
+            continue
+        geom = shape(ann["geometry"])
+        props = {
+            "analyst": ann.get("analyst", ""),
+            "obs_year": ann.get("obs_year", None),
+            "mission_id": ann.get("mission_id", ""),
+            "site": ann.get("site", ""),
+            "transect": ann.get("transect", ""),
+            "segment": ann.get("segment", None),
+            "no_colony": ann.get("no_colony", 0),
+            "spcode": ann.get("spcode", ""),
+            "juvenile": ann.get("juvenile", 0),
+            "remnant": ann.get("remnant", 0),
+            "fragment": ann.get("fragment", 0),
+            "morph_code": ann.get("morph_code", ""),
+            "con_1": ann.get("con_1", ""),
+            "extent_1": ann.get("extent_1", None),
+            "sev_1": ann.get("sev_1", None),
+            "con_2": ann.get("con_2", ""),
+            "extent_2": ann.get("extent_2", None),
+            "sev_2": ann.get("sev_2", None),
+            "con_3": ann.get("con_3", ""),
+            "extent_3": ann.get("extent_3", None),
+            "sev_3": ann.get("sev_3", None),
+            "created_at": (ann.get("created_at") or "")[:10],
+        }
+        features.append({"geometry": geom, "properties": props})
+
+    if not features:
+        raise HTTPException(status_code=400, detail="No annotations with geometry to export")
+
+    return gpd.GeoDataFrame(
+        [f["properties"] for f in features],
+        geometry=[f["geometry"] for f in features],
+        crs="EPSG:4326",
+    )
+
+
+@router.post("/export-kml")
+async def export_kml(data: Dict = Body(...)):
+    """Export annotations to KML — same request shape as /export-shapefile."""
+    try:
+        from fastapi.responses import StreamingResponse
+        import io
+
+        annotations = data.get("annotations", [])
+        project_name = data.get("project_name", "annotations")
+        site = data.get("site", "unknown")
+        if not annotations:
+            raise HTTPException(status_code=400, detail="No annotations provided")
+
+        gdf = _annotations_to_geodataframe(annotations)
+        logger.info(f"📦 Exporting {len(gdf)} annotations to KML")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            kml_path = os.path.join(tmpdir, f"{project_name}_{site}_annotations.kml")
+            gdf.to_file(kml_path, driver="KML")
+            with open(kml_path, "rb") as f:
+                buffer = io.BytesIO(f.read())
+
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.google-earth.kml+xml",
+            headers={"Content-Disposition": f"attachment; filename={project_name}_{site}_annotations.kml"},
+        )
+    except ImportError as e:
+        logger.error(f"❌ Missing required package: {e}")
+        raise HTTPException(status_code=500, detail="Missing required package. Run: pip install geopandas shapely fiona")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error exporting KML: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error exporting KML: {str(e)}")
+
+
+@router.post("/export-geopackage")
+async def export_geopackage(data: Dict = Body(...)):
+    """Export annotations to GeoPackage — same request shape as /export-shapefile."""
+    try:
+        from fastapi.responses import StreamingResponse
+        import io
+
+        annotations = data.get("annotations", [])
+        project_name = data.get("project_name", "annotations")
+        site = data.get("site", "unknown")
+        if not annotations:
+            raise HTTPException(status_code=400, detail="No annotations provided")
+
+        gdf = _annotations_to_geodataframe(annotations)
+        logger.info(f"📦 Exporting {len(gdf)} annotations to GeoPackage")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gpkg_path = os.path.join(tmpdir, f"{project_name}_{site}_annotations.gpkg")
+            gdf.to_file(gpkg_path, driver="GPKG", layer="annotations")
+            with open(gpkg_path, "rb") as f:
+                buffer = io.BytesIO(f.read())
+
+        return StreamingResponse(
+            buffer,
+            media_type="application/geopackage+sqlite3",
+            headers={"Content-Disposition": f"attachment; filename={project_name}_{site}_annotations.gpkg"},
+        )
+    except ImportError as e:
+        logger.error(f"❌ Missing required package: {e}")
+        raise HTTPException(status_code=500, detail="Missing required package. Run: pip install geopandas shapely")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error exporting GeoPackage: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error exporting GeoPackage: {str(e)}")

@@ -81,15 +81,28 @@
   font-size: 13px;
   font-weight: 600;
   transition: all 0.2s;
+  /* Task 15: buttons now sometimes contain an inline <svg class="cat-icon">
+     icon alongside text. A bare inline SVG in a button's text flow inflates
+     the line box (the icon's line-height contribution differs from the text
+     baseline), which silently grows button height -- and since these
+     buttons live inside flex rows with sibling buttons stacked in a column
+     (the annotation form's Save/Clear/Discard group), that extra height
+     cascades into the whole annotation panel becoming visibly taller.
+     display:inline-flex + align-items:center keeps icon+text vertically
+     centered without inflating the button's own box height. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .btn-primary {
-  background: #667eea;
+  background: var(--cat-primary);
   color: white;
 }
 
 .btn-primary:hover {
-  background: #5568d3;
+  background: var(--cat-primary-dark);
 }
 
 .btn-secondary {
@@ -102,21 +115,24 @@
 }
 
 .btn-danger {
-  background: #dc3545;
+  background: var(--cat-error);
   color: white;
 }
 
 .btn-danger:hover {
-  background: #c82333;
+  /* cat-theme.css has no darker/hover counterpart token for --cat-error;
+     darken in place rather than collapsing hover into the same color as
+     the resting state (which erases the hover cue entirely). */
+  filter: brightness(0.85);
 }
 
 .btn-success {
-  background: #28a745;
+  background: var(--cat-success);
   color: white;
 }
 
 .btn-success:hover {
-  background: #218838;
+  filter: brightness(0.85);
 }
 
 /* Autocomplete Dropdown Styles */
@@ -160,7 +176,7 @@
 
 .autocomplete-code {
   font-weight: 600;
-  color: #667eea;
+  color: var(--cat-primary);
   font-size: 12px;
 }
 
@@ -234,7 +250,7 @@
 
 /* Visual feedback for active drawing tool */
 .leaflet-draw-toolbar a.drawing-tool-active {
-  background-color: #667eea !important;
+  background-color: var(--cat-primary) !important;
   color: white !important;
   box-shadow: inset 0 0 8px rgba(0,0,0,0.3) !important;
 }
@@ -248,7 +264,7 @@
 .leaflet-draw-draw-polyline.drawing-tool-active,
 .leaflet-draw-draw-polygon.drawing-tool-active,
 .leaflet-draw-draw-rectangle.drawing-tool-active {
-  background-color: #667eea !important;
+  background-color: var(--cat-primary) !important;
   position: relative;
 }
 
@@ -262,7 +278,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: #667eea;
+  background: var(--cat-primary);
   z-index: -1;
 }
 
@@ -291,4 +307,41 @@
 .leaflet-draw-draw-polygon:hover::after,
 .leaflet-draw-draw-rectangle:hover::after {
   opacity: 1;
+}
+
+/* Attribute-driven symbology legend (annotation-runtime-symbology.js) */
+.cat-symbology-legend {
+  background: rgba(255, 255, 255, 0.92);
+  padding: 8px 10px;
+  border-radius: 6px;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4);
+  font-size: 11px;
+  max-height: 260px;
+  overflow-y: auto;
+  max-width: 200px;
+}
+
+.cat-symbology-legend-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+  color: #333;
+}
+
+.cat-symbology-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cat-symbology-legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid rgba(0, 0, 0, 0.2);
 }

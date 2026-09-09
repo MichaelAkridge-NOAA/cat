@@ -93,7 +93,7 @@ body.layout-docked .annotation-panel {
 }
 #layout-resize-handle:hover::after,
 #layout-resize-handle.dragging::after {
-  background: #667eea;
+  background: var(--cat-primary);
 }
 body.layout-docked #layout-resize-handle {
   display: block;
@@ -113,14 +113,14 @@ body.layout-docked #layout-resize-handle {
 }
 #layoutToggleBtn:hover {
   background: #f0f4ff;
-  color: #667eea;
+  color: var(--cat-primary);
   border-color: #c0caf0;
 }
 
 .annotation-panel h3 {
   margin: 0;
   font-size: 14px;
-  color: #667eea;
+  color: var(--cat-primary);
   font-weight: 600;
 }
 
@@ -183,7 +183,7 @@ body.layout-docked #layout-resize-handle {
 .annotation-table thead {
   position: sticky;
   top: 0;
-  background: #667eea;
+  background: var(--cat-primary);
   color: white;
   z-index: 10;
 }
@@ -243,21 +243,21 @@ body.layout-docked #layout-resize-handle {
 }
 
 .annotation-table .btn-edit {
-  background: #667eea;
+  background: var(--cat-primary);
   color: white;
 }
 
 .annotation-table .btn-edit:hover {
-  background: #5568d3;
+  background: var(--cat-primary-dark);
 }
 
 .annotation-table .btn-delete {
-  background: #dc3545;
+  background: var(--cat-error);
   color: white;
 }
 
 .annotation-table .btn-delete:hover {
-  background: #c82333;
+  filter: brightness(0.85);
 }
 
 /* Editable Cells */
@@ -268,7 +268,7 @@ body.layout-docked #layout-resize-handle {
 
 .annotation-table td.editable:hover {
   background: #fff3cd;
-  outline: 1px dashed #ffc107;
+  outline: 1px dashed var(--cat-warning);
 }
 
 .annotation-table td.editing {
@@ -280,7 +280,7 @@ body.layout-docked #layout-resize-handle {
 .annotation-table td.editing select {
   width: 100%;
   padding: 4px 6px;
-  border: 2px solid #667eea;
+  border: 2px solid var(--cat-primary);
   border-radius: 3px;
   font-size: 11px;
   font-family: inherit;
@@ -290,7 +290,7 @@ body.layout-docked #layout-resize-handle {
 .annotation-table td.editing input:focus,
 .annotation-table td.editing select:focus {
   outline: none;
-  border-color: #06b6d4;
+  border-color: var(--cat-accent);
 }
 
 /* Combined Map Layers Panel */
@@ -305,11 +305,22 @@ body.layout-docked #layout-resize-handle {
   box-shadow: 0 2px 10px rgba(0,0,0,0.2);
   z-index: 1000;
   width: 280px;
-  transition: all 0.3s ease;
+  /* Task 9: narrowed from `transition: all` - that animated left/top/z-index too,
+     making drag-to-reposition feel laggy (300ms ease chasing the cursor) and making
+     z-index bring-to-front changes read as an intermediate interpolated value for
+     ~300ms after each click (z-index is animatable-by-computed-value in modern
+     browsers). Only the collapse/expand affordance needs easing. */
+  transition: width 0.3s ease, max-height 0.3s ease, box-shadow 0.3s ease;
   max-height: calc(100vh - 90px);
   overflow-y: auto;
   overflow-x: hidden;
 }
+
+/* Task 15 review fix: uploadPanel's inline style="...width:300px" was
+   dropped when its inline styles moved to classes (only display:block was
+   kept, since JS toggles that); restore its original 300px so it doesn't
+   silently shrink to the 280px shared default. */
+#uploadPanel { width: 300px; }
 
 .layer-control.collapsed {
   width: auto;
@@ -349,7 +360,7 @@ body.layout-docked #layout-resize-handle {
 
 .section-collapse-icon {
   font-size: 10px;
-  color: #667eea;
+  color: var(--cat-primary);
   transition: transform 0.3s;
 }
 
@@ -384,7 +395,7 @@ body.layout-docked #layout-resize-handle {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 2px solid #667eea;
+  border-bottom: 2px solid var(--cat-primary);
   user-select: none;
 }
 
@@ -400,12 +411,23 @@ body.layout-docked #layout-resize-handle {
 
 .panel-header .collapse-icon {
   font-size: 12px;
-  color: #667eea;
+  color: var(--cat-primary);
   transition: transform 0.3s;
 }
 
 .panel-header.collapsed .collapse-icon {
   transform: rotate(-90deg);
+}
+
+/* Task 9: draggable floating panels (upload/map-layers/stats) */
+.panel-dragging {
+  opacity: 0.92;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35) !important;
+}
+
+#statsPanel h4 {
+  cursor: move;
+  user-select: none;
 }
 
 .panel-content {
@@ -425,7 +447,7 @@ body.layout-docked #layout-resize-handle {
   margin: 0 0 12px 0;
   font-size: 14px;
   color: #333;
-  border-bottom: 2px solid #667eea;
+  border-bottom: 2px solid var(--cat-primary);
   padding-bottom: 6px;
 }
 
@@ -515,7 +537,7 @@ body.layout-docked #layout-resize-handle {
 }
 
 .layer-toggle input:checked + .toggle-slider {
-  background-color: #667eea;
+  background-color: var(--cat-primary);
 }
 
 .layer-toggle input:checked + .toggle-slider:before {
@@ -557,7 +579,7 @@ body.layout-docked #layout-resize-handle {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #667eea;
+  background: var(--cat-primary);
   cursor: pointer;
 }
 
@@ -565,7 +587,7 @@ body.layout-docked #layout-resize-handle {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #667eea;
+  background: var(--cat-primary);
   cursor: pointer;
   border: none;
   font-size: 12px;
@@ -612,7 +634,7 @@ body.layout-docked #layout-resize-handle {
 
 .spinner {
   border: 4px solid #f3f3f3;
-  border-top: 4px solid #667eea;
+  border-top: 4px solid var(--cat-primary);
   border-radius: 50%;
   width: 40px;
   height: 40px;
@@ -657,7 +679,7 @@ body.layout-docked #layout-resize-handle {
 
 .modal-header {
   padding: 20px 25px;
-  border-bottom: 2px solid #667eea;
+  border-bottom: 2px solid var(--cat-primary);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -739,7 +761,7 @@ body.layout-docked #layout-resize-handle {
 .modal-form-field input:focus,
 .modal-form-field select:focus {
   outline: none;
-  border-color: #667eea;
+  border-color: var(--cat-primary);
   box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
 }
 
@@ -797,19 +819,22 @@ html.cat-popout-table body {
   display: none;
   text-align: center;
   padding: 60px 20px;
-  color: #667eea;
+  color: var(--cat-primary);
 }
 #popoutWaitingIndicator.visible { display: block; }
 
 /* Pop-out button in section headers */
 .popout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: none;
   border: 1px solid #aab3e8;
   border-radius: 4px;
   padding: 2px 7px;
   cursor: pointer;
   font-size: 11px;
-  color: #667eea;
+  color: var(--cat-primary);
   white-space: nowrap;
   flex-shrink: 0;
 }

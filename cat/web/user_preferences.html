@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CAT: Preferences</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1.0">
+  <link rel="stylesheet" href="css/cat-theme.css" />
+  <style>
+    body { margin: 0; padding: 0; font-family: var(--cat-font);
+      background: var(--cat-surface-alt); color: var(--cat-ink); }
+    .container { max-width: 640px; margin: 40px auto; padding: 0 20px; }
+    .cat-card { margin-bottom: var(--cat-space-4); padding: var(--cat-space-5); }
+    h1 { font-size: 22px; margin: 0 0 var(--cat-space-4); }
+    h2 { font-size: 16px; margin: 0 0 var(--cat-space-3); }
+    label { display: block; font-weight: 600; margin: var(--cat-space-3) 0 var(--cat-space-1); font-size: 13px; }
+    input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--cat-border);
+      border-radius: var(--cat-radius); font: 14px var(--cat-font); }
+    .status-msg { font-size: 13px; margin-top: var(--cat-space-2); min-height: 18px; }
+    .status-msg.error { color: var(--cat-error); }
+    .status-msg.ok { color: var(--cat-success, green); }
+    .save-btn { margin-top: var(--cat-space-3); }
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--cat-space-2); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="cat-card">
+      <h1>Preferences</h1>
+
+      <h2>Profile</h2>
+      <div class="field-row">
+        <div>
+          <label for="firstName">First name</label>
+          <input type="text" id="firstName">
+        </div>
+        <div>
+          <label for="lastName">Last name</label>
+          <input type="text" id="lastName">
+        </div>
+      </div>
+      <div class="field-row">
+        <div>
+          <label for="initials">Initials</label>
+          <input type="text" id="initials" maxlength="10">
+        </div>
+        <div>
+          <label for="displayName">Display name</label>
+          <input type="text" id="displayName">
+        </div>
+      </div>
+      <div>Username: <strong id="usernameText"></strong> &middot; Email: <strong id="emailText"></strong></div>
+
+      <h2 style="margin-top: var(--cat-space-4);">Default annotation settings</h2>
+      <label for="defaultSpecies">Default species code</label>
+      <input type="text" id="defaultSpecies">
+      <label for="defaultMorphology">Default morphology code</label>
+      <input type="text" id="defaultMorphology">
+      <label for="defaultBasemap">Preferred basemap</label>
+      <input type="text" id="defaultBasemap" placeholder="e.g. satellite, streets">
+
+      <button type="button" class="cat-btn cat-btn--primary save-btn" id="saveProfileBtn">Save Preferences</button>
+      <div class="status-msg" id="profileStatus"></div>
+    </div>
+
+    <div class="cat-card">
+      <h2>Change Password</h2>
+      <label for="oldPassword">Current password</label>
+      <input type="password" id="oldPassword" autocomplete="current-password">
+      <label for="newPassword">New password</label>
+      <input type="password" id="newPassword" autocomplete="new-password" minlength="8">
+      <button type="button" class="cat-btn cat-btn--primary save-btn" id="changePasswordBtn">Change Password</button>
+      <div class="status-msg" id="passwordStatus"></div>
+    </div>
+  </div>
+
+  <script src="js/cat-nav.js"></script>
+  <script src="js/cat-auth.js"></script>
+  <script>
+    var profileStatus = document.getElementById('profileStatus');
+    var passwordStatus = document.getElementById('passwordStatus');
+
+    function showStatus(el, text, isError) {
+      el.textContent = text;
+      el.className = 'status-msg ' + (isError ? 'error' : 'ok');
+    }
+
+    CatAuth.requireLogin().then(function (user) {
+      if (!user) return;
+      document.getElementById('usernameText').textContent = user.username;
+      document.getElementById('emailText').textContent = user.email;
+      document.getElementById('displayName').value = user.display_name || '';
+      document.getElementById('firstName').value = user.first_name || '';
+      document.getElementById('lastName').value = user.last_name || '';
+      document.getElementById('initials').value = user.initials || '';
+
+      CatAuth.fetchCurrentUser().then(function (data) {
+        var prefs = (data && data.preferences) || {};
+        document.getElementById('defaultSpecies').value = prefs.default_species || '';
+        document.getElementById('defaultMorphology').value = prefs.default_morphology || '';
+        document.getElementById('defaultBasemap').value = prefs.default_basemap || '';
+      });
+    });
+
+    document.getElementById('saveProfileBtn').addEventListener('click', function () {
+      var preferences = {
+        default_species: document.getElementById('defaultSpecies').value,
+        default_morphology: document.getElementById('defaultMorphology').value,
+        default_basemap: document.getElementById('defaultBasemap').value
+      };
+      fetch('/api/auth/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          preferences: preferences,
+          display_name: document.getElementById('displayName').value || null,
+          first_name: document.getElementById('firstName').value || null,
+          last_name: document.getElementById('lastName').value || null,
+          initials: document.getElementById('initials').value || null
+        })
+      }).then(function (r) {
+        if (!r.ok) { showStatus(profileStatus, 'Failed to save', true); return; }
+        showStatus(profileStatus, 'Saved', false);
+      });
+    });
+
+    document.getElementById('changePasswordBtn').addEventListener('click', function () {
+      var oldPassword = document.getElementById('oldPassword').value;
+      var newPassword = document.getElementById('newPassword').value;
+      fetch('/api/auth/password', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ old_password: oldPassword, new_password: newPassword })
+      }).then(function (r) {
+        return r.json().then(function (data) { return { ok: r.ok, data: data }; });
+      }).then(function (result) {
+        if (!result.ok) {
+          showStatus(passwordStatus, (result.data && result.data.detail) || 'Failed to change password', true);
+          return;
+        }
+        showStatus(passwordStatus, 'Password changed', false);
+        document.getElementById('oldPassword').value = '';
+        document.getElementById('newPassword').value = '';
+      });
+    });
+  </script>
+</body>
+</html>

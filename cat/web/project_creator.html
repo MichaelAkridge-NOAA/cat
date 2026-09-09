@@ -4,23 +4,25 @@
   <title>CAT: Load & Create Annotation Project</title>
   <meta charset="utf-8">
   <meta name="viewport" content="initial-scale=1.0">
+  <link rel="stylesheet" href="css/cat-theme.css" />
   <style>
     * {
       box-sizing: border-box;
     }
     body {
       margin: 0;
-      padding: 20px;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background: linear-gradient(180deg, #0a2540 0%, #0d3a5f 30%, #10446e 60%, #134e7d 100%);
+      padding: 0;
+      font-family: var(--cat-font);
+      background: var(--cat-surface-alt);
       min-height: 100vh;
     }
     .container {
       max-width: 1200px;
-      margin: 0 auto;
-      background: white;
-      border-radius: 12px;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+      width: calc(100% - 40px);
+      margin: 24px auto;
+      background: var(--cat-surface);
+      border-radius: var(--cat-radius-lg);
+      box-shadow: var(--cat-shadow-2);
       overflow: hidden;
     }
     .navbar {
@@ -28,10 +30,10 @@
       top: 10px;
       left: 10px;
       right: 10px;
-      background: rgba(255, 255, 255, 0.95);
+      background: var(--cat-primary-darker);
       padding: 10px 20px;
       border-radius: 8px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      box-shadow: var(--cat-shadow-1);
       z-index: 2000;
       display: flex;
       justify-content: space-between;
@@ -40,20 +42,21 @@
     .navbar h1 {
       margin: 0;
       font-size: 18px;
-      color: #333;
+      color: #fff;
       display: flex;
       align-items: center;
       gap: 10px;
     }
     .nav-links a {
-      color: #667eea;
+      color: #fff;
+      opacity: 0.9;
       text-decoration: none;
       margin-left: 20px;
       font-weight: 500;
-      transition: color 0.3s;
+      transition: opacity 0.3s;
     }
     .nav-links a:hover {
-      color: #5568d3;
+      opacity: 1;
     }
     
     .content {
@@ -68,7 +71,7 @@
       margin-bottom: 30px;
     }
     .mode-card {
-      border: 2px solid #ddd;
+      border: 2px solid var(--cat-border);
       border-radius: 8px;
       padding: 30px;
       text-align: center;
@@ -76,13 +79,13 @@
       transition: all 0.3s;
     }
     .mode-card:hover {
-      border-color: #667eea;
-      background: #f8f9fa;
+      border-color: var(--cat-primary);
+      background: var(--cat-surface-alt);
     }
     .mode-card.active {
-      border-color: #667eea;
-      background: #e9ecef;
-      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+      border-color: var(--cat-primary);
+      background: var(--cat-surface-alt);
+      box-shadow: var(--cat-shadow-1);
     }
     .mode-icon {
       font-size: 48px;
@@ -104,18 +107,18 @@
     
     /* Drop Zones */
     .drop-zone {
-      border: 3px dashed #667eea;
+      border: 3px dashed var(--cat-primary);
       border-radius: 8px;
       padding: 40px;
       text-align: center;
       cursor: pointer;
       transition: all 0.3s;
       margin-bottom: 20px;
-      background: #f8f9fa;
+      background: var(--cat-surface-alt);
     }
     .drop-zone:hover {
       background: #e9ecef;
-      border-color: #5568d3;
+      border-color: var(--cat-primary-dark);
     }
     .drop-zone.drag-over {
       background: #d1ecf1;
@@ -136,10 +139,10 @@
       align-items: center;
       justify-content: space-between;
       padding: 12px;
-      background: #f8f9fa;
+      background: var(--cat-surface-alt);
       border-radius: 6px;
       margin-bottom: 8px;
-      border-left: 4px solid #667eea;
+      border-left: 4px solid var(--cat-primary);
     }
     .file-info {
       flex: 1;
@@ -158,7 +161,7 @@
     .file-type {
       display: inline-block;
       padding: 2px 8px;
-      background: #667eea;
+      background: var(--cat-primary);
       color: white;
       border-radius: 4px;
       font-size: 10px;
@@ -167,7 +170,7 @@
     }
     .remove-btn {
       padding: 6px 12px;
-      background: #dc3545;
+      background: var(--cat-error);
       color: white;
       border: none;
       border-radius: 4px;
@@ -177,17 +180,17 @@
     .remove-btn:hover {
       background: #c82333;
     }
-    
+
     /* Form */
     .form-section {
-      background: #f8f9fa;
+      background: var(--cat-surface-alt);
       padding: 20px;
       border-radius: 8px;
       margin: 20px 0;
     }
     .form-section h3 {
       margin-top: 0;
-      color: #667eea;
+      color: var(--cat-primary);
     }
     .form-grid {
       display: grid;
@@ -208,11 +211,11 @@
     .form-group input,
     .form-group select {
       padding: 10px;
-      border: 1px solid #ddd;
+      border: 1px solid var(--cat-border);
       border-radius: 4px;
       font-size: 14px;
     }
-    
+
     /* Buttons */
     .btn {
       padding: 12px 24px;
@@ -225,16 +228,16 @@
       margin-right: 10px;
     }
     .btn-primary {
-      background: #667eea;
+      background: var(--cat-primary);
       color: white;
     }
     .btn-primary:hover {
-      background: #5568d3;
+      background: var(--cat-primary-dark);
       transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+      box-shadow: var(--cat-shadow-1);
     }
     .btn-success {
-      background: #28a745;
+      background: var(--cat-success);
       color: white;
     }
     .btn-success:hover {
@@ -245,13 +248,13 @@
       color: white;
     }
     .btn-danger {
-      background: #dc3545;
+      background: var(--cat-error);
       color: white;
     }
     .btn-danger:hover {
       background: #c82333;
     }
-    
+
     /* Status */
     .status {
       padding: 15px;
@@ -261,13 +264,13 @@
     }
     .status.success {
       background: #d4edda;
-      color: #155724;
+      color: var(--cat-success);
       border: 1px solid #c3e6cb;
     }
     .status.error {
-      background: #f8d7da;
-      color: #721c24;
-      border: 1px solid #f5c6cb;
+      background: #fdecea;
+      color: var(--cat-error);
+      border: 1px solid #f2a49c;
     }
     .status.info {
       background: #d1ecf1;
@@ -335,9 +338,9 @@
     }
     .site-stat-card h3 { margin: 0 0 4px 0; font-size: 26px; }
     .site-stat-card p  { margin: 0; font-size: 12px; opacity: .9; }
-    .site-stat-total    { background: linear-gradient(135deg,#667eea,#764ba2); }
-    .site-stat-cog      { background: linear-gradient(135deg,#10b981,#059669); }
-    .site-stat-nocog    { background: linear-gradient(135deg,#f59e0b,#d97706); }
+    .site-stat-total    { background: linear-gradient(135deg,var(--cat-primary),var(--cat-primary-dark)); }
+    .site-stat-cog      { background: var(--cat-success); }
+    .site-stat-nocog    { background: var(--cat-warning); color: var(--cat-ink); }
     .site-grid-wrap {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
@@ -354,7 +357,7 @@
       position: relative;
       transition: all .25s;
     }
-    .site-card:hover { border-color: #667eea; box-shadow: 0 3px 10px rgba(102,126,234,.2); }
+    .site-card:hover { border-color: var(--cat-primary); box-shadow: 0 3px 10px rgba(102,126,234,.2); }
     .site-card-name  { font-size: 15px; font-weight: 700; color: #222; margin-bottom: 5px; }
     .site-card-meta  { font-size: 12px; color: #666; margin-bottom: 3px; }
     .site-badge {
@@ -381,7 +384,7 @@
     .btn-annotate {
       flex: 1; padding: 6px; font-size: 11px; font-weight: 600;
       border: none; border-radius: 5px; cursor: pointer; transition: all .2s;
-      background: linear-gradient(135deg,#667eea,#764ba2); color: white;
+      background: linear-gradient(135deg,var(--cat-primary),var(--cat-primary-dark)); color: white;
     }
     .btn-annotate:hover { opacity: .88; }
     .btn-annotate:disabled { background: #ccc; cursor: not-allowed; }
@@ -427,21 +430,13 @@
   </style>
 </head>
 <body>
-  <nav class="navbar">
-    <h1>
-      <span>🪸</span>
-      <span>CAT: Project Manager</span>
-    </h1>
-    <div class="nav-links">
-      <a href="#" onclick="event.preventDefault(); showVersionSelector(); return false;">Annotation Tool</a>
-      <a href="/">Home</a>
-    </div>
-  </nav>
-  
-  <div class="container" style="margin-top: 70px;">
+  <div class="container" style="margin-top: 24px;">
     <div class="content">
       <div style="text-align: center; margin-bottom: 30px;">
-        <h1 style="font-size: 32px; color: #333; margin-bottom: 10px;">📁 Annotation Project Manager</h1>
+        <h1 style="font-size: 32px; color: #333; margin-bottom: 10px; display:flex; align-items:center; justify-content:center; gap:12px;">
+          <svg class="cat-icon" style="width:28px;height:28px;"><use href="/vendor/feather/feather-sprite.svg#folder"/></svg>
+          Annotation Project Manager
+        </h1>
         <p id="projectManagerSubtitle" style="color: #666; font-size: 16px;">Create, edit, and open annotation projects</p>
       </div>
       
@@ -453,24 +448,30 @@
           <p>Drag & drop TIF files to create a new annotation project</p>
         </div>
         <div class="mode-card" id="loadMode" onclick="selectMode('load')">
-          <div class="mode-icon">📂</div>
+          <div class="mode-icon"><svg class="cat-icon" style="width:40px;height:40px;"><use href="/vendor/feather/feather-sprite.svg#folder"/></svg></div>
           <h3>Load Existing Project</h3>
           <p>Upload an existing project.json to edit or continue</p>
         </div>
         <div class="mode-card" id="siteMode" onclick="selectMode('site')">
-          <div class="mode-icon">🗺️</div>
+          <div class="mode-icon"><svg class="cat-icon" style="width:40px;height:40px;"><use href="/vendor/feather/feather-sprite.svg#map"/></svg></div>
           <h3>Site Browser</h3>
           <p>Browse survey sites and link to cloud COG files</p>
         </div>
       </div>
-      
+
       <!-- Create Mode -->
       <div id="createSection" class="creator-section active">
-        <h2>🎨 Build Your Project</h2>
-        
+        <h2 style="display:flex; align-items:center; gap:10px;">
+          <svg class="cat-icon" style="width:22px;height:22px;"><use href="/vendor/feather/feather-sprite.svg#edit-3"/></svg>
+          Build Your Project
+        </h2>
+
         <!-- Base Path Input -->
         <div class="form-section" style="margin-bottom:20px;">
-          <h3>📂 Set Base Folder Path</h3>
+          <h3 style="display:flex; align-items:center; gap:8px;">
+            <svg class="cat-icon" style="width:16px;height:16px;"><use href="/vendor/feather/feather-sprite.svg#folder"/></svg>
+            Set Base Folder Path
+          </h3>
           <p style="font-size:13px; color:#666; margin-bottom:10px;">
             Enter the folder path where your TIF and shapefile files are located. File paths will be auto-completed using this base path.
           </p>
@@ -478,7 +479,7 @@
             <input type="text" 
                    id="basePath" 
                    placeholder="e.g., C:\Sites\2025\SE2503_MARI\GUA\GUA-2838\Products"
-                   style="flex:1; padding:12px; border:2px solid #667eea; border-radius:6px; font-family:monospace; font-size:12px;">
+                   style="flex:1; padding:12px; border:2px solid var(--cat-primary); border-radius:6px; font-family:monospace; font-size:12px;">
             <button class="btn btn-primary" onclick="applyBasePath()" style="white-space:nowrap;">
               ✓ Apply to All Files
             </button>
@@ -487,7 +488,7 @@
         
         <!-- TIF Files Drop Zone -->
         <div class="drop-zone" id="tifDropZone">
-          <div class="drop-zone-icon">🗺️</div>
+          <div class="drop-zone-icon"><svg class="cat-icon" style="width:40px;height:40px;"><use href="/vendor/feather/feather-sprite.svg#map"/></svg></div>
           <h3>Drop TIF Files Here</h3>
           <p>Orthomosaics, DEMs, or any GeoTIFF files</p>
           <input type="file" id="tifInput" accept=".tif,.tiff" multiple style="display:none;">
@@ -507,7 +508,7 @@
         
         <!-- Annotations Import Zone -->
         <div class="drop-zone" id="annotationsDropZone">
-          <div class="drop-zone-icon">🏷️</div>
+          <div class="drop-zone-icon"><svg class="cat-icon" style="width:40px;height:40px;"><use href="/vendor/feather/feather-sprite.svg#tag"/></svg></div>
           <h3>Import Existing Annotations (Optional)</h3>
           <p>Drop shapefile components (.shp, .shx, .dbf, .prj)</p>
           <input type="file" id="annotationsInput" accept=".json,.shp,.shx,.dbf,.prj,.cpg,.xml" multiple style="display:none;">
@@ -517,14 +518,18 @@
         
         <!-- Shapefile Import Mapping (Hidden until shapefile is loaded) -->
         <div id="shapefileMappingSection" style="display: none; background: #f8f9fa; padding: 20px; border-radius: 8px; margin-top: 15px;">
-          <h3 style="margin-top: 0; color: #667eea;">📊 Map Shapefile Columns</h3>
+          <h3 style="margin-top: 0; color: var(--cat-primary); display:flex; align-items:center; gap:8px;">
+            <svg class="cat-icon" style="width:16px;height:16px;"><use href="/vendor/feather/feather-sprite.svg#bar-chart-2"/></svg>
+            Map Shapefile Columns
+          </h3>
           <p style="font-size: 13px; color: #666; margin-bottom: 15px;">
             Match your shapefile columns to annotation fields. Required fields are marked with *.
           </p>
-          
+
           <div style="background: #fffbeb; padding: 12px; border-radius: 6px; margin-bottom: 15px; border-left: 4px solid #f59e0b;">
             <button class="btn btn-primary" onclick="autoMapShapefileColumns()" style="padding: 6px 12px; font-size: 12px; margin-bottom: 8px;">
-              ⚡ Auto-Map Matching Columns
+              <svg class="cat-icon" style="width:14px;height:14px;vertical-align:-2px;"><use href="/vendor/feather/feather-sprite.svg#zap"/></svg>
+              Auto-Map Matching Columns
             </button>
             <p style="margin: 0; font-size: 12px; color: #92400e;">
               <strong>ℹ️ Tip:</strong> Unmapped fields will be left empty or use default values.
@@ -545,7 +550,10 @@
         
         <!-- Project Metadata Form -->
         <div class="form-section">
-          <h3>📝 Project Information</h3>
+          <h3 style="display:flex; align-items:center; gap:8px;">
+            <svg class="cat-icon" style="width:16px;height:16px;"><use href="/vendor/feather/feather-sprite.svg#file-text"/></svg>
+            Project Information
+          </h3>
           <div class="form-grid">
             <div class="form-group">
               <label>Project Name *</label>
@@ -582,11 +590,17 @@
         
         <!-- Preview Section -->
         <div id="previewSection" style="display:none;">
-          <h3>📄 Project JSON Preview</h3>
-          
+          <h3 style="display:flex; align-items:center; gap:8px;">
+            <svg class="cat-icon" style="width:16px;height:16px;"><use href="/vendor/feather/feather-sprite.svg#file-text"/></svg>
+            Project JSON Preview
+          </h3>
+
           <!-- COG Status Info -->
           <div id="cogStatusInfo" style="margin-bottom: 20px; padding: 15px; background: #f0f9ff; border-left: 4px solid #3b82f6; border-radius: 4px;">
-            <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 14px;">🔧 COG File Status</h4>
+            <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 14px; display:flex; align-items:center; gap:6px;">
+              <svg class="cat-icon" style="width:14px;height:14px;"><use href="/vendor/feather/feather-sprite.svg#tool"/></svg>
+              COG File Status
+            </h4>
             <div id="cogStatusDetails" style="font-size: 13px; color: #1e3a8a;"></div>
           </div>
           
@@ -596,29 +610,44 @@
         </div>
         
         <div class="action-buttons">
-          <button class="btn btn-primary" onclick="generatePreview()">👁️ Preview JSON</button>
-          <button class="btn btn-success" onclick="saveProject()">💾 Save Project File</button>
+          <button class="btn btn-primary" onclick="generatePreview()">
+            <svg class="cat-icon" style="width:14px;height:14px;vertical-align:-2px;"><use href="/vendor/feather/feather-sprite.svg#eye"/></svg>
+            Preview JSON
+          </button>
+          <button class="btn btn-success" onclick="saveProject()">
+            <svg class="cat-icon" style="width:14px;height:14px;vertical-align:-2px;"><use href="/vendor/feather/feather-sprite.svg#save"/></svg>
+            Save Project File
+          </button>
           <button class="btn btn-success" onclick="saveAndOpen()">🚀 Save & Open in Viewer</button>
         </div>
       </div>
-      
+
       <!-- Load Mode -->
       <div id="loadSection" class="creator-section">
-        <h2 id="loadSectionHeading">📂 Load Existing Project</h2>
+        <h2 id="loadSectionHeading" style="display:flex; align-items:center; gap:10px;">
+          <svg class="cat-icon" style="width:22px;height:22px;"><use href="/vendor/feather/feather-sprite.svg#folder"/></svg>
+          Load Existing Project
+        </h2>
 
         <div id="dbProjectBrowser" style="display:none; margin-bottom: 20px; padding: 16px; background: #f0f9ff; border: 1px solid #bfdbfe; border-radius: 8px;">
           <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom: 10px;">
-            <h3 style="margin:0; color:#1e3a8a; font-size:16px;">🗄️ Oracle Projects</h3>
+            <h3 style="margin:0; color:#1e3a8a; font-size:16px; display:flex; align-items:center; gap:8px;">
+              <svg class="cat-icon" style="width:16px;height:16px;"><use href="/vendor/feather/feather-sprite.svg#database"/></svg>
+              Oracle Projects
+            </h3>
             <div style="display:flex; align-items:center; gap:8px;">
-              <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#475569; cursor:pointer;" title="Show v2 Dev Preview button for each project">
-                <input type="checkbox" id="showV2Toggle" onchange="renderDbProjectList(dbProjects)" style="cursor:pointer;">
-                <span>Show v2</span>
-              </label>
-              <button class="btn btn-primary" onclick="fetchDbProjects()" style="padding: 8px 14px; font-size: 12px; margin:0;">🔄 Refresh DB List</button>
+              <button class="btn btn-primary" onclick="fetchDbProjects()" style="padding: 8px 14px; font-size: 12px; margin:0;">
+                <svg class="cat-icon" style="width:12px;height:12px;vertical-align:-1px;"><use href="/vendor/feather/feather-sprite.svg#refresh-cw"/></svg>
+                Refresh DB List
+              </button>
             </div>
           </div>
           <div style="display:flex; gap:8px; margin-bottom: 10px;">
             <input type="text" id="dbProjectSearch" placeholder="Search by project name, site, cruise, observer..." oninput="filterDbProjects()" style="flex:1; padding:10px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px;">
+            <select id="dbProjectScope" onchange="fetchDbProjects()" style="padding:10px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; background:#fff;" title="Filter by project owner">
+              <option value="mine">My Projects</option>
+              <option value="all">All Projects</option>
+            </select>
             <select id="dbProjectSort" onchange="fetchDbProjects()" style="padding:10px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; background:#fff;">
               <option value="created_at:desc">Newest</option>
               <option value="created_at:asc">Oldest</option>
@@ -639,22 +668,28 @@
           </div>
         
         <div class="drop-zone" id="loadDropZone">
-          <div class="drop-zone-icon">📄</div>
+          <div class="drop-zone-icon"><svg class="cat-icon" style="width:40px;height:40px;"><use href="/vendor/feather/feather-sprite.svg#file-text"/></svg></div>
           <h3>Drop project.json Here</h3>
           <p>Or click to browse</p>
           <input type="file" id="loadInput" accept=".json" style="display:none;">
         </div>
-        
+
         <div id="loadStatus" class="status"></div>
-        
+
         <div id="loadedPreview" style="display:none;">
-          <h3>📄 Loaded Project</h3>
+          <h3 style="display:flex; align-items:center; gap:8px;">
+            <svg class="cat-icon" style="width:16px;height:16px;"><use href="/vendor/feather/feather-sprite.svg#file-text"/></svg>
+            Loaded Project
+          </h3>
           <div class="preview-section">
             <pre id="loadedJsonPreview"></pre>
           </div>
-          
+
           <div class="action-buttons">
-            <button class="btn btn-primary" onclick="editLoadedProject()">✏️ Edit Project</button>
+            <button class="btn btn-primary" onclick="editLoadedProject()">
+              <svg class="cat-icon" style="width:14px;height:14px;vertical-align:-2px;"><use href="/vendor/feather/feather-sprite.svg#edit-2"/></svg>
+              Edit Project
+            </button>
             <button class="btn btn-success" onclick="openInViewer()">🚀 Open in Viewer</button>
           </div>
         </div>
@@ -663,7 +698,10 @@
 
       <!-- ===== Site Browser Mode ===== -->
       <div id="siteSection" class="creator-section">
-        <h2>🗺️ Site Browser</h2>
+        <h2 style="display:flex; align-items:center; gap:10px;">
+          <svg class="cat-icon" style="width:22px;height:22px;"><use href="/vendor/feather/feather-sprite.svg#map"/></svg>
+          Site Browser
+        </h2>
 
         <!-- Stats Row -->
         <div class="site-stats-row">
@@ -698,14 +736,15 @@
           <input type="text" id="sbSearchInput" placeholder="Search site, cruise, island…"
             oninput="renderSiteBrowser()" style="flex:1; min-width:160px;">
           <button class="btn btn-primary" onclick="loadSiteBrowser()" style="white-space:nowrap; padding:8px 14px; font-size:12px;">
-            🔄 Reload Sites
+            <svg class="cat-icon" style="width:12px;height:12px;vertical-align:-1px;"><use href="/vendor/feather/feather-sprite.svg#refresh-cw"/></svg>
+            Reload Sites
           </button>
         </div>
 
         <!-- Site Grid -->
         <div class="site-grid-wrap" id="sbSiteGrid">
           <div class="site-empty-state">
-            <div class="site-empty-state-icon">📍</div>
+            <div class="site-empty-state-icon"><svg class="cat-icon" style="width:40px;height:40px;"><use href="/vendor/feather/feather-sprite.svg#map-pin"/></svg></div>
             <p>Loading sites…</p>
           </div>
         </div>
@@ -714,7 +753,8 @@
         <details id="gcsCogMatchingDetails" style="margin-top: 24px;">
           <summary style="cursor:pointer; user-select:none; padding:12px 16px; background:linear-gradient(135deg,#e0f2fe,#bfdbfe); border:1px solid #93c5fd; border-radius:8px; font-weight:700; font-size:14px; color:#1e3a8a; list-style:none; display:flex; align-items:center; gap:8px;">
             <span class="gcs-toggle-icon" style="transition:transform .2s; display:inline-block;">▶</span>
-            ☁️ Cloud COG Matching
+            <svg class="cat-icon" style="width:14px;height:14px;"><use href="/vendor/feather/feather-sprite.svg#cloud"/></svg>
+            Cloud COG Matching
             <span style="font-weight:400; font-size:12px; color:#3b82f6; margin-left:auto;">Click to expand</span>
           </summary>
           <div class="gcs-panel" style="margin-top:0; border-top-left-radius:0; border-top-right-radius:0; border-top:none;">
@@ -724,7 +764,8 @@
             </p>
             <div class="gcs-row">
               <button class="btn btn-primary" onclick="loadLatestGcsReport()" style="white-space:nowrap;">
-                📋 Load Latest COG Report
+                <svg class="cat-icon" style="width:12px;height:12px;vertical-align:-1px;"><use href="/vendor/feather/feather-sprite.svg#clipboard"/></svg>
+                Load Latest COG Report
               </button>
               <span style="align-self:center; color:#64748b; font-size:13px;">— or scan GCS —</span>
             </div>
@@ -739,7 +780,8 @@
                 <option value="*.tif">*.tif</option>
               </select>
               <button class="btn btn-primary" onclick="scanGcs()" id="scanGcsBtn" style="white-space:nowrap;">
-                🔍 Scan GCS
+                <svg class="cat-icon" style="width:12px;height:12px;vertical-align:-1px;"><use href="/vendor/feather/feather-sprite.svg#search"/></svg>
+                Scan GCS
               </button>
             </div>
             <div id="gcsScanStatus" style="font-size:13px; color:#0c5460; margin-top:6px;"></div>
@@ -750,7 +792,10 @@
       <!-- Oracle Quick-Create Modal -->
       <div class="modal-overlay" id="oracleCreateModal">
         <div class="modal-box">
-          <h3>🗄️ Create Oracle Project</h3>
+          <h3 style="display:flex; align-items:center; gap:8px;">
+            <svg class="cat-icon" style="width:16px;height:16px;"><use href="/vendor/feather/feather-sprite.svg#database"/></svg>
+            Create Oracle Project
+          </h3>
           <div class="modal-field">
             <label>Project Name *</label>
             <input type="text" id="ocProjectName" placeholder="e.g., WAK-2104 2025 Survey">
@@ -804,7 +849,10 @@
       <!-- DB Project Edit Modal -->
       <div class="modal-overlay" id="dbEditModal">
         <div class="modal-box">
-          <h3>✏️ Edit Oracle Project</h3>
+          <h3 style="display:flex; align-items:center; gap:8px;">
+            <svg class="cat-icon" style="width:16px;height:16px;"><use href="/vendor/feather/feather-sprite.svg#edit-2"/></svg>
+            Edit Oracle Project
+          </h3>
           <div class="modal-field">
             <label>Project Name *</label>
             <input type="text" id="dbEditProjectName" placeholder="Project name">
@@ -827,18 +875,22 @@
               <input type="text" id="dbEditRegion">
             </div>
             <div class="modal-field">
-              <label>Observer</label>
-              <input type="text" id="dbEditObserver">
+              <label title="Who did the field survey/dive — not who is annotating">Observer</label>
+              <input type="text" id="dbEditObserver" placeholder="Field diver/surveyor name">
             </div>
           </div>
           <div class="modal-field">
             <label>Notes</label>
             <textarea id="dbEditNotes" placeholder="Optional notes"></textarea>
           </div>
+          <div id="dbEditAuditInfo" style="font-size:11px; color:#64748b; margin-top:-4px; margin-bottom:12px;"></div>
           <!-- Overlay Layers Section -->
           <div style="margin-top:16px; border-top:1px solid #e2e8f0; padding-top:14px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-              <label style="font-weight:600; font-size:14px;">🗂️ Overlay Layers</label>
+              <label style="font-weight:600; font-size:14px; display:flex; align-items:center; gap:6px;">
+                <svg class="cat-icon" style="width:14px;height:14px;"><use href="/vendor/feather/feather-sprite.svg#layers"/></svg>
+                Overlay Layers
+              </label>
               <button class="btn" style="padding:4px 12px; font-size:11px; background:#6366f1; color:white;" onclick="openLayerManager(activeDbEditProjectId)">
                 Manage Layers
               </button>
@@ -852,8 +904,35 @@
               style="background:#6c757d; color:white; padding:10px 20px;">Cancel</button>
             <button class="btn btn-success" onclick="saveDbProjectEdits()"
               style="padding:10px 20px;" id="dbEditSaveBtn">
-              💾 Save Changes
+              <svg class="cat-icon" style="width:14px;height:14px;vertical-align:-2px;"><use href="/vendor/feather/feather-sprite.svg#save"/></svg>
+              Save Changes
             </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Collaborators (Share) Modal -->
+      <div class="modal-overlay" id="collaboratorsModal">
+        <div class="modal-box" style="max-width:520px;">
+          <h3 style="display:flex; align-items:center; gap:8px;">
+            <svg class="cat-icon" style="width:16px;height:16px;"><use href="/vendor/feather/feather-sprite.svg#users"/></svg>
+            Share — <span id="collaboratorsProjectName"></span>
+          </h3>
+          <div style="display:flex; gap:8px; align-items:flex-end; margin-bottom:14px;">
+            <div class="modal-field" style="flex:1; margin-bottom:0;">
+              <label>Add collaborator by username</label>
+              <input type="text" id="collaboratorUsername" placeholder="username">
+            </div>
+            <select id="collaboratorRole" style="padding:9px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;">
+              <option value="editor">Editor</option>
+              <option value="viewer" selected>Viewer</option>
+            </select>
+            <button class="btn btn-success" style="padding:9px 14px; white-space:nowrap;" onclick="addCollaboratorFromModal()">Add</button>
+          </div>
+          <div id="collaboratorsStatus" style="font-size:12px; margin-bottom:8px;"></div>
+          <div id="collaboratorsList" style="max-height:320px; overflow-y:auto;"></div>
+          <div class="modal-actions">
+            <button class="btn" onclick="closeCollaboratorsModal()" style="background:#6c757d; color:white; padding:10px 20px;">Close</button>
           </div>
         </div>
       </div>
@@ -861,7 +940,10 @@
       <!-- Layer Manager Modal -->
       <div class="modal-overlay" id="layerManagerModal">
         <div class="modal-box" style="max-width:700px;">
-          <h3>🗂️ Layer Manager — <span id="layerManagerProjectName"></span></h3>
+          <h3 style="display:flex; align-items:center; gap:8px;">
+            <svg class="cat-icon" style="width:16px;height:16px;"><use href="/vendor/feather/feather-sprite.svg#layers"/></svg>
+            Layer Manager — <span id="layerManagerProjectName"></span>
+          </h3>
 
           <!-- Upload Section -->
           <div style="margin-bottom:16px; padding:14px; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:8px; text-align:center; cursor:pointer; transition:all 0.2s;"
@@ -870,7 +952,10 @@
                ondragleave="this.style.borderColor='#cbd5e1'; this.style.background='#f8fafc';"
                ondrop="handleLayerUploadDrop(event)"
                onclick="document.getElementById('layerFileInput').click()">
-            <div style="font-size:14px; color:#475569;">📁 Drop shapefile ZIP or files here</div>
+            <div style="font-size:14px; color:#475569; display:flex; align-items:center; justify-content:center; gap:6px;">
+              <svg class="cat-icon" style="width:14px;height:14px;"><use href="/vendor/feather/feather-sprite.svg#folder"/></svg>
+              Drop shapefile ZIP or files here
+            </div>
             <div style="font-size:11px; color:#94a3b8; margin-top:4px;">ZIP archive <b>or</b> .shp + .shx + .dbf + .prj files</div>
             <input type="file" id="layerFileInput" accept=".zip,.shp,.shx,.dbf,.prj,.cpg,.sbn,.sbx" multiple style="display:none;" onchange="handleLayerFileSelect(event)">
           </div>
@@ -892,15 +977,24 @@
               style="background:#6c757d; color:white; padding:10px 20px;">Close</button>
             <button class="btn btn-success" onclick="saveLayerManagerChanges()"
               style="padding:10px 20px;" id="layerManagerSaveBtn">
-              💾 Save Changes
+              <svg class="cat-icon" style="width:14px;height:14px;vertical-align:-2px;"><use href="/vendor/feather/feather-sprite.svg#save"/></svg>
+              Save Changes
             </button>
           </div>
         </div>
       </div>
 
+      <footer class="cat-footer">
+        <p><strong>CAT: Coral Annotation Tool</strong> — NOAA Pacific Islands Fisheries Science Center, Ecosystem Sciences Division.</p>
+        <p>This application is a scientific product and is not official communication of the National Oceanic and
+           Atmospheric Administration or the United States Department of Commerce. All NOAA project content is
+           provided on an "as is" basis, and the user assumes responsibility for its use.</p>
+        <p><a href="https://github.com/MichaelAkridge-NOAA/cat">Source repository</a> ·
+           <a href="/docs">API documentation</a></p>
+      </footer>
     </div>
   </div>
-  
+
   <script>
     // ========================================
     // STATE
@@ -1392,12 +1486,14 @@
         const query = (document.getElementById('dbProjectSearch')?.value || '').trim();
         const sortRaw = document.getElementById('dbProjectSort')?.value || 'created_at:desc';
         const [sortBy, sortDir] = sortRaw.split(':');
+        const scope = document.getElementById('dbProjectScope')?.value || 'mine';
 
         const params = new URLSearchParams({
           limit: '200',
           offset: '0',
           sort_by: sortBy || 'created_at',
-          sort_dir: sortDir || 'desc'
+          sort_dir: sortDir || 'desc',
+          scope: scope
         });
         if (query) {
           params.set('q', query);
@@ -1445,8 +1541,13 @@
         const created = project.created_at ? new Date(project.created_at).toLocaleString() : 'Unknown';
         const site = project.site || '-';
         const observer = project.observer || '-';
+        // observer is free-text on the project (may be typed by anyone, or
+        // imported from a shapefile's ANALYST attribute) and can differ from
+        // owner, the actual account that created the project — show both
+        // when they diverge.
+        const owner = project.owner_display_name || project.owner_username || null;
+        const ownerLine = !owner ? ' • Owner: unassigned' : (owner !== observer ? ` • Owner: ${owner}` : '');
         const safeName = (project.project_name || '').replace(/'/g, "&#39;");
-        const showV2 = document.getElementById('showV2Toggle')?.checked || false;
         return `
           <div style="padding: 12px; border-bottom: 1px solid #e2e8f0; display:flex; justify-content:space-between; gap:12px; align-items:center;">
             <div style="min-width:0;">
@@ -1454,27 +1555,30 @@
                 #${project.project_id} • ${project.project_name || 'Untitled'}
               </div>
               <div style="font-size:12px; color:#475569; margin-top:3px;">
-                Site: ${site} • Observer: ${observer}
+                Site: ${site} • Observer: ${observer}${ownerLine}
               </div>
               <div style="font-size:11px; color:#64748b; margin-top:2px;">
                 Created: ${created}
               </div>
             </div>
             <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-              <button class="btn btn-primary" style="padding: 8px 10px; font-size:12px; margin:0; white-space:nowrap;" onclick="editDbProject(${project.project_id})">
-                ✏️ Edit
+              <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="editDbProject(${project.project_id})">
+                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#edit-3"/></svg> Edit
               </button>
-              <button class="btn" style="padding: 8px 10px; font-size:12px; margin:0; white-space:nowrap; background:#6366f1; color:white;" onclick="openLayerManager(${project.project_id}, '${safeName}')">
-                🗂️ Layers
+              <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="openLayerManager(${project.project_id}, '${safeName}')">
+                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#layers"/></svg> Layers
               </button>
-              <button class="btn btn-danger" style="padding: 8px 10px; font-size:12px; margin:0; white-space:nowrap;" onclick="deleteDbProject(${project.project_id}, '${safeName}')">
-                🗑 Delete
+              <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="openCollaboratorsModal(${project.project_id}, '${safeName}')">
+                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#users"/></svg> Share
               </button>
-              ${showV2 ? `<button class="btn" style="padding: 8px 10px; font-size:12px; margin:0; white-space:nowrap; background:linear-gradient(135deg,#f59e0b,#d97706); color:white; border:1px dashed rgba(255,255,255,0.4);" onclick="openDbProjectV2(${project.project_id})" title="Open in v2 Dev Preview (bulk draw, batch edit, etc.)">
-                🧪 v2
-              </button>` : ''}
-              <button class="btn btn-success" style="padding: 8px 10px; font-size:12px; margin:0; white-space:nowrap;" onclick="openDbProject(${project.project_id})">
-                🚀 Open
+              <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="window.open('/report?project_id=${project.project_id}', '_blank')">
+                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#bar-chart-2"/></svg> Report
+              </button>
+              <button class="cat-btn cat-btn--outline-danger" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="deleteDbProject(${project.project_id}, '${safeName}')">
+                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#trash-2"/></svg> Delete
+              </button>
+              <button class="cat-btn cat-btn--primary" style="padding:7px 12px; font-size:12px; white-space:nowrap;" onclick="openDbProject(${project.project_id})">
+                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#external-link"/></svg> Open
               </button>
             </div>
           </div>
@@ -1501,6 +1605,18 @@
         document.getElementById('dbEditRegion').value = project.region || '';
         document.getElementById('dbEditObserver').value = project.observer || '';
         document.getElementById('dbEditNotes').value = project.notes || '';
+
+        const auditEl = document.getElementById('dbEditAuditInfo');
+        if (auditEl) {
+          const createdBy = project.owner_display_name || project.owner_username || 'unassigned';
+          const createdAt = project.created_at ? new Date(project.created_at).toLocaleString() : 'unknown';
+          const modBy = project.last_mod_by_display_name || project.last_mod_by_username;
+          const modAt = project.updated_at ? new Date(project.updated_at).toLocaleString() : null;
+          let text = `Created by ${createdBy} on ${createdAt}`;
+          if (modBy && modAt) text += ` • Last modified by ${modBy} on ${modAt}`;
+          auditEl.textContent = text;
+        }
+
         document.getElementById('dbEditStatus').textContent = '';
         document.getElementById('dbEditSaveBtn').disabled = false;
         document.getElementById('dbEditModal').classList.add('open');
@@ -1515,6 +1631,127 @@
     function closeDbEditModal() {
       document.getElementById('dbEditModal').classList.remove('open');
       activeDbEditProjectId = null;
+    }
+
+    // ── Collaborators (Share) modal ──────────────────────────────────────
+    let activeCollaboratorsProjectId = null;
+
+    async function openCollaboratorsModal(projectId, projectName) {
+      activeCollaboratorsProjectId = projectId;
+      document.getElementById('collaboratorsProjectName').textContent = projectName || `Project #${projectId}`;
+      document.getElementById('collaboratorUsername').value = '';
+      document.getElementById('collaboratorsStatus').textContent = '';
+      document.getElementById('collaboratorsModal').classList.add('open');
+      await loadCollaborators();
+    }
+
+    function closeCollaboratorsModal() {
+      document.getElementById('collaboratorsModal').classList.remove('open');
+      activeCollaboratorsProjectId = null;
+    }
+
+    async function loadCollaborators() {
+      const listEl = document.getElementById('collaboratorsList');
+      if (!activeCollaboratorsProjectId || !listEl) return;
+      listEl.innerHTML = '<div style="padding:10px; color:#64748b; font-size:12px;">Loading…</div>';
+      try {
+        const resp = await fetch(`/api/db/projects/${activeCollaboratorsProjectId}/collaborators`);
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        const data = await resp.json();
+        const collaborators = data.collaborators || [];
+        if (!collaborators.length) {
+          listEl.innerHTML = '<div style="padding:10px; color:#64748b; font-size:12px;">No collaborators.</div>';
+          return;
+        }
+        listEl.innerHTML = collaborators.map((c) => {
+          const label = c.display_name || c.username || `User #${c.user_id}`;
+          const isOwner = c.role === 'owner';
+          const roleControl = isOwner
+            ? '<span style="font-size:11px; font-weight:600; color:#0f172a; padding:4px 8px; background:#e2e8f0; border-radius:4px;">Owner</span>'
+            : `<select style="padding:5px; font-size:12px; border:1px solid #d1d5db; border-radius:4px;" onchange="changeCollaboratorRole(${c.user_id}, this.value)">
+                <option value="editor" ${c.role === 'editor' ? 'selected' : ''}>Editor</option>
+                <option value="viewer" ${c.role === 'viewer' ? 'selected' : ''}>Viewer</option>
+              </select>`;
+          const removeBtn = isOwner ? '' :
+            `<button class="cat-btn cat-btn--outline-danger" style="padding:4px 8px; font-size:11px;" onclick="removeCollaboratorFromModal(${c.user_id})">Remove</button>`;
+          return `
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 2px; border-bottom:1px solid #f1f5f9;">
+              <span style="font-size:13px; color:#0f172a;">${label}</span>
+              <div style="display:flex; align-items:center; gap:6px;">${roleControl}${removeBtn}</div>
+            </div>
+          `;
+        }).join('');
+      } catch (error) {
+        listEl.innerHTML = `<div style="padding:10px; color:#dc2626; font-size:12px;">Failed to load: ${error.message}</div>`;
+      }
+    }
+
+    async function addCollaboratorFromModal() {
+      if (!activeCollaboratorsProjectId) return;
+      const username = document.getElementById('collaboratorUsername').value.trim();
+      const role = document.getElementById('collaboratorRole').value;
+      const statusEl = document.getElementById('collaboratorsStatus');
+      if (!username) {
+        statusEl.style.color = '#dc2626';
+        statusEl.textContent = 'Enter a username.';
+        return;
+      }
+      statusEl.style.color = '#0c5460';
+      statusEl.textContent = 'Adding…';
+      try {
+        const resp = await fetch(`/api/db/projects/${activeCollaboratorsProjectId}/collaborators`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, role }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        document.getElementById('collaboratorUsername').value = '';
+        statusEl.style.color = '#059669';
+        statusEl.textContent = `Added ${username} as ${role}.`;
+        await loadCollaborators();
+      } catch (error) {
+        statusEl.style.color = '#dc2626';
+        statusEl.textContent = `Failed: ${error.message}`;
+      }
+    }
+
+    async function changeCollaboratorRole(userId, role) {
+      if (!activeCollaboratorsProjectId) return;
+      try {
+        const resp = await fetch(`/api/db/projects/${activeCollaboratorsProjectId}/collaborators/${userId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+      } catch (error) {
+        alert(`Failed to update role: ${error.message}`);
+        await loadCollaborators();
+      }
+    }
+
+    async function removeCollaboratorFromModal(userId) {
+      if (!activeCollaboratorsProjectId) return;
+      if (!confirm('Remove this collaborator from the project?')) return;
+      try {
+        const resp = await fetch(`/api/db/projects/${activeCollaboratorsProjectId}/collaborators/${userId}`, { method: 'DELETE' });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        await loadCollaborators();
+      } catch (error) {
+        alert(`Failed to remove collaborator: ${error.message}`);
+      }
     }
 
     async function saveDbProjectEdits() {
@@ -1583,11 +1820,6 @@
     }
 
     function openDbProject(projectId) {
-      if (!projectId) return;
-      window.location.href = `/annotation.html?project_id=${encodeURIComponent(projectId)}`;
-    }
-
-    function openDbProjectV2(projectId) {
       if (!projectId) return;
       window.location.href = `/annotation.html?project_id=${encodeURIComponent(projectId)}`;
     }
@@ -2276,7 +2508,7 @@
         // Shapefile import - show which files were uploaded
         const fileExtensions = shapefileImportData.files.map(f => {
           const ext = f.name.split('.').pop().toUpperCase();
-          return `<span style="display: inline-block; padding: 2px 6px; background: #667eea; color: white; border-radius: 3px; font-size: 10px; margin-right: 4px;">.${ext}</span>`;
+          return `<span style="display: inline-block; padding: 2px 6px; background: var(--cat-primary); color: white; border-radius: 3px; font-size: 10px; margin-right: 4px;">.${ext}</span>`;
         }).join('');
         
         container.innerHTML = `
@@ -3055,6 +3287,18 @@
         element.style.display = 'none';
       }, 5000);
     }
+  </script>
+  <script src="js/cat-nav.js"></script>
+  <script src="js/cat-auth.js"></script>
+  <script>
+    // This page calls /api/db/projects* directly, which requires auth in
+    // Oracle mode — redirect to login rather than let those calls 401 silently.
+    // Note: the observer field is intentionally NOT auto-filled from the
+    // logged-in user — observer is field-survey metadata (the diver who did
+    // the survey, often imported from a shapefile's ANALYST attribute), a
+    // different person from whoever is operating this tool. Who created the
+    // project record is tracked separately server-side (owner_user_id).
+    if (window.CatAuth) { CatAuth.requireLogin(); }
   </script>
 </body>
 </html>

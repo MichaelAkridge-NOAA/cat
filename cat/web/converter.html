@@ -4,19 +4,21 @@
   <title>CAT: COG Converter</title>
   <meta charset="utf-8">
   <meta name="viewport" content="initial-scale=1.0">
+  <link rel="stylesheet" href="css/cat-theme.css" />
   <style>
     body {
       margin: 0;
       padding: 0;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background: #f5f5f5;
+      font-family: var(--cat-font);
+      background: var(--cat-surface-alt);
+      color: var(--cat-ink);
     }
-    
+
     .navbar {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: var(--cat-primary-darker);
       color: white;
       padding: 15px 30px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      box-shadow: var(--cat-shadow-1);
     }
     
     .navbar-content {
@@ -51,21 +53,25 @@
     }
     
     .converter-card {
-      background: white;
-      border-radius: 12px;
+      background: var(--cat-surface);
+      border: 1px solid var(--cat-border);
+      border-radius: var(--cat-radius-lg);
       padding: 40px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      box-shadow: var(--cat-shadow-1);
       margin-bottom: 30px;
     }
-    
+
     .converter-card h2 {
       margin-top: 0;
-      color: #333;
+      color: var(--cat-ink);
       margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
-    
+
     .converter-card p {
-      color: #666;
+      color: var(--cat-ink-soft);
       margin-bottom: 25px;
     }
     
@@ -85,17 +91,17 @@
     .form-group input[type="text"] {
       width: 100%;
       padding: 12px;
-      border: 2px solid #e0e0e0;
+      border: 2px solid var(--cat-border);
       border-radius: 6px;
       font-size: 14px;
       transition: border-color 0.3s;
     }
-    
+
     .form-group input[type="file"]:focus,
     .form-group select:focus,
     .form-group input[type="text"]:focus {
       outline: none;
-      border-color: #667eea;
+      border-color: var(--cat-primary);
     }
     
     .form-row {
@@ -106,21 +112,21 @@
     
     .btn {
       padding: 14px 30px;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: var(--cat-primary);
       color: white;
       border: none;
       border-radius: 6px;
       font-size: 16px;
       font-weight: 600;
       cursor: pointer;
-      transition: opacity 0.3s;
+      transition: background 0.2s, opacity 0.3s;
       width: 100%;
     }
-    
+
     .btn:hover:not(:disabled) {
-      opacity: 0.9;
+      background: var(--cat-primary-dark);
     }
-    
+
     .btn:disabled {
       opacity: 0.5;
       cursor: not-allowed;
@@ -140,48 +146,48 @@
       color: #1565c0;
       border: 1px solid #90caf9;
     }
-    
+
     .status-box.success {
       background: #e8f5e9;
-      color: #2e7d32;
+      color: var(--cat-success);
       border: 1px solid #81c784;
     }
-    
+
     .status-box.error {
-      background: #ffebee;
-      color: #c62828;
-      border: 1px solid #ef5350;
+      background: #fdecea;
+      color: var(--cat-error);
+      border: 1px solid #f2a49c;
     }
-    
+
     .progress-bar {
       width: 100%;
       height: 8px;
-      background: #e0e0e0;
+      background: var(--cat-border);
       border-radius: 4px;
       margin-top: 10px;
       overflow: hidden;
       display: none;
     }
-    
+
     .progress-fill {
       height: 100%;
-      background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+      background: var(--cat-primary);
       width: 0%;
       transition: width 0.3s;
     }
-    
+
     .file-info {
-      background: #f5f5f5;
+      background: var(--cat-surface-alt);
       padding: 15px;
       border-radius: 6px;
       margin-top: 15px;
       display: none;
     }
-    
+
     .file-info h4 {
       margin-top: 0;
       margin-bottom: 10px;
-      color: #333;
+      color: var(--cat-ink);
     }
     
     .info-grid {
@@ -194,18 +200,18 @@
       display: flex;
       justify-content: space-between;
       padding: 8px;
-      background: white;
+      background: var(--cat-surface);
       border-radius: 4px;
     }
-    
+
     .info-label {
       font-weight: 600;
-      color: #666;
+      color: var(--cat-ink-soft);
     }
-    
+
     .help-text {
       font-size: 13px;
-      color: #999;
+      color: var(--cat-ink-soft);
       margin-top: 5px;
     }
     
@@ -215,32 +221,32 @@
     
     .tab-buttons {
       display: flex;
-      border-bottom: 2px solid #e0e0e0;
+      border-bottom: 2px solid var(--cat-border);
       margin-bottom: 25px;
       gap: 0;
     }
-    
+
     .tab-button {
       flex: 1;
       padding: 15px;
-      background: #f5f5f5;
+      background: var(--cat-surface-alt);
       border: none;
       cursor: pointer;
       font-size: 16px;
       font-weight: 600;
-      color: #666;
+      color: var(--cat-ink-soft);
       transition: all 0.3s;
       border-bottom: 3px solid transparent;
     }
-    
+
     .tab-button:hover {
       background: #e8e8e8;
     }
-    
+
     .tab-button.active {
-      background: white;
-      color: #667eea;
-      border-bottom: 3px solid #667eea;
+      background: var(--cat-surface);
+      color: var(--cat-primary);
+      border-bottom: 3px solid var(--cat-primary);
     }
     
     .tab-content {
@@ -262,27 +268,23 @@
       font-weight: normal;
     }
   </style>
+
 </head>
 <body>
-  <nav class="navbar">
-    <div class="navbar-content">
-      <h1>📷 COG Converter</h1>
-      <div class="nav-links">
-        <a href="/">Home</a>
-        <a href="/viewer">Viewer</a>
-        <a href="/docs">API Docs</a>
-      </div>
-    </div>
-  </nav>
-  
   <div class="container">
     <div class="converter-card">
-      <h2>⚡ Convert GeoTIFF to Cloud Optimized GeoTIFF</h2>
+      <h2>
+        <svg class="cat-icon" style="width:22px;height:22px;"><use href="/vendor/feather/feather-sprite.svg#zap"/></svg>
+        Convert GeoTIFF to Cloud Optimized GeoTIFF
+      </h2>
       <p>Choose your data type below for optimized conversion settings.</p>
-      
+
       <div class="tab-container">
         <div class="tab-buttons">
-          <button type="button" class="tab-button active" onclick="switchTab('ortho')">🖼️ Orthomosaic (RGB)</button>
+          <button type="button" class="tab-button active" onclick="switchTab('ortho')">
+            <svg class="cat-icon" style="width:16px;height:16px;vertical-align:-3px;margin-right:6px;"><use href="/vendor/feather/feather-sprite.svg#image"/></svg>
+            Orthomosaic (RGB)
+          </button>
           <button type="button" class="tab-button" onclick="switchTab('dem')">🗻 DEM (Elevation)</button>
         </div>
         
@@ -408,12 +410,24 @@
     </div>
     
     <div class="converter-card">
-      <h2>📦 Batch Conversion</h2>
+      <h2>
+        <svg class="cat-icon" style="width:22px;height:22px;"><use href="/vendor/feather/feather-sprite.svg#package"/></svg>
+        Batch Conversion
+      </h2>
       <p>For converting multiple files, use the command-line batch converter:</p>
       <pre style="background: #2c2c2c; color: #fff; padding: 15px; border-radius: 6px; overflow-x: auto;">python make_cog_batch.py --src-dir "input" --dst-dir "data"</pre>
     </div>
+
+    <footer class="cat-footer">
+      <p><strong>CAT: Coral Annotation Tool</strong> — NOAA Pacific Islands Fisheries Science Center, Ecosystem Sciences Division.</p>
+      <p>This application is a scientific product and is not official communication of the National Oceanic and
+         Atmospheric Administration or the United States Department of Commerce. All NOAA project content is
+         provided on an "as is" basis, and the user assumes responsibility for its use.</p>
+      <p><a href="https://github.com/MichaelAkridge-NOAA/cat">Source repository</a> ·
+         <a href="/docs">API documentation</a></p>
+    </footer>
   </div>
-  
+
   <script>
     let currentTab = 'ortho';
     
@@ -624,5 +638,7 @@
       }
     }
   </script>
+  <script src="js/cat-nav.js"></script>
+  <script src="js/cat-auth.js"></script>
 </body>
 </html>

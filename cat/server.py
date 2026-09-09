@@ -19,6 +19,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body, Query,
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from titiler.core.factory import TilerFactory
+from rio_tiler.errors import TileOutsideBounds
 from starlette.middleware.cors import CORSMiddleware
 from pathlib import Path
 from typing import List, Optional, Dict
@@ -39,6 +40,9 @@ from cat.api.file_projects import router as file_projects_router
 # Import sites reference API
 from cat.api.sites import router as sites_router
 
+# Import raster derivative tools (hillshade, slope, zonal statistics)
+from cat.api.raster_tools import router as raster_tools_router
+
 # Import Oracle DB project API (optional backend)
 try:
     from cat.api.db_projects import router as db_projects_router
@@ -47,10 +51,28 @@ except Exception as e:
     print(f"⚠️ Failed to import DB projects API: {e}")
     DB_API_AVAILABLE = False
 
+# Import user login/session API (Oracle mode only)
 try:
-    from cat.db.config import get_database_settings
+    from cat.api.auth import router as auth_router
+    AUTH_API_AVAILABLE = True
+except Exception as e:
+    print(f"⚠️ Failed to import auth API: {e}")
+    AUTH_API_AVAILABLE = False
+
+# Import segmentation (SAM3) API (optional GPU-backed feature)
+try:
+    from cat.api.segmentation import router as segmentation_router
+    from cat.segmentation.config import is_segmentation_enabled
+    SEGMENTATION_API_AVAILABLE = True
+except Exception as e:
+    print(f"⚠️ Failed to import segmentation API: {e}")
+    SEGMENTATION_API_AVAILABLE = False
+
+try:
+    from cat.db.config import get_database_settings, is_oracle_backend_enabled
 except Exception:
     get_database_settings = None
+    is_oracle_backend_enabled = None
 
 try:
     from cat.db.schema import bootstrap_schema
@@ -80,7 +102,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # CAT DB app version — bump this with each release
-CAT_APP_VERSION = "4.0.0"
+CAT_APP_VERSION = "4.4.0"
 
 # Package directory - where this file lives (contains web/, docs/, etc.)
 BASE_DIR = Path(__file__).parent
@@ -277,6 +299,10 @@ app.include_router(coral_router)
 app.include_router(sites_router)
 print("âœ… Sites reference API enabled at /api/sites/*")
 
+# Include raster derivative tools (hillshade, slope, zonal statistics)
+app.include_router(raster_tools_router)
+print("âœ… Raster tools API enabled at /api/raster/*")
+
 # Include file-based project routes
 app.include_router(file_projects_router)
 print("âœ… File-based project API enabled at /api/file-projects/*")
@@ -285,8 +311,18 @@ print("âœ… File-based project API enabled at /api/file-projects/*")
 if DB_API_AVAILABLE:
     app.include_router(db_projects_router)
     print("âœ… DB project API enabled at /api/db/*")
+
+# Include user login/session routes (Oracle mode only)
+if AUTH_API_AVAILABLE:
+    app.include_router(auth_router)
+    print("âœ… Auth API enabled at /api/auth/*")
 else:
     print("â„¹ï¸ DB project API not available")
+
+# Include segmentation (SAM3) routes
+if SEGMENTATION_API_AVAILABLE:
+    app.include_router(segmentation_router)
+    print("Segmentation API enabled at /api/segmentation/*")
 
 
 
@@ -360,6 +396,12 @@ app.include_router(cog.router, tags=["Cloud Optimized GeoTIFF"])
 async def overflow_tile_handler(request: Request, exc: OverflowError):
     return JSONResponse(status_code=404, content={"detail": "Tile out of bounds"})
 
+# TiTiler/rio-tiler raises TileOutsideBounds for tile requests beyond the raster's
+# extent (e.g. world-zoom levels) — return a clean 404 instead of a 500 traceback
+@app.exception_handler(TileOutsideBounds)
+async def tile_oob_handler(request: Request, exc: TileOutsideBounds):
+    return JSONResponse(status_code=404, content={"detail": "Tile out of bounds"})
+
 # Mount static files (for any CSS, JS, images, etc.)
 # This allows serving files from the data directory
 data_directory = CONFIG['data']['directory']
@@ -371,6 +413,7 @@ app.mount("/static", StaticFiles(directory=data_directory), name="static")
 web_directory = str(BASE_DIR / "web")
 app.mount("/js", StaticFiles(directory=str(Path(web_directory) / "js")), name="js")
 app.mount("/css", StaticFiles(directory=str(Path(web_directory) / "css")), name="css")
+app.mount("/vendor", StaticFiles(directory=str(Path(web_directory) / "vendor")), name="vendor")
 
 # Health check endpoint for Docker/Kubernetes
 @app.get("/health")
@@ -407,6 +450,7 @@ def get_version():
         "schema_version": schema_version,
         "migrations": migrations,
         "db_available": DB_API_AVAILABLE,
+        "auth_available": AUTH_API_AVAILABLE,
     }
 
 
@@ -441,11 +485,20 @@ def get_config():
         except Exception:
             storage_backend = "file"
 
+    auth_enabled = False
+    if AUTH_API_AVAILABLE and is_oracle_backend_enabled is not None:
+        try:
+            auth_enabled = is_oracle_backend_enabled()
+        except Exception:
+            auth_enabled = False
+
     return {
         "viewer": CONFIG['viewer'],
         "data_directory": CONFIG['data']['directory'],
         "storage_backend": storage_backend,
         "db_api_available": DB_API_AVAILABLE,
+        "auth_enabled": auth_enabled,
+        "segmentation_available": SEGMENTATION_API_AVAILABLE and is_segmentation_enabled(),
     }
 
 
@@ -543,14 +596,6 @@ def read_logo_wide():
         return FileResponse(logo_file, media_type="image/png")
     raise HTTPException(status_code=404, detail="Logo wide not found")
 
-# Serve the viewer page
-@app.get("/viewer", response_class=HTMLResponse)
-def read_viewer():
-    viewer_file = BASE_DIR / "web" / "viewer.html"
-    if viewer_file.exists():
-        return viewer_file.read_text(encoding="utf-8")
-    return "<h1>Viewer not found</h1>"
-
 # Serve the converter page
 @app.get("/converter", response_class=HTMLResponse)
 def read_converter():
@@ -558,6 +603,49 @@ def read_converter():
     if converter_file.exists():
         return converter_file.read_text(encoding="utf-8")
     return "<h1>Converter not found</h1>"
+
+# Serve the sites page
+@app.get("/sites", response_class=HTMLResponse)
+def read_sites():
+    sites_file = BASE_DIR / "web" / "sites.html"
+    if sites_file.exists():
+        return sites_file.read_text(encoding="utf-8")
+    return "<h1>Sites page not found</h1>"
+
+# Serve the per-project report page
+@app.get("/report", response_class=HTMLResponse)
+def read_report():
+    report_file = BASE_DIR / "web" / "report.html"
+    if report_file.exists():
+        return report_file.read_text(encoding="utf-8")
+    return "<h1>Report page not found</h1>"
+
+
+@app.get("/login", response_class=HTMLResponse)
+@app.get("/login.html", response_class=HTMLResponse)
+def read_login():
+    login_file = BASE_DIR / "web" / "login.html"
+    if login_file.exists():
+        return login_file.read_text(encoding="utf-8")
+    return "<h1>Login page not found</h1>"
+
+
+@app.get("/users", response_class=HTMLResponse)
+@app.get("/user_admin.html", response_class=HTMLResponse)
+def read_user_admin():
+    user_admin_file = BASE_DIR / "web" / "user_admin.html"
+    if user_admin_file.exists():
+        return user_admin_file.read_text(encoding="utf-8")
+    return "<h1>User management page not found</h1>"
+
+
+@app.get("/preferences", response_class=HTMLResponse)
+@app.get("/user_preferences.html", response_class=HTMLResponse)
+def read_user_preferences():
+    preferences_file = BASE_DIR / "web" / "user_preferences.html"
+    if preferences_file.exists():
+        return preferences_file.read_text(encoding="utf-8")
+    return "<h1>Preferences page not found</h1>"
 
 # Serve the annotation page
 @app.get("/annotate", response_class=HTMLResponse)
@@ -570,38 +658,6 @@ def read_file_annotation():
 # Serve the annotation page (canonical URL)
 @app.get("/annotation.html", response_class=HTMLResponse)
 def read_annotation_page():
-    file_annotation_file = BASE_DIR / "web" / "annotation.html"
-    if file_annotation_file.exists():
-        return file_annotation_file.read_text(encoding="utf-8")
-    return "<h1>Annotation not found</h1>"
-
-# Backward-compat redirect for old /annotation_file_mode.html URLs
-@app.get("/annotation_file_mode.html", response_class=HTMLResponse)
-def read_file_annotation_alt():
-    file_annotation_file = BASE_DIR / "web" / "annotation.html"
-    if file_annotation_file.exists():
-        return file_annotation_file.read_text(encoding="utf-8")
-    return "<h1>Annotation not found</h1>"
-
-# Serve the deprecated refactored annotation page
-@app.get("/annotation_file_mode_REFACTORED.html", response_class=HTMLResponse)
-def read_file_annotation_refactored():
-    file_annotation_file = BASE_DIR / "web" / "deprecated" / "annotation_file_mode_REFACTORED.html"
-    if file_annotation_file.exists():
-        return file_annotation_file.read_text(encoding="utf-8")
-    return "<h1>Refactored Annotation not found</h1>"
-
-# Serve the unified annotation page (v2 features merged into v1)
-@app.get("/annotate/v2", response_class=HTMLResponse)
-def read_annotation_v2():
-    file_annotation_file = BASE_DIR / "web" / "annotation.html"
-    if file_annotation_file.exists():
-        return file_annotation_file.read_text(encoding="utf-8")
-    return "<h1>Annotation not found</h1>"
-
-# Backward-compat redirect for old /annotation_v2.html URLs
-@app.get("/annotation_v2.html", response_class=HTMLResponse)
-def read_annotation_v2_alt():
     file_annotation_file = BASE_DIR / "web" / "annotation.html"
     if file_annotation_file.exists():
         return file_annotation_file.read_text(encoding="utf-8")
@@ -726,7 +782,6 @@ if __name__ == "__main__":
     print(f"\n\U0001f41f Starting CAT: Coral Annotation Tool")
     print(f"\U0001f4cc Server: http://{host if host != '0.0.0.0' else 'localhost'}:{port}")
     print(f"\U0001f9b8 Coral Annotation: http://localhost:{port}/annotate")
-    print(f"\U0001f9ea v2 Dev Preview:   http://localhost:{port}/annotate/v2")
     print(f"\U0001f4c1 Project Creator: http://localhost:{port}/project_creator.html")
     print(f"\u2699\ufe0f  COG Converter: http://localhost:{port}/converter")
     print(f"\U0001f4da API Docs: http://localhost:{port}/docs")

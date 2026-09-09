@@ -64,9 +64,35 @@ nano .env   # <-- change ORACLE_PASSWORD and APP_SCHEMA_PASSWORD
 
 ### 2. Start
 
+CAT's Docker setup is two compose files, so you pick how much you build:
+
+| Stack | Command | Builds |
+|---|---|---|
+| **Base** (recommended default) | `docker compose -f docker-compose.cat.yml up -d --build` | Oracle + CAT app only. Fast — no SAM3, no GPU, no multi-GB torch/CUDA download. |
+| **Base + SAM3** | `docker compose -f docker-compose.cat.yml -f docker-compose.sam3.yml up -d --build` | Everything above, **plus** the SAM3 segmentation microservice. Slow on the first build (installs torch + CUDA + segment-geospatial — expect a long time and several GB of downloads). |
+
+`sam3-service` is not defined in `docker-compose.cat.yml` at all — it lives
+entirely in `docker-compose.sam3.yml` — specifically so the base command
+above can never resolve, build, or start it, no matter what. (An earlier
+version of this setup tried to keep SAM3 optional with a Compose `profiles:`
+gate on a single combined file; that alone wasn't reliably enough to stop a
+plain `up` from still building it. Two files removes the ambiguity.)
+
 ```bash
+# Base stack — Oracle + CAT app:
 docker compose -f docker-compose.cat.yml up -d --build
+
+# Stop / logs / reset, same pattern with the base file:
+docker compose -f docker-compose.cat.yml down
+docker compose -f docker-compose.cat.yml logs -f
+docker compose -f docker-compose.cat.yml down -v   # also wipes Oracle data
 ```
+
+Once containers exist, day-to-day restarts don't need `--build` — source
+under `./cat` is bind-mounted into the container, so most Python edits are
+picked up on container restart (`docker compose -f docker-compose.cat.yml restart cat-app`)
+without rebuilding the image at all. `--build` is only needed after changing
+the `Dockerfile` or `requirements.txt`.
 
 On first startup:
 1. Oracle Free initializes and runs `scripts/db-init/*.sql` (creates schema + tables)
@@ -83,6 +109,47 @@ docker compose -f docker-compose.cat.yml ps
 curl http://localhost:8000/health
 curl http://localhost:8000/api/config
 ```
+
+### Optional: AI Segmentation (SAM3, GPU-accelerated)
+
+CAT can run AI-assisted coral segmentation (text/point/box/tiled prompts) via
+a separate GPU microservice, `sam3-service`, defined in
+`docker-compose.sam3.yml`. It's a separate file specifically so the base
+stack above never builds/starts it on non-GPU hosts — you opt in by adding
+that file with `-f` alongside the base file.
+
+**Prerequisites:** an NVIDIA GPU with the [NVIDIA Container
+Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+configured for Docker, and a local SAM3 checkpoint (no Hugging Face
+account/auth needed — the app never downloads the model itself).
+
+```bash
+# In .env: point CAT_SAM3_CHECKPOINT_DIR at the host folder containing your
+# checkpoint. docker-compose.sam3.yml already flips CAT_SEGMENTATION_ENABLED
+# on for you -- no separate env var edit needed for that part.
+
+# Build just the SAM3 service (first build pulls a multi-GB CUDA/PyTorch
+# base image and installs segment-geospatial + SAM3 from source — expect
+# several minutes, or longer on a slow connection):
+docker compose -f docker-compose.cat.yml -f docker-compose.sam3.yml build sam3-service
+
+# Bring up the full stack, Oracle + CAT app + sam3-service together:
+docker compose -f docker-compose.cat.yml -f docker-compose.sam3.yml up -d --build
+
+# Stop the full stack the same way (both -f flags, every time you touch this stack):
+docker compose -f docker-compose.cat.yml -f docker-compose.sam3.yml down
+
+# Check the model loaded (device should read "cuda"):
+curl http://localhost:8000/api/segmentation/status
+```
+
+If you started with the base stack and want to *add* SAM3 without losing
+Oracle's data, just re-run `up -d --build` with both `-f` flags — Compose
+reconciles in place, it won't recreate `database-oracle-free`.
+
+If `CAT_SEGMENTATION_ENABLED=false` or `sam3-service` isn't running, the
+"AI Segment" button in the annotation UI stays hidden — the rest of CAT
+works unaffected either way.
 
 ### Google Cloud Workstation Deployment
 
@@ -235,9 +302,10 @@ Located in: `data/reference/list_of_coral.csv`
 - **Shapefile Overlay Layers** - Import, edit, reorder, style, and persist vector overlays
 - **Geometry Editing** - Double-click to edit overlay features, auto-save to Oracle
 - **Live Status Dashboard** - Homepage shows DB health, project count
+- **AI-Assisted Segmentation (SAM3)** - Optional GPU-accelerated text/point/box/tiled coral segmentation, auto-saved as reviewable annotations (see [Optional: AI Segmentation](#optional-ai-segmentation-sam3-gpu-accelerated) above)
 
 ### 🚧 In Progress
-- **AI-Assisted Annotation** - Automated and semi-automated coral detection, segmentation and classification (YOLO, SAM3)
+- **AI-Assisted Classification** - Automated species classification on top of AI-segmented detections (YOLO)
 - **Multi-user Support** - Shared annotation sessions with user tracking
 <a href="./docs/example_ai_01.png" target="_blank"><img src="./docs/example_ai_01.png"  alt="logo" /></a>
 

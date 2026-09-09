@@ -4,7 +4,15 @@
         alert('No project loaded');
         return;
       }
-      
+
+      // Task A2 Step 3: a manual Save click while an autosave/retry is already
+      // in flight would otherwise silently no-op (or race it) — tell the user
+      // their changes are already covered by the in-progress save instead.
+      if (window._catAutoSaveInFlight) {
+        if (typeof showStatus === 'function') showStatus('A save is already in progress — your changes are included.', 'info');
+        return;
+      }
+
       try {
         // Prepare annotations data
         const annotationsToSave = [];
@@ -28,19 +36,28 @@
         }
 
         if (storageBackend === 'oracle') {
-          const dbPayload = {
-            annotations: annotationsToSave.map(normalizeAnnotationForDb)
-          };
-
-          const dbResponse = await fetch(`${serverUrl}/api/db/projects/${projectId}/annotations/bulk-replace`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(dbPayload)
-          });
-
-          if (!dbResponse.ok) {
-            const error = await dbResponse.json().catch(() => ({}));
-            throw new Error(error.detail || 'Failed to save annotations to database');
+          // Task 8 fix: this used to POST /annotations/bulk-replace, which
+          // deletes and recreates every annotation on the project on every
+          // manual Save click. That silently churned every row's id/version
+          // even for annotations nothing had touched, breaking the
+          // optimistic-locking and undo/redo identity Task 7's differential
+          // sync (runAutoSave) depends on. Manual Save now drives the exact
+          // same differential POST-new/PUT-changed path as auto-save, so the
+          // two save flows can't disagree about what "saved" means.
+          hasUnsavedChanges = true;
+          await runAutoSave();
+          if (hasUnsavedChanges) {
+            // runAutoSave failed; it already put the badge into its error
+            // state (and, past the retry budget, the degraded-mode banner)
+            // and has a retry scheduled. Nothing more to do here — don't
+            // claim success.
+            // Task 11: this manual Save click previously ended here with no
+            // user-visible feedback at all beyond the small badge — add a
+            // toast so a deliberate Save action always gets a response.
+            if (typeof showStatus === 'function') {
+              showStatus('❌ Save failed — annotations could not be saved to the server. Will retry automatically.', 'error');
+            }
+            return;
           }
 
           // Best-effort session summary update
@@ -60,9 +77,6 @@
             }
           }
 
-          hasUnsavedChanges = false;
-          lastSaveTime = Date.now();
-          setAutoSaveBadge('saved', '✅ Saved');
           showStatus(`✅ Saved ${annotationsToSave.length} annotation(s) to Oracle project #${projectId}`, 'success');
           return;
         }
@@ -181,15 +195,43 @@
       // DB mode project bootstrap via URL parameter: ?project_id=123
       const urlParams = new URLSearchParams(window.location.search);
       const dbProjectId = urlParams.get('project_id') || urlParams.get('db_project_id');
+      // Oracle mode has no useful "no project loaded" state on this page —
+      // projects are opened from the project manager, not uploaded here.
+      // Send the user there instead of showing an empty annotator. Skip the
+      // redirect if a project was just handed off via the localStorage
+      // bridge above (e.g. a one-off local file opened from the project
+      // manager without a numeric project_id).
+      if (storageBackend === 'oracle' && !dbProjectId && !storedProject) {
+        window.location.href = '/project_creator.html';
+        return;
+      }
       if (storageBackend === 'oracle' && dbProjectId) {
         try {
           await loadProjectFromDatabase(dbProjectId);
-          startAutoSave();
+          // Task 8 fix: honor the persisted "Auto-save enabled" preference
+          // (Settings → Auto-save) on load. Previously this unconditionally
+          // called startAutoSave() regardless of what the user had saved,
+          // so disabling auto-save never survived a page reload — the
+          // interval always re-armed as soon as a project loaded.
+          let autoSaveEnabled = true;
+          try {
+            const saved = JSON.parse(localStorage.getItem('cat_autosave_settings') || '{}');
+            if (saved.enabled === false) autoSaveEnabled = false;
+          } catch (e) { /* fall back to enabled */ }
+          if (autoSaveEnabled) {
+            startAutoSave();
+          } else {
+            console.log('⏸️ Auto-save disabled in settings — not starting');
+          }
         } catch (error) {
           console.error('Error loading DB project:', error);
-          const overlay = document.getElementById('loadingOverlay');
+          const overlay = document.getElementById('fullLoadingOverlay');
           if (overlay) overlay.style.display = 'none';
           document.getElementById('uploadStatus').innerHTML = `<span style="color: #ef4444;">❌ DB load failed: ${error.message}</span>`;
+          // Task 11: uploadStatus lives inside the (often collapsed) upload
+          // panel, so a failed initial project load could go unnoticed.
+          // Also raise a toast, consistent with catFetch's failure UX.
+          if (typeof showStatus === 'function') showStatus(`❌ Failed to load project: ${error.message}`, 'error');
         }
       }
       
@@ -221,7 +263,20 @@
       // Stop auto-save timer
       if (autoSaveIntervalId) clearInterval(autoSaveIntervalId);
 
-      // Final best-effort save for Oracle mode (sendBeacon for async)
+      // Final best-effort save for Oracle mode (sendBeacon for async).
+      // Task 8 review note: this is the one remaining save path that still
+      // uses bulk-replace (delete-all-then-reinsert) instead of the
+      // differential POST-new/PUT-changed sync the manual Save button and
+      // auto-save now share. That's intentional, not an oversight:
+      // sendBeacon is fire-and-forget POST-only with no response handling,
+      // so it cannot sequence per-annotation PUTs/DELETEs the way
+      // runAutoSave() does, and bulk-replace's DELETE-then-INSERT semantics
+      // (see /annotations/bulk-replace in cat/api/db_projects.py) mean this
+      // payload must include every current annotation, not just the dirty
+      // ones -- omitting a synced-but-unchanged annotation would delete it
+      // outright. The known cost: ids/versions of already-synced rows churn
+      // on unload, which can 404 a stale reference held by another open
+      // window/popout (it self-heals via Task 7's 404-recovery re-POST).
       if (isOracleProjectMode() && hasUnsavedChanges && currentProject?.project_id) {
         const annotationsToSave = [];
         drawnItems.eachLayer(layer => {
@@ -452,6 +507,29 @@
       }
     }
 
+    // Show/hide the drawing hints bar (#drawingHintsBar in annotation.html).
+    // Called with a layerType ('polyline'|'polygon'|'rectangle') to show, or null to hide.
+    // (Task 7 fix: this function was referenced by the draw:drawstart/drawstop/canceled
+    // handlers below but never defined, so the hints bar never appeared.)
+    function showDrawingHints(tool) {
+      const bar = document.getElementById('drawingHintsBar');
+      if (!bar) return;
+      if (!tool) {
+        bar.style.display = 'none';
+        return;
+      }
+      const finishEl = document.getElementById('drawingHintFinish');
+      if (finishEl) {
+        const finishText = {
+          polygon: 'double-click to finish',
+          polyline: 'click last point to finish',
+          rectangle: 'release mouse to finish'
+        };
+        finishEl.textContent = finishText[tool] || 'double-click to finish';
+      }
+      bar.style.display = 'block';
+    }
+
     // Listen for when drawing tools are activated
     map.on('draw:drawstart', function(e) {
       // Store the type of tool being used
@@ -506,6 +584,9 @@
     map.on(L.Draw.Event.CREATED, function(event) {
       // Skip in bulk mode — v2-bulk.js handles it
       if (window.v2BulkMode && window.v2BulkMode.enabled) return;
+      // Skip while the standalone measure tool is active — annotation-runtime-measure.js
+      // has its own CREATED listener and this shape must never become a saved annotation.
+      if (window.catMeasureModeActive) return;
 
       const layer = event.layer;
       const type  = event.layerType;
@@ -517,23 +598,12 @@
         layer.options.pane = 'annotationsPane';
       }
 
-      // SAM3 Smart Grid: rectangle + magic wand + grid mode
-      if (type === 'rectangle' && magicWandActive && typeof sam3Mode !== 'undefined' && sam3Mode === 'grid' && currentCOG) {
-        console.log('🎯 SAM3 Smart Grid triggered');
-        if (typeof window.runSAM3SmartGrid === 'function') {
-          window.runSAM3SmartGrid(layer);
-        }
+      // SAM3 AI segmentation: a rectangle drawn while an AI mode is armed
+      // is handed to the segmentation module instead of becoming a normal
+      // manual annotation.
+      if (type === 'rectangle' && window.catSam3PendingMode && typeof window.catSam3HandleRectangle === 'function') {
+        window.catSam3HandleRectangle(layer);
         return;
-      }
-
-      // SAM3 Box: rectangle + magic wand + box mode
-      if (type === 'rectangle' && magicWandActive && typeof sam3Mode !== 'undefined' && sam3Mode === 'box' && currentCOG) {
-        console.log('📦 SAM3 Box segmentation triggered');
-        if (typeof window.handleSAM3Box === 'function') {
-          window.handleSAM3Box(layer);
-          return;
-        }
-        // Fall through to normal drawing if SAM3 box handler unavailable
       }
 
       // ── Normal drawing flow ──
@@ -546,6 +616,12 @@
 
       // Add the new layer to the map
       drawnItems.addLayer(layer);
+
+      // Snap new vertices onto nearby existing-annotation vertices so adjacent
+      // colony boundaries share exact edges (annotation-runtime-snapping.js).
+      if (typeof window.snapNewLayerVertices === 'function') {
+        window.snapNewLayerVertices(layer);
+      }
 
       // Store the current drawing with full-precision geometry
       currentAnnotation = {
@@ -649,12 +725,41 @@
       }
     }, 500); // Delay to ensure toolbar is rendered
     
+    // Backspace mid-draw removes the last placed vertex (Task 7 fix: the drawing
+    // hints bar advertises "Backspace undo vertex" but nothing bound the key —
+    // leaflet-draw only exposes deleteLastVertex() via its "Delete last point" link).
+    document.addEventListener('keydown', function(e) {
+      if (e.key !== 'Backspace') return;
+      // Never hijack Backspace while typing in a form control
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || document.activeElement?.isContentEditable) return;
+      const activeMode = drawControl && drawControl._toolbars && drawControl._toolbars.draw
+        ? drawControl._toolbars.draw._activeMode
+        : null;
+      const handler = activeMode && activeMode.handler;
+      if (handler && typeof handler.deleteLastVertex === 'function') {
+        e.preventDefault();
+        handler.deleteLastVertex();
+      }
+    });
+
     // Add global ESC key handler to cancel drawing tools AND discard unsaved annotations
     document.addEventListener('keydown', function(e) {
       if (e.key !== 'Escape') return;
       // Skip if a modal is open
       if (document.getElementById('editModal')?.classList.contains('active')) return;
       if (document.getElementById('catConfirmOverlay')?.style.display === 'flex') return;
+      // Task 9 review fix: this handler fires before annotation-runtime-
+      // settings-app.js's own Escape-to-close handler (script load order),
+      // and both are plain (non-capturing) document keydown listeners, so
+      // stopPropagation() in the settings handler can't stop this one from
+      // also running. Without this guard, pressing Escape to close a
+      // settings modal ALSO cancelled the active drawing tool and silently
+      // discarded any unsaved annotation underneath it.
+      const openSettingsModal = ['speciesFilterModal', 'timerSettingsModal',
+        'autoSaveSettingsModal', 'mapDisplaySettingsModal']
+        .find(id => document.getElementById(id)?.style.display === 'flex');
+      if (openSettingsModal) return;
 
       // Close any open autocomplete dropdown (but keep going — single-press discard)
       const openDropdown = document.querySelector('.species-autocomplete-dropdown.active');
@@ -719,430 +824,6 @@
     // ── Minimap, map view persistence ──
     if (typeof catMapSaveView === 'function') catMapSaveView(map);
     if (typeof catInitMinimap === 'function') catInitMinimap(map);
-    
-    // ========================================
-    // SAM3 Magic Wand Tool Integration
-    // ========================================
-    let magicWandActive = false;
-    let magicWandButton = null;
-    
-    // Create custom magic wand button
-    async function initSAM3MagicWand() {
-      // Check if SAM3 is available
-      try {
-        const response = await fetch(`${serverUrl}/api/sam/status`);
-        if (!response.ok) {
-          console.log('SAM3 not available');
-          return;
-        }
-        const status = await response.json();
-        if (!status.available) {
-          console.log('SAM3 not available');
-          return;
-        }
-        console.log('✅ SAM3 available - adding magic wand tool');
-      } catch (error) {
-        console.log('SAM3 API not available:', error);
-        return;
-      }
-      
-      // Add magic wand button to the draw toolbar
-      const toolbar = document.querySelector('.leaflet-draw-toolbar-top');
-      if (!toolbar) {
-        console.warn('Draw toolbar not found, retrying...');
-        setTimeout(initSAM3MagicWand, 500);
-        return;
-      }
-      
-      // Check if already added
-      if (document.querySelector('.leaflet-draw-draw-magicwand')) {
-        console.log('Magic wand button already exists');
-        return;
-      }
-      
-      const magicWandBtn = document.createElement('a');
-      magicWandBtn.className = 'leaflet-draw-draw-magicwand';
-      magicWandBtn.href = '#';
-      magicWandBtn.title = 'S';
-      magicWandBtn.setAttribute('role', 'button');
-      magicWandBtn.textContent = 'S'; // Show SAM text
-      magicWandBtn.onclick = function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleMagicWand();
-        return false;
-      };
-      toolbar.appendChild(magicWandBtn);
-      magicWandButton = magicWandBtn;
-      
-      console.log('✅ Magic wand button added to toolbar');
-      showStatus('SAM3 Magic Wand ready - Press F or click the wand icon', 'success');
-    }
-    
-    // SAM3 Mode and Settings
-    let sam3Mode = 'point'; // 'point' or 'box'
-    let sam3ModelSize = 'large';
-    let sam3ConfidenceThreshold = 0.5;
-    
-    function toggleMagicWand() {
-      magicWandActive = !magicWandActive;
-      
-      const sam3Panel = document.getElementById('sam3Panel');
-      
-      if (magicWandActive) {
-        // Activate magic wand mode - open control panel
-        magicWandButton?.classList.add('active');
-        map.getContainer().style.cursor = 'crosshair';
-        if (sam3Panel) sam3Panel.classList.add('active');
-        showStatus('🪄 SAM3 Panel opened - Select mode and settings', 'info');
-      } else {
-        // Deactivate magic wand mode
-        magicWandButton?.classList.remove('active');
-        map.getContainer().style.cursor = '';
-        if (sam3Panel) sam3Panel.classList.remove('active');
-        showStatus('SAM3 Panel closed', 'info');
-      }
-    }
-    
-    function closeSAM3Panel() {
-      magicWandActive = false;
-      magicWandButton?.classList.remove('active');
-      map.getContainer().style.cursor = '';
-      const sam3Panel = document.getElementById('sam3Panel');
-      if (sam3Panel) sam3Panel.classList.remove('active');
-      showStatus('SAM3 Panel closed', 'info');
-    }
-    
-    function setSAM3Mode(mode) {
-      sam3Mode = mode;
-      document.getElementById('sam3PointMode')?.classList.toggle('active', mode === 'point');
-      document.getElementById('sam3BoxMode')?.classList.toggle('active', mode === 'box');
-      document.getElementById('sam3GridMode')?.classList.toggle('active', mode === 'grid');
-      
-      console.log(`🎯 SAM3 mode changed to: ${mode}`);
-      console.log(`📋 Current state: magicWandActive=${magicWandActive}, sam3Mode=${sam3Mode}, currentCOG=${currentCOG}`);
-      
-      if (mode === 'point') {
-        showStatus('✅ Point Mode: Click directly on any coral to auto-segment it', 'info');
-      } else if (mode === 'box' || mode === 'grid') {
-        // Box/Grid mode - automatically activate the rectangle drawing tool
-        const modeLabel = mode === 'grid' ? 'Smart Grid' : 'Box';
-        showStatus(`✅ ${modeLabel} Mode: Draw a rectangle (tool auto-activated)`, 'info');
-        
-        // Auto-activate the rectangle drawing tool
-        setTimeout(() => {
-          const rectangleButton = document.querySelector('.leaflet-draw-draw-rectangle');
-          if (rectangleButton) {
-            rectangleButton.click();
-            console.log(`📦 Rectangle tool auto-activated for ${mode} mode`);
-          } else {
-            console.warn('Rectangle tool button not found');
-            showStatus(`⚠️ ${modeLabel} Mode: Manually click the rectangle tool (■) to draw`, 'info');
-          }
-        }, 100);
-      }
-    }
-    
-    function updateConfidenceDisplay() {
-      const slider = document.getElementById('sam3Confidence');
-      const display = document.getElementById('confidenceValue');
-      if (slider && display) {
-        const value = slider.value;
-        display.textContent = value + '%';
-        sam3ConfidenceThreshold = value / 100;
-      }
-    }
-    
-    function clearSAM3TempSegments() {
-      // Remove all layers from drawnItems that have createdBy === 'SAM3' or 'SAM3-box'
-      // and haven't been saved yet (not in annotations array)
-      let removedCount = 0;
-      
-      drawnItems.eachLayer(function(layer) {
-        // Check if this is a temp SAM3 segment (not saved)
-        const layerId = layer._leaflet_id;
-        const isSaved = annotations.some(ann => ann.leaflet_id === layerId);
-        
-        if (!isSaved && (layer.options.color === '#8b5cf6' || layer.options.fillColor === '#8b5cf6')) {
-          drawnItems.removeLayer(layer);
-          removedCount++;
-        }
-      });
-      
-      // Also clear currentAnnotation if it's a SAM3 temp
-      if (currentAnnotation && (currentAnnotation.createdBy === 'SAM3' || currentAnnotation.createdBy === 'SAM3-box')) {
-        currentAnnotation = null;
-      }
-      
-      if (removedCount > 0) {
-        showStatus(`🗑️ Cleared ${removedCount} temporary SAM3 segment(s)`, 'success');
-        console.log(`Cleared ${removedCount} SAM3 temp segments`);
-      } else {
-        showStatus('No temporary segments to clear', 'info');
-      }
-    }
-    
-    // Update settings from panel controls
-    document.addEventListener('DOMContentLoaded', function() {
-      const modelSizeSelect = document.getElementById('sam3ModelSize');
-      if (modelSizeSelect) {
-        modelSizeSelect.addEventListener('change', function() {
-          sam3ModelSize = this.value;
-          showStatus(`Model size changed to ${this.value}`, 'info');
-        });
-      }
-      
-      // Keyboard shortcut: F key to toggle magic wand
-      document.addEventListener('keydown', function(e) {
-        if (e.key === 'f' || e.key === 'F') {
-          // Don't trigger if typing in an input field
-          if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
-            return;
-          }
-          e.preventDefault();
-          toggleMagicWand();
-        }
-      });
-    });
-    
-    // Handle map clicks for magic wand (Point Mode only)
-    map.on('click', async function(e) {
-      if (!magicWandActive) return;
-      if (sam3Mode !== 'point') return; // Only process in point mode
-      if (!currentCOG) {
-        showStatus('Please load an orthomosaic first', 'error');
-        return;
-      }
-      
-      try {
-        showLoading(true);
-        showStatus('Loading SAM3 model...', 'info');
-        
-        // Ensure SAM3 model is loaded with selected size
-        const loadResponse = await fetch(`${serverUrl}/api/sam/load-model`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model_size: sam3ModelSize })
-        });
-        
-        if (!loadResponse.ok) {
-          throw new Error('Failed to load SAM3 model');
-        }
-        
-        showStatus('Running SAM3 segmentation...', 'info');
-        
-        // Get click coordinates
-        const latlng = e.latlng;
-        
-        // Get map bounds and size for coordinate conversion
-        const bounds = map.getBounds();
-        const mapSize = map.getSize();
-        const boundsNorth = bounds.getNorth();
-        const boundsSouth = bounds.getSouth();
-        const boundsEast = bounds.getEast();
-        const boundsWest = bounds.getWest();
-        
-        console.log(`📍 Map info:`, {
-          bounds: { north: boundsNorth, south: boundsSouth, east: boundsEast, west: boundsWest },
-          size: { width: mapSize.x, height: mapSize.y },
-          clickLatLng: { lat: latlng.lat, lng: latlng.lng }
-        });
-        
-        // Get visible map area as image
-        const mapContainer = map.getContainer();
-        const mapCanvas = await html2canvas(mapContainer, {
-          useCORS: true,
-          allowTaint: true,
-          logging: false,
-          width: mapSize.x,
-          height: mapSize.y
-        });
-        
-        // Convert to base64
-        const imageData = mapCanvas.toDataURL('image/png');
-        
-        // Calculate click position in image coordinates
-        const containerPoint = map.latLngToContainerPoint(latlng);
-        const click_x = Math.round(containerPoint.x);
-        const click_y = Math.round(containerPoint.y);
-        
-        console.log(`🎯 Click at pixel (${click_x}, ${click_y}), canvas size: ${mapCanvas.width}x${mapCanvas.height}`);
-        
-        // Call SAM3 API
-        const response = await fetch(`${serverUrl}/api/sam/click-segment`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            image_data: imageData,
-            click_x: click_x,
-            click_y: click_y,
-            return_polygon: true,
-            confidence_threshold: sam3ConfidenceThreshold
-          })
-        });
-        
-        if (!response.ok) {
-          throw new Error(`SAM3 API error: ${response.statusText}`);
-        }
-        
-        const data = await response.json();
-        
-        if (data.success && data.polygon) {
-          // Convert pixel polygon to geographic coordinates
-          // data.polygon is array of [x, y] pixel coordinates
-          // Use the actual canvas dimensions for accurate conversion
-          const canvasWidth = mapCanvas.width;
-          const canvasHeight = mapCanvas.height;
-          
-          console.log(`🗺️ Conversion params:`, {
-            canvas: { width: canvasWidth, height: canvasHeight },
-            bounds: { north: boundsNorth, south: boundsSouth, east: boundsEast, west: boundsWest }
-          });
-          
-          console.log(`📊 SAM3 response data:`, {
-            polygonType: typeof data.polygon,
-            polygonLength: data.polygon?.length,
-            firstValues: data.polygon?.slice(0, 6),
-            isFlat: typeof data.polygon?.[0] === 'number'
-          });
-          
-          // Check if polygon is in the right format
-          if (!data.polygon || !Array.isArray(data.polygon) || data.polygon.length === 0) {
-            throw new Error('Invalid polygon data from SAM3');
-          }
-          
-          const geoCoords = [];
-          
-          // SAM3 returns flat array: [x1, y1, x2, y2, x3, y3, ...]
-          if (typeof data.polygon[0] === 'number') {
-            for (let i = 0; i < data.polygon.length; i += 2) {
-              const px = data.polygon[i];
-              const py = data.polygon[i + 1];
-              
-              if (px === undefined || py === undefined || isNaN(px) || isNaN(py)) {
-                console.error(`Invalid pixel coordinates at index ${i}: px=${px}, py=${py}`);
-                continue;
-              }
-              
-              // Calculate lat/lng from pixel position
-              // X maps to longitude (west to east)
-              // Y maps to latitude (north to south, inverted)
-              const lng = boundsWest + (px / canvasWidth) * (boundsEast - boundsWest);
-              const lat = boundsNorth - (py / canvasHeight) * (boundsNorth - boundsSouth);
-              
-              geoCoords.push([lat, lng]);
-            }
-          } else {
-            // Handle array of pairs format [[x, y], ...] or objects [{x, y}, ...]
-            for (let idx = 0; idx < data.polygon.length; idx++) {
-              const point = data.polygon[idx];
-              let px, py;
-              
-              if (Array.isArray(point) && point.length >= 2) {
-                px = point[0];
-                py = point[1];
-              } else if (typeof point === 'object' && point !== null) {
-                px = point.x;
-                py = point.y;
-              } else {
-                console.error(`Invalid point format at index ${idx}:`, point);
-                continue;
-              }
-              
-              if (px === undefined || py === undefined || isNaN(px) || isNaN(py)) {
-                console.error(`Invalid pixel coordinates at index ${idx}: px=${px}, py=${py}`);
-                continue;
-              }
-              
-              const lng = boundsWest + (px / canvasWidth) * (boundsEast - boundsWest);
-              const lat = boundsNorth - (py / canvasHeight) * (boundsNorth - boundsSouth);
-              
-              geoCoords.push([lat, lng]);
-            }
-          }
-          
-          console.log(`✨ SAM3 segmented ${geoCoords.length} points with ${(data.confidence * 100).toFixed(1)}% confidence`);
-          if (geoCoords.length > 0) {
-            console.log(`First point: geo (${geoCoords[0][0]}, ${geoCoords[0][1]})`);
-          }
-          
-          // Validate coordinates
-          if (geoCoords.length === 0) {
-            throw new Error('No valid coordinates generated from SAM3 polygon');
-          }
-          
-          const hasNaN = geoCoords.some(coord => isNaN(coord[0]) || isNaN(coord[1]));
-          if (hasNaN) {
-            throw new Error('Invalid coordinates generated - check console for debug info');
-          }
-          
-          // Create polygon with annotations pane
-          const polygon = L.polygon(geoCoords, {
-            color: '#8b5cf6',
-            weight: 3,
-            fillOpacity: 0.4,
-            fillColor: '#8b5cf6',
-            pane: 'annotationsPane'
-          });
-          
-          // Add to drawn items layer
-          drawnItems.addLayer(polygon);
-          
-          // Force map to redraw to show the polygon
-          polygon.addTo(map);
-          map.fitBounds(polygon.getBounds(), { 
-            padding: [50, 50],
-            maxZoom: map.getZoom() // Don't zoom out
-          });
-          
-          // Store as current annotation for the modal
-          currentAnnotation = {
-            layer: polygon,
-            type: 'polygon',
-            shape: 'Polygon',
-            createdBy: 'SAM3',
-            confidence: data.confidence
-          };
-          
-          console.log(`✅ SAM3 polygon added to map with ${geoCoords.length} points`);
-          console.log(`Polygon bounds:`, polygon.getBounds());
-          
-          // Small delay to ensure polygon is visible before opening modal
-          setTimeout(() => {
-            // Open edit modal to let user fill in annotation details
-            const modal = document.getElementById('annotationModal');
-            if (modal) {
-              modal.style.display = 'block';
-            }
-          }, 100);
-          
-          showStatus(`✅ SAM3 segmented! ${(data.confidence * 100).toFixed(1)}% confidence - Fill in details`, 'success');
-        } else {
-          showStatus('No segment detected', 'warning');
-        }
-        
-      } catch (error) {
-        console.error('SAM3 error:', error);
-        showStatus(`SAM3 error: ${error.message}`, 'error');
-      } finally {
-        showLoading(false);
-      }
-    });
-    
-    // Keyboard shortcut: F key for magic wand
-    document.addEventListener('keydown', function(e) {
-      if (e.key === 'f' || e.key === 'F') {
-        // Don't trigger if typing in an input field
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-        e.preventDefault();
-        toggleMagicWand();
-      }
-    });
-    
-    // SAM3 disabled for file-based mode
-    // setTimeout(initSAM3MagicWand, 100);
     
     // COG layer
     let cogLayer = null;

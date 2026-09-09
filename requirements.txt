@@ -18,6 +18,14 @@ rtree>=1.0
 pydantic>=2.0.0
 oracledb>=2.4.1
 
+# User authentication (Oracle mode)
+bcrypt>=4.0
+email-validator>=2.0
+
+# HTTP client for SAM3 segmentation service calls
+httpx>=0.24.0
+
 # Shapefile support (optional)
 fiona>=1.9.0
 shapely>=2.0.0
+pyproj>=3.3

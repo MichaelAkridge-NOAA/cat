@@ -3,7 +3,7 @@
 # =============================================================================
 # This compose file integrates CAT with Oracle Free database
 # 
-# Usage:
+# Usage (fast path — Oracle + CAT app ONLY, no SAM3 at all):
 #   docker compose -f docker-compose.cat.yml up -d          # Start
 #   docker compose -f docker-compose.cat.yml down           # Stop
 #   docker compose -f docker-compose.cat.yml logs -f        # Logs
@@ -13,6 +13,18 @@
 #   1. Oracle initializes and runs scripts from /container-entrypoint-initdb.d
 #   2. CAT user and tables are created automatically
 #   3. CAT app starts and loads reference data from CSV files
+#
+# SAM3 segmentation service (optional, GPU-accelerated, SLOW to build --
+# installs torch + CUDA + segment-geospatial in services/sam3-service):
+#   sam3-service is NOT defined in this file at all -- it lives entirely in
+#   docker-compose.sam3.yml, so a plain `up`/`up --build` above never
+#   resolves, builds, or starts it. To actually run SAM3, layer that file in:
+#     docker compose -f docker-compose.cat.yml -f docker-compose.sam3.yml up -d --build
+#   The `deploy.resources.reservations.devices` GPU reservation on
+#   sam3-service requires the NVIDIA Container Toolkit configured on the
+#   host (`nvidia-ctk runtime configure`). For CPU-only use, also set
+#   CAT_SAM3_DEVICE=cpu in .env and drop the `deploy:` block via a further
+#   local override.
 # =============================================================================
 
 services:
@@ -94,7 +106,20 @@ services:
       
       # Auto-bootstrap: create tables and ingest reference data on startup
       - CAT_AUTO_BOOTSTRAP=${CAT_AUTO_BOOTSTRAP:-true}
-      
+
+      # User login/sessions (Oracle mode only)
+      - CAT_AUTH_BOOTSTRAP_ADMIN_USERNAME=${CAT_AUTH_BOOTSTRAP_ADMIN_USERNAME:-}
+      - CAT_AUTH_BOOTSTRAP_ADMIN_EMAIL=${CAT_AUTH_BOOTSTRAP_ADMIN_EMAIL:-}
+      - CAT_AUTH_BOOTSTRAP_ADMIN_PASSWORD=${CAT_AUTH_BOOTSTRAP_ADMIN_PASSWORD:-}
+      - CAT_AUTH_SESSION_MAX_AGE_HOURS=${CAT_AUTH_SESSION_MAX_AGE_HOURS:-168}
+      - CAT_AUTH_SESSION_COOKIE_NAME=${CAT_AUTH_SESSION_COOKIE_NAME:-cat_session}
+      - CAT_AUTH_SESSION_COOKIE_SECURE=${CAT_AUTH_SESSION_COOKIE_SECURE:-false}
+
+      # SAM3 AI segmentation (optional; requires sam3-service to be healthy)
+      - CAT_SEGMENTATION_ENABLED=${CAT_SEGMENTATION_ENABLED:-false}
+      - CAT_SEGMENTATION_SERVICE_URL=${CAT_SEGMENTATION_SERVICE_URL:-http://sam3-service:8100}
+      - CAT_SEGMENTATION_TIMEOUT_S=${CAT_SEGMENTATION_TIMEOUT_S:-90}
+
     ports:
       - "${CAT_HOST_PORT:-8000}:8000"
     volumes:
@@ -109,7 +134,10 @@ services:
       
       # Mount reference data for ingestion
       - ./cat/data/reference:/app/cat/data/reference:ro
-      
+
+      # Shared VRT cache (LOCAL_CS rasters) - read-write, sam3-service mounts read-only
+      - cat-vrt-cache:/home/catuser/.cat/vrt_cache
+
       # Optional: mount config for overrides
       # - ./cat/config.yaml:/app/cat/config.yaml:ro
     networks:
@@ -120,6 +148,15 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s  # Allow time for bootstrap
+
+  # ---------------------------------------------------------------------------
+  # SAM3 Segmentation Service (GPU-accelerated, optional)
+  # ---------------------------------------------------------------------------
+  # Deliberately NOT defined in this file at all (moved to
+  # docker-compose.sam3.yml) -- see that file for why: a `profiles:` gate
+  # alone was not reliably enough to keep this service's slow torch/CUDA
+  # build out of a plain `docker compose -f docker-compose.cat.yml up`.
+  # Not being defined here is what actually guarantees it.
 
   # ---------------------------------------------------------------------------
   # ORDS (Optional - Oracle REST Data Services)
@@ -138,6 +175,9 @@ volumes:
   # Application logs
   cat-logs:
     name: cat-logs
+  # Shared VRT cache (LOCAL_CS reprojection) - written by cat-app, read by sam3-service
+  cat-vrt-cache:
+    name: cat-vrt-cache
 
 # =============================================================================
 # Networks

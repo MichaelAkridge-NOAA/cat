@@ -1,0 +1,85 @@
+# =============================================================================
+# SAM3 add-on for docker-compose.cat.yml
+# =============================================================================
+# Defines the GPU-accelerated SAM3 segmentation microservice. Kept OUT of
+# docker-compose.cat.yml entirely (not just profile-gated there) because a
+# `profiles:` gate on the service plus `depends_on: {..., required: false}`
+# on cat-app was NOT sufficient on this environment's Compose version to
+# stop a plain `docker compose -f docker-compose.cat.yml up` from resolving
+# and building it -- and this build is slow (torch + CUDA + cuDNN, several
+# GB of downloads, tens of minutes). Not defining the service in the base
+# file at all is what actually guarantees a fast default `up`.
+#
+# Usage:
+#   docker compose -f docker-compose.cat.yml -f docker-compose.sam3.yml up -d --build
+#   docker compose -f docker-compose.cat.yml -f docker-compose.sam3.yml down
+#
+# For CPU-only local dev, also set CAT_SAM3_DEVICE=cpu in .env and drop the
+# `deploy:` GPU-reservation block below via a further local override --
+# the NVIDIA Container Toolkit (`nvidia-ctk runtime configure`) is required
+# on the host for the `deploy.resources.reservations.devices` block as-is.
+# =============================================================================
+
+services:
+  sam3-service:
+    container_name: sam3-service
+    restart: unless-stopped
+    build:
+      context: ./services/sam3-service
+      dockerfile: Dockerfile
+    environment:
+      - SAM3_CHECKPOINT_PATH=${CAT_SAM3_CHECKPOINT_PATH:-/models/sam3/checkpoint.pt}
+      - SAM3_DEVICE=${CAT_SAM3_DEVICE:-cuda}
+      - SAM3_CONFIDENCE_THRESHOLD=${CAT_SAM3_CONFIDENCE_THRESHOLD:-0.5}
+      - SAM3_MASK_THRESHOLD=${CAT_SAM3_MASK_THRESHOLD:-0.5}
+      - SAM3_MAX_CROP_PX=${CAT_SAM3_MAX_CROP_PX:-4096}
+      - SAM3_MAX_TILED_PX=${CAT_SAM3_MAX_TILED_PX:-16384}
+      - SAM3_TILE_SIZE_PX=${CAT_SAM3_TILE_SIZE_PX:-1024}
+      - SAM3_TILE_OVERLAP_PX=${CAT_SAM3_TILE_OVERLAP_PX:-128}
+      - SAM3_REQUEST_TIMEOUT_S=${CAT_SAM3_REQUEST_TIMEOUT_S:-120}
+      # Internal ViT resolution -- MUST stay at 1008 (the model's trained
+      # default). The backbone's rotary position embeddings are precomputed
+      # for this exact grid size and are not recomputed if changed --
+      # raising this crashes inference (AssertionError in vitdet.py's RoPE
+      # broadcast). Do not change without confirming the installed
+      # segment-geospatial/sam3 version handles other values.
+      - SAM3_RESOLUTION=${CAT_SAM3_RESOLUTION:-1008}
+      # GCS/GDAL settings (for public bucket access) — same values cat-app uses,
+      # needed since /vsigs/ paths resolved for GCS-hosted COGs are handed to this service.
+      - GS_NO_SIGN_REQUEST=YES
+      - GDAL_HTTP_MERGE_CONSECUTIVE_RANGES=YES
+      - GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR
+      - CPL_VSIL_CURL_ALLOWED_EXTENSIONS=.tif,.tiff
+    volumes:
+      - ./data:/app/data:ro
+      - cat-vrt-cache:/home/catuser/.cat/vrt_cache:ro
+      - ${CAT_SAM3_CHECKPOINT_DIR:-./models/sam3}:/models/sam3:ro
+    networks:
+      - cat-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  cat-app:
+    depends_on:
+      database-oracle-free:
+        condition: service_healthy
+      sam3-service:
+        condition: service_started
+        required: false
+    environment:
+      - CAT_SEGMENTATION_ENABLED=true
+
+volumes:
+  cat-vrt-cache:
+    name: cat-vrt-cache
