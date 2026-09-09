@@ -165,13 +165,7 @@ sudo apt-get install -y \
 echo "  ✓ Prerequisites installed"
 
 if [ "$CAT_INSTALL_VARIANT" = "gpu" ]; then
-    echo "[GPU setup] Checking NVIDIA GPU and configuring NVIDIA Container Toolkit..."
-    # Cloud Workstations mount the driver libraries into the user's shell
-    # environment. sudo removes that environment, so validate as that user.
-    if ! sudo -u "$ACTUAL_USER" -H bash -ic 'nvidia-smi --query-gpu=name --format=csv,noheader'; then
-        echo "  ERROR: NVIDIA GPU is not available in $ACTUAL_USER's interactive environment."
-        exit 1
-    fi
+    echo "[GPU setup] NVIDIA GPU access will be validated through Docker..."
 fi
 
 # Docker must be installed before configuring its NVIDIA runtime.
@@ -223,7 +217,8 @@ fi
 if [ "$CAT_INSTALL_VARIANT" = "gpu" ]; then
     configure_nvidia_container_toolkit
     echo "[GPU setup] Verifying Docker GPU access..."
-    if ! sudo docker run --rm --gpus all nvidia/cuda:13.0.0-base-ubuntu24.04 \
+    if ! sudo docker run --rm --runtime=nvidia -e NVIDIA_VISIBLE_DEVICES=all \
+        nvidia/cuda:13.0.0-base-ubuntu24.04 \
         nvidia-smi --query-gpu=name --format=csv,noheader; then
         echo "  ERROR: Docker cannot access the NVIDIA GPU."
         echo "         Confirm this workstation was created with GPU support, then rerun the installer."

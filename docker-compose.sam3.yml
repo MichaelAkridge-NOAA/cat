@@ -15,15 +15,15 @@
 #   docker compose -f docker-compose.cat.yml -f docker-compose.sam3.yml down
 #
 # For CPU-only local dev, also set CAT_SAM3_DEVICE=cpu in .env and drop the
-# `deploy:` GPU-reservation block below via a further local override --
-# the NVIDIA Container Toolkit (`nvidia-ctk runtime configure`) is required
-# on the host for the `deploy.resources.reservations.devices` block as-is.
+# `runtime: nvidia` setting below via a further local override -- the NVIDIA
+# Container Toolkit (`nvidia-ctk runtime configure`) is required on the host.
 # =============================================================================
 
 services:
   sam3-service:
     container_name: sam3-service
     restart: unless-stopped
+    runtime: nvidia
     build:
       context: ./services/sam3-service
       dockerfile: Dockerfile
@@ -37,6 +37,8 @@ services:
       - SAM3_TILE_SIZE_PX=${CAT_SAM3_TILE_SIZE_PX:-1024}
       - SAM3_TILE_OVERLAP_PX=${CAT_SAM3_TILE_OVERLAP_PX:-128}
       - SAM3_REQUEST_TIMEOUT_S=${CAT_SAM3_REQUEST_TIMEOUT_S:-120}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       # Internal ViT resolution -- MUST stay at 1008 (the model's trained
       # default). The backbone's rotary position embeddings are precomputed
       # for this exact grid size and are not recomputed if changed --
@@ -56,13 +58,6 @@ services:
       - ${CAT_SAM3_CHECKPOINT_DIR:-./models/sam3}:/models/sam3:ro
     networks:
       - cat-network
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8100/health"]
       interval: 30s
