@@ -166,11 +166,30 @@ echo "  ✓ Prerequisites installed"
 
 if [ "$CAT_INSTALL_VARIANT" = "gpu" ]; then
     echo "[GPU setup] Checking NVIDIA GPU and configuring NVIDIA Container Toolkit..."
-    NVIDIA_SMI=$(PATH="/usr/local/nvidia/bin:/usr/local/cuda/bin:/opt/nvidia/bin:/usr/bin:/bin:$PATH" command -v nvidia-smi || true)
+    NVIDIA_SMI=""
+    for candidate in \
+        /usr/bin/nvidia-smi \
+        /usr/local/bin/nvidia-smi \
+        /usr/local/nvidia/bin/nvidia-smi \
+        /usr/local/cuda/bin/nvidia-smi \
+        /opt/nvidia/bin/nvidia-smi; do
+        if [ -x "$candidate" ]; then
+            NVIDIA_SMI="$candidate"
+            break
+        fi
+    done
     if [ -z "$NVIDIA_SMI" ]; then
-        echo "  ERROR: nvidia-smi was not found. Use a workstation/host with an NVIDIA GPU and driver installed."
+        NVIDIA_SMI=$(sudo -u "$ACTUAL_USER" -H bash -lic 'command -v nvidia-smi' 2>/dev/null | tail -n 1 || true)
+    fi
+    if [ -z "$NVIDIA_SMI" ] || [ ! -x "$NVIDIA_SMI" ]; then
+        NVIDIA_SMI=$(find -L /usr/local /opt /usr -xdev -type f -name nvidia-smi -perm -111 -print -quit 2>/dev/null || true)
+    fi
+    if [ -z "$NVIDIA_SMI" ]; then
+        echo "  ERROR: nvidia-smi was not found in the system paths or $ACTUAL_USER's login environment."
+        echo "         Use a workstation/host with an NVIDIA GPU and driver installed."
         exit 1
     fi
+    echo "  Using NVIDIA utility: $NVIDIA_SMI"
     "$NVIDIA_SMI" --query-gpu=name --format=csv,noheader || {
         echo "  ERROR: NVIDIA GPU is not available to this host."
         exit 1
