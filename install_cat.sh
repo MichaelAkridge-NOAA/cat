@@ -222,6 +222,14 @@ fi
 
 if [ "$CAT_INSTALL_VARIANT" = "gpu" ]; then
     configure_nvidia_container_toolkit
+    echo "[GPU setup] Verifying Docker GPU access..."
+    if ! sudo docker run --rm --gpus all nvidia/cuda:13.0.0-base-ubuntu24.04 \
+        nvidia-smi --query-gpu=name --format=csv,noheader; then
+        echo "  ERROR: Docker cannot access the NVIDIA GPU."
+        echo "         Confirm this workstation was created with GPU support, then rerun the installer."
+        exit 1
+    fi
+    echo "  ✓ Docker can access the NVIDIA GPU"
 fi
 
 # =============================================================================
