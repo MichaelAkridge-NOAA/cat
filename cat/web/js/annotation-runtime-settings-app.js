@@ -8,6 +8,7 @@
     const AS_KEY = 'cat_autosave_settings';
 
     const TIMER_DEFAULTS = {
+      showTimer: true,
       autoStart: false,
       allowPause: true,
       idlePause: false,
@@ -40,6 +41,7 @@
 
     window.openTimerSettings = function () {
       const s = _loadJson(TS_KEY, TIMER_DEFAULTS);
+      document.getElementById('tsShowTimer').checked = s.showTimer;
       document.getElementById('tsAutoStart').checked = s.autoStart;
       document.getElementById('tsAllowPause').checked = s.allowPause;
       document.getElementById('tsIdlePause').checked = s.idlePause;
@@ -55,6 +57,7 @@
     };
     window.saveTimerSettings = function () {
       const s = {
+        showTimer: document.getElementById('tsShowTimer').checked,
         autoStart: document.getElementById('tsAutoStart').checked,
         allowPause: document.getElementById('tsAllowPause').checked,
         idlePause: document.getElementById('tsIdlePause').checked,
@@ -67,6 +70,7 @@
       if (typeof showStatus === 'function') showStatus('✅ Timer settings saved', 'success');
     };
     window.resetTimerSettings = function () {
+      document.getElementById('tsShowTimer').checked = TIMER_DEFAULTS.showTimer;
       document.getElementById('tsAutoStart').checked = TIMER_DEFAULTS.autoStart;
       document.getElementById('tsAllowPause').checked = TIMER_DEFAULTS.allowPause;
       document.getElementById('tsIdlePause').checked = TIMER_DEFAULTS.idlePause;
@@ -93,14 +97,43 @@
     }
 
     function _applyTimerSettings(s) {
-      // Pause control: make badge non-clickable if pause disabled
+      // Expose for timer module — startTimer()/pauseTimer() (annotation-runtime-
+      // core.js) read window._timerSettings.showTimer to decide whether they're
+      // allowed to reveal the badge, so this must be set before anything below
+      // touches badge.style.display.
+      window._timerSettings = s;
+
       const badge = document.getElementById('annotationTimer');
       if (badge) {
+        // "Show timer" is a visibility preference, not a tracking one: turning
+        // it off hides the badge but does NOT stop time from being recorded —
+        // it only stops it being displayed for people who don't want to watch
+        // it tick. Hide unconditionally here regardless of running state; the
+        // running/idle "show" paths (startTimer/pauseTimer/showIdleTimerBadge)
+        // each re-check the same flag before showing it again, so a save that
+        // flips this off takes effect immediately even mid-session.
+        if (!s.showTimer) {
+          badge.style.display = 'none';
+        } else if (typeof timerState !== 'undefined' && (timerState.isRunning || timerState.elapsedSeconds > 0)) {
+          // A save that flips "show timer" back ON mid-session should
+          // re-reveal a timer that was already going, not wait for the next
+          // start/pause click to do it.
+          badge.style.display = 'inline-block';
+        }
+        // Pause control: make badge non-clickable if pause disabled
         badge.style.cursor = s.allowPause ? 'pointer' : 'default';
-        badge.title = s.allowPause ? 'Click to pause/resume timer' : 'Timer (pause disabled in settings)';
+        if (s.allowPause) {
+          // Only override the title with the generic pause/resume text when
+          // the badge isn't actively showing a more specific one (idle
+          // "click to start" vs. running "click to pause") — otherwise this
+          // runs on every settings save and clobbers that state-specific copy.
+          if (typeof timerState === 'undefined' || !timerState.isRunning) {
+            badge.title = 'Click to start timer';
+          }
+        } else {
+          badge.title = 'Timer (pause disabled in settings)';
+        }
       }
-      // Expose for timer module
-      window._timerSettings = s;
 
       // Idle auto-pause watcher
       _clearIdleWatcher();
@@ -239,13 +272,24 @@
       const ts = _loadJson(TS_KEY, TIMER_DEFAULTS);
       _applyTimerSettings(ts);
 
-      // If auto-start is enabled and a project loads, start the timer
-      if (ts.autoStart) {
+      // Once a project loads: either start the timer (if auto-start is on)
+      // or just reveal it at rest so there's something visible to click.
+      // Previously this whole block was gated on `ts.autoStart`, so with
+      // auto-start off (the default) the badge stayed display:none from the
+      // page's own inline style until EITHER the auto-start-on-first-draw
+      // fallback (annotation-runtime-shell-init.js) or a click on... nothing,
+      // since nothing was on screen to click. There was no way to discover
+      // or manually start the timer before drawing something.
+      if (ts.autoStart || ts.showTimer) {
         const _waitForProject = setInterval(() => {
           if (typeof currentProject !== 'undefined' && currentProject) {
             clearInterval(_waitForProject);
-            if (typeof startTimer === 'function' && (typeof timerState === 'undefined' || !timerState.isRunning)) {
-              startTimer();
+            if (ts.autoStart) {
+              if (typeof startTimer === 'function' && (typeof timerState === 'undefined' || !timerState.isRunning)) {
+                startTimer();
+              }
+            } else if (typeof showIdleTimerBadge === 'function') {
+              showIdleTimerBadge();
             }
           }
         }, 500);

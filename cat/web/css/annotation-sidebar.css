@@ -1,0 +1,361 @@
+/* ================================================
+   CAT - Coral Annotation Tool
+   Layers Sidebar (v12)
+
+   A dockable left sidebar for the Map Layers panel, in the style of
+   MapLibre/GeoLibre-family viewers: the layer tree lives in a fixed
+   full-height column that the map reflows around, rather than a floating
+   window that covers the imagery being annotated.
+
+   The panel keeps its original markup and every id the dynamic layer
+   builders write into (#mapFileSection, #shapefileLayersContainer,
+   #overlayLayersList, #annotationsDetails ...) — only its container
+   layout changes, so float mode remains byte-for-byte the old behaviour.
+   ================================================ */
+
+:root {
+  --layers-sidebar-width: 320px;
+  --layers-sidebar-min: 240px;
+  --layers-sidebar-max: 640px;
+}
+
+/* ─── Docked mode ─────────────────────────────────────────────── */
+
+body.layers-docked #map {
+  left: var(--layers-sidebar-width);
+  width: auto;
+}
+
+/* Fill to the right edge when the sidebar is docked alone. Scoped away from
+   .layout-docked (right-dock annotation panel) because THAT mode's own #map
+   rule (annotation-panels.css) sets `right: var(--panel-width)` instead —
+   this rule must not win that property via source order when both are active.
+
+   Without this: left is set, right is left at its default `auto`, and width
+   is `auto` too. Per CSS2.1 §10.3.7, that specific combination (left set,
+   right auto, width auto) on an absolutely positioned element resolves to
+   SHRINK-TO-FIT, not "fill the remaining space" — a common misreading of
+   what `width: auto` does for abspos elements. Leaflet's tile panes are
+   themselves absolutely positioned (out of flow), so they contribute
+   nothing to that shrink-to-fit calculation and the map container collapsed
+   to a sliver a couple of pixels wide. It wasn't gone, it was unusably
+   narrow — confirmed by the fact that collapsing to the rail (which sets an
+   *explicit* width: 100%, sidestepping the auto-width case) made it
+   reappear at full size. */
+body.layers-docked:not(.layout-docked) #map {
+  right: 0;
+}
+
+body.layers-docked .navbar {
+  left: calc(var(--layers-sidebar-width) + 10px);
+}
+
+/* Float mode keeps .annotation-panel's own left:10px; in docked mode the
+   bottom form bar must start after the sidebar so it isn't covered.
+   :not(.layout-docked) because the right-dock layout deliberately sets
+   left:auto on the same element — this file loads after annotation-panels.css
+   and would otherwise win the tie and un-dock the right sidebar. */
+body.layers-docked:not(.layout-docked) .annotation-panel {
+  left: calc(var(--layers-sidebar-width) + 10px);
+}
+
+body.layers-docked #mapLayersPanel {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: auto;
+  width: var(--layers-sidebar-width);
+  max-height: 100vh;
+  height: 100vh;
+  margin: 0;
+  border-radius: 0;
+  border-right: 2px solid #dee2e6;
+  box-shadow: 3px 0 12px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* the content area scrolls, not the whole shell */
+  z-index: 1500;
+  transition: none;
+}
+
+/* In the sidebar the header is a fixed masthead and only the body scrolls. */
+body.layers-docked #mapLayersPanel .panel-header {
+  flex: 0 0 auto;
+  cursor: default;
+}
+
+body.layers-docked #mapLayersPanel #layersSidebarToolbar {
+  display: block;
+}
+
+body.layers-docked #mapLayersPanel .panel-content {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 14px 24px;
+}
+
+/* Collapsing the panel is a float-mode affordance; in the sidebar the
+   header's caret becomes the "hide sidebar" control instead. */
+body.layers-docked #mapLayersPanel .panel-content.collapsed {
+  max-height: none;
+  padding: 12px 14px 24px;
+  overflow-y: auto;
+}
+
+body.layers-docked #mapLayersPanel .collapse-icon {
+  display: none;
+}
+
+/* Dragging a docked sidebar around makes no sense — panel-ui's drag
+   handler already bails on position:static only, so neutralise the
+   cursor affordance here too. */
+body.layers-docked #mapLayersPanel .panel-header:hover {
+  background: #f8f9fa;
+}
+
+/* ─── Sidebar masthead ────────────────────────────────────────── */
+
+#layersSidebarToolbar {
+  display: none;
+  padding: 8px 10px;
+  border-bottom: 1px solid #e9ecef;
+  background: #fbfcfe;
+  flex: 0 0 auto;
+}
+
+.layers-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.layers-toolbar-row + .layers-toolbar-row {
+  margin-top: 6px;
+}
+
+#layerSearchInput {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #fff;
+  color: #333;
+}
+
+#layerSearchInput:focus {
+  outline: none;
+  border-color: var(--cat-primary);
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.15);
+}
+
+.layers-tool-btn {
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #495057;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.layers-tool-btn:hover {
+  background: #f0f4ff;
+  border-color: #c0caf0;
+  color: var(--cat-primary);
+}
+
+.layers-tool-btn:active {
+  transform: translateY(1px);
+}
+
+.layers-tool-spacer {
+  flex: 1;
+}
+
+.layers-count-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--cat-primary);
+  background: rgba(102, 126, 234, 0.12);
+  border-radius: 3px;
+  padding: 2px 6px;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.layers-count-badge:empty {
+  display: none;
+}
+
+#layerSearchEmpty {
+  display: none;
+  padding: 14px 10px;
+  font-size: 12px;
+  color: #6c757d;
+  text-align: center;
+}
+
+/* A layer row filtered out by the search box. Uses its own class rather
+   than an inline style so the existing collapse logic (which toggles
+   .collapsed on children) can't fight it. */
+.layer-filter-hidden {
+  display: none !important;
+}
+
+/* ─── Resize handle (docked mode only) ────────────────────────── */
+
+#layers-resize-handle {
+  display: none;
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: var(--layers-sidebar-width);
+  width: 6px;
+  margin-left: -3px;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 1600;
+  transition: background 0.15s;
+}
+
+#layers-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 40px;
+  background: #bbb;
+  border-radius: 2px;
+}
+
+#layers-resize-handle:hover,
+#layers-resize-handle.dragging {
+  background: rgba(102, 126, 234, 0.15);
+}
+
+#layers-resize-handle:hover::after,
+#layers-resize-handle.dragging::after {
+  background: var(--cat-primary);
+}
+
+body.layers-docked #layers-resize-handle {
+  display: block;
+}
+
+/* ─── Collapsed rail ──────────────────────────────────────────── */
+
+/* Shown whenever the sidebar is hidden in docked mode, so there is always a
+   visible way back — the old floating panel could be closed with no
+   affordance left to reopen it except the View menu. */
+#layersRailBtn {
+  display: none;
+  position: fixed;
+  top: 74px;
+  left: 10px;
+  z-index: 1500;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cat-primary);
+  cursor: pointer;
+}
+
+#layersRailBtn:hover {
+  background: #f0f4ff;
+  border-color: #c0caf0;
+}
+
+body.layers-rail #layersRailBtn {
+  display: inline-flex;
+}
+
+/* Rail state: sidebar hidden, map gets the full width back. */
+body.layers-rail #mapLayersPanel {
+  display: none !important;
+}
+
+body.layers-rail #layers-resize-handle {
+  display: none;
+}
+
+body.layers-rail #map {
+  left: 0;
+  width: 100%;
+}
+
+body.layers-rail .navbar {
+  left: 10px;
+}
+
+body.layers-rail:not(.layout-docked) .annotation-panel {
+  left: 10px;
+}
+
+/* ─── Denser layer rows in the sidebar ────────────────────────── */
+
+body.layers-docked #mapLayersPanel .layer-section {
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+}
+
+body.layers-docked #mapLayersPanel .layer-item {
+  margin-bottom: 8px;
+  padding: 6px 6px 8px;
+  border: 1px solid #eef0f4;
+  border-bottom: 1px solid #eef0f4;
+  border-radius: 5px;
+  background: #fff;
+}
+
+body.layers-docked #mapLayersPanel .layer-item:hover {
+  border-color: #dbe1ee;
+  background: #fcfdff;
+}
+
+body.layers-docked #mapLayersPanel .layer-header {
+  margin-bottom: 0;
+}
+
+body.layers-docked #mapLayersPanel .layer-name {
+  font-size: 12px;
+  min-width: 0;
+}
+
+/* Long shapefile/COG names would otherwise wrap to three lines (or shove the
+   toggle off the edge) in a narrow sidebar. Truncate with an ellipsis and put
+   the full name in the row's title attribute instead.
+   Two shapes to cover: overlay/DEM rows nest the name in .layer-name, while
+   the compact orthomosaic row puts it in a bare <label> in .layer-header. */
+body.layers-docked #mapLayersPanel .layer-name > span:not(.layer-collapse-icon),
+body.layers-docked #mapLayersPanel .layer-header label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+body.layers-docked #mapLayersPanel .layer-header label {
+  min-width: 0;
+}
+
+body.layers-docked #mapLayersPanel .layer-toggle {
+  flex-shrink: 0;
+}
+
+/* Narrow viewports: the width itself is clamped in JS (catLayersSetWidth)
+   rather than overridden here, so a media query can't silently discard the
+   width the user dragged to. */

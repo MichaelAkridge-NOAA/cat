@@ -75,7 +75,7 @@
         if (!u.is_active) tr.classList.add('inactive-row');
 
         var roleSelect = document.createElement('select');
-        ['annotator', 'admin'].forEach(function (r) {
+        ['annotator', 'team_lead', 'admin'].forEach(function (r) {
           var opt = document.createElement('option');
           opt.value = r; opt.textContent = r;
           if (r === u.role) opt.selected = true;

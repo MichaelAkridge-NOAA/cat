@@ -81,7 +81,13 @@
         id: annotationRow?.annotation_id,
         _dbAnnotationId: annotationRow?.annotation_id,
         _dbAnnotationVersion: annotationRow?.version ?? 1,
-        _syncStatus: 'synced'
+        _syncStatus: 'synced',
+        // Multi-user contributor toggle (annotation-runtime-annotations.js) needs
+        // to know who made each annotation, independent of whatever's in
+        // `properties` — these come from the API's LEFT JOIN cat_users, not from
+        // the annotation's own editable fields.
+        _creatorUserId: annotationRow?.created_by_user_id ?? null,
+        _creatorLabel: annotationRow?.creator_display_name || annotationRow?.created_by || 'Unknown'
       };
     }
 
@@ -279,7 +285,10 @@
       loadingIcon.textContent = '🗺️';
 
       document.getElementById('uploadPanel').style.display = 'none';
-      document.getElementById('mapLayersPanel').style.display = 'block';
+      // '' rather than 'block': the layers sidebar (annotation-runtime-layers-sidebar.js)
+      // styles this panel as a flex column when docked, and an inline 'block'
+      // would beat that stylesheet.
+      document.getElementById('mapLayersPanel').style.display = '';
       document.getElementById('annotationFormPanel').style.display = 'block';
       document.getElementById('saveProjectBtn').style.display = 'block';
 
@@ -382,8 +391,10 @@
         loadingIcon.textContent = '🗺️';
         
         // Hide upload panel, show map layers and annotation form
+        // ('' not 'block' — see the DB-load path above: the docked layers
+        // sidebar needs the stylesheet, not an inline display, to win.)
         document.getElementById('uploadPanel').style.display = 'none';
-        document.getElementById('mapLayersPanel').style.display = 'block';
+        document.getElementById('mapLayersPanel').style.display = '';
         document.getElementById('annotationFormPanel').style.display = 'block';
         document.getElementById('saveProjectBtn').style.display = 'block';
         
@@ -1574,34 +1585,44 @@
           if (ann._dbAnnotationVersion != null) normalizedAnn._dbAnnotationVersion = ann._dbAnnotationVersion;
           if (ann._syncStatus) normalizedAnn._syncStatus = ann._syncStatus;
           if (ann.id != null) normalizedAnn.id = ann.id;
+          if (ann._creatorUserId !== undefined) normalizedAnn._creatorUserId = ann._creatorUserId;
+          if (ann._creatorLabel) normalizedAnn._creatorLabel = ann._creatorLabel;
         }
-        
+
         // Add the array index as the display ID (for consistent referencing)
         normalizedAnn._displayIndex = idx + 1;
-        
+
         layer.annotationData = normalizedAnn;
+        // Multi-user contributor toggle reads these directly off the layer —
+        // see buildContributorVisibilityPanel()/applyContributorVisibility()
+        // in annotation-runtime-annotations.js.
+        layer._creatorUserId = normalizedAnn._creatorUserId ?? null;
+        layer._creatorLabel = normalizedAnn._creatorLabel || 'Unknown';
 
         // Apply correct style: orange-dashed if no species, blue if complete
         if (typeof getAnnotationLayerStyle === 'function' && layer.setStyle) {
           layer.setStyle(getAnnotationLayerStyle(normalizedAnn));
         }
-        
+
         // Add click handler to show popup with details
         layer.on('click', function(e) {
           showAnnotationPopup(layer, e.latlng);
         });
-        
+
         drawnItems.addLayer(layer);
         annotations.push(normalizedAnn);
       });
-      
+
       // Add labels AFTER all layers are added to the map
       if (labelsVisible) {
         console.log('📍 Adding labels to all annotations...');
         showAllAnnotationLabels();
       }
-      
+
       updateAnnotationTable();
+      if (typeof buildContributorVisibilityPanel === 'function') {
+        buildContributorVisibilityPanel();
+      }
       console.log(`✅ Loaded ${annotations.length} annotations`);
       
       // Show import info if annotations were imported
@@ -1610,4 +1631,10 @@
         console.log(`ℹ️ Imported ${importInfo.count} annotations from "${importInfo.source_file}"`);
       }
     }
-    
+
+    // NOTE: the multi-user change-polling banner's "↻ Refresh" button
+    // (annotation-runtime-autosave.js) calls window.refreshAnnotationsFromDb,
+    // which is defined in annotation-runtime-operations.js (loaded after this
+    // file, so it owns the global). Do not redefine it here.
+
+

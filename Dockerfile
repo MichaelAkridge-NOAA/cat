@@ -74,9 +74,11 @@ COPY --chown=catuser:catuser startup.sh .
 RUN chmod +x /app/startup.sh
 
 # Create necessary directories with correct permissions
-# (includes the vrt_cache mountpoint for the cat-vrt-cache named volume, so
-# Docker preserves catuser ownership when that empty volume is first mounted)
-RUN mkdir -p /app/data /app/data/reference /app/exports /app/logs /home/catuser/.cat/vrt_cache && \
+# (includes the vrt_cache and thumbnail_cache mountpoints for their named
+# volumes, so Docker preserves catuser ownership when an empty volume is
+# first mounted there)
+RUN mkdir -p /app/data /app/data/reference /app/exports /app/logs \
+        /home/catuser/.cat/vrt_cache /home/catuser/.cat/thumbnail_cache && \
     chown -R catuser:catuser /app /home/catuser/.cat
 
 # Switch to non-root user

@@ -2,14 +2,16 @@
 
 from datetime import datetime
 import json
+import logging
 import tempfile
 import zipfile
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from cat.api.auth import require_auth
@@ -47,6 +49,8 @@ def _numpy_safe_json(obj):
         return None
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/db", tags=["db-projects"])
 
@@ -101,6 +105,10 @@ class OverlayBufferRequest(BaseModel):
 class OverlayClipRequest(BaseModel):
     clip_layer_id: int
     new_layer_name: Optional[str] = None
+
+
+class OverlayFeatureResizeRequest(BaseModel):
+    width_m: float
 
 
 class LatLng(BaseModel):
@@ -181,8 +189,12 @@ _PROJECT_ROLE_RANK = {"viewer": 1, "editor": 2, "owner": 3}
 def _get_effective_project_role(project_id: int, current_user: Dict[str, Any]) -> Optional[str]:
     """Resolve the caller's effective role on a project: global admins and the
     project owner always resolve to 'owner'; otherwise look up
-    cat_project_collaborators. Returns None if the project doesn't exist or
-    the caller has no access to it."""
+    cat_project_collaborators. Returns None only if the project doesn't
+    exist — every other authenticated caller resolves to at least 'viewer'
+    (open-read baseline: any logged-in user can view/report/QC/export any
+    project; only editing still requires being the owner or an added
+    editor/owner collaborator, enforced by the editor/owner tiers above this
+    floor)."""
     if current_user.get("role") == "admin":
         return "owner"
     project = fetch_one(
@@ -197,7 +209,9 @@ def _get_effective_project_role(project_id: int, current_user: Dict[str, Any]) -
         "SELECT role FROM cat_project_collaborators WHERE project_id = :project_id AND user_id = :user_id",
         {"project_id": project_id, "user_id": current_user.get("user_id")},
     )
-    return collab["role"] if collab else None
+    if collab:
+        return collab["role"]
+    return "viewer"
 
 
 def _require_project_role(project_id: int, current_user: Dict[str, Any], min_role: str) -> str:
@@ -268,7 +282,22 @@ def _normalize_annotation_row(row: Dict[str, Any]) -> Dict[str, Any]:
     feature = _parse_json_field(normalized.pop("feature_geojson", None), default=None)
     properties = _parse_json_field(normalized.pop("properties_json", None), default={})
     normalized["feature"] = feature
-    normalized["geometry"] = feature
+    # `feature_geojson` stores a full GeoJSON Feature ({type:"Feature",
+    # geometry:{...}, properties:{...}}) — that's what "feature" correctly
+    # holds above, and what the single-annotation GET/PUT/POST responses
+    # return as-is (the client's own normalizeDbAnnotationResponse() already
+    # drills into `.feature.geometry` itself). "geometry" here is a SEPARATE,
+    # bare-geometry convenience for callers that just want {type,
+    # coordinates} without unwrapping it themselves — e.g. building a
+    # FeatureCollection for a map, where geometry has to be the geometry,
+    # not another Feature. This used to just be `feature` again (a copy-paste
+    # of the line above), which meant any caller trusting the name "geometry"
+    # inherited an accidental extra layer of nesting and fed Leaflet/GeoJSON
+    # consumers an invalid `{type:"Feature", geometry:{...}}` where a plain
+    # geometry was expected — this is exactly what made annotations_geojson()
+    # (used by the project drawer's preview map) throw "Invalid GeoJSON
+    # object" and abort before the map ever fit to the imagery's bounds.
+    normalized["geometry"] = feature.get("geometry") if isinstance(feature, dict) else None
     normalized["properties"] = properties
     # Expose version for optimistic locking (4a); default 1 for legacy rows
     normalized.setdefault("version", 1)
@@ -346,6 +375,8 @@ def list_projects(
     limit: int = 50,
     offset: int = 0,
     q: Optional[str] = None,
+    region: Optional[str] = None,
+    year: Optional[int] = None,
     sort_by: str = "created_at",
     sort_dir: str = "desc",
     scope: str = "mine",
@@ -384,27 +415,18 @@ def list_projects(
             """
         )
 
-    scope = (scope or "mine").strip()
-    if scope == "all":
-        pass
-    elif scope.startswith("user:"):
-        try:
-            owner_id = int(scope.split(":", 1)[1])
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid scope: expected 'user:<id>'")
-        filter_params["owner_user_id"] = owner_id
-        conditions.append("owner_user_id = :owner_user_id")
-    else:
-        filter_params["owner_user_id"] = current_user["user_id"]
-        # "mine" includes projects I own AND projects I'm a collaborator on.
-        conditions.append(
-            """
-            (owner_user_id = :owner_user_id OR project_id IN (
-                SELECT project_id FROM cat_project_collaborators WHERE user_id = :owner_user_id
-            ))
-            """
-        )
-        scope = "mine"
+    if region and region.strip():
+        filter_params["region"] = region.strip()
+        conditions.append("region = :region")
+
+    if year is not None:
+        filter_params["year"] = year
+        conditions.append("year_num = :year")
+
+    scope_sql, scope_params, scope = _scope_where(scope, current_user)
+    filter_params.update(scope_params)
+    if scope_sql != "1=1":
+        conditions.append(scope_sql)
 
     where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -416,8 +438,29 @@ def list_projects(
     # ORDER BY clauses above (unqualified column names, shared with the count
     # query) don't need touching, and so cat_users.created_at can't collide
     # with cat_projects.created_at under SELECT *.
+    # Per-project tallies the project list renders on each card (annotation
+    # count, imagery/overlay counts, when it was last worked on). These are
+    # correlated subqueries in the OUTER select, deliberately: inside the
+    # paged subquery they would be evaluated for every project matching the
+    # filter before paging cut it to one screen's worth. Out here they run
+    # at most `limit` times, each an indexed lookup on project_id.
+    #
+    # Counting in SQL rather than reusing aggregate_annotations() (which the
+    # QC page uses) matters: that helper pulls every annotation's CLOBs back
+    # into Python, so a list of 20 projects would drag thousands of geometry
+    # blobs across the wire to render twenty little "412 annotations" chips.
     sql = """
-        SELECT p.*, u.display_name AS owner_display_name, u.username AS owner_username
+        SELECT p.*, u.display_name AS owner_display_name, u.username AS owner_username,
+            (SELECT COUNT(*) FROM cat_annotations a
+              WHERE a.project_id = p.project_id AND a.deleted_at IS NULL) AS annotation_count,
+            (SELECT COUNT(*) FROM cat_project_assets s
+              WHERE s.project_id = p.project_id) AS asset_count,
+            (SELECT COUNT(*) FROM cat_overlay_layers l
+              WHERE l.project_id = p.project_id) AS overlay_count,
+            (SELECT COUNT(*) FROM cat_project_collaborators c
+              WHERE c.project_id = p.project_id) AS collaborator_count,
+            (SELECT MAX(NVL(a.updated_at, a.created_at)) FROM cat_annotations a
+              WHERE a.project_id = p.project_id AND a.deleted_at IS NULL) AS last_annotated_at
         FROM (
             SELECT *
             FROM cat_projects
@@ -429,6 +472,9 @@ def list_projects(
         ORDER BY p.{order_col} {order_dir}, p.project_id DESC
     """.format(where_sql=where_sql, order_col=order_col, order_dir=order_dir)
     rows = fetch_all(sql, {**filter_params, "limit": limit, "offset": offset})
+
+    _attach_incomplete_counts(rows)
+
     return {
         "success": True,
         "count": len(rows),
@@ -439,13 +485,213 @@ def list_projects(
         "sort_by": sort_by,
         "sort_dir": order_dir.lower(),
         "q": q,
+        "region": region,
+        "year": year,
         "scope": scope,
         "projects": [_normalize_project_row(r) for r in rows],
     }
 
 
+def _attach_incomplete_counts(rows: List[Dict[str, Any]]) -> None:
+    """Add `incomplete_count` (annotations with no species code) to each row.
+
+    Deliberately a SECOND query rather than another subselect in the list
+    SQL above. Counting these needs to look inside properties_json, which
+    means Oracle's JSON_VALUE — a function whose availability over a plain
+    CLOB varies with database version and whether the column carries an
+    IS JSON constraint. Folding it into the main query would mean that on a
+    database where it isn't available, the entire project list 500s instead
+    of merely lacking a progress bar.
+
+    So: run it separately, swallow failure, and leave `incomplete_count`
+    absent. The card reads a missing value as "no progress data" and
+    renders the annotation count alone (see renderDbProjectList in
+    project_creator.html).
+
+    Modifies `rows` in place; callers normalize afterwards.
+    """
+    project_ids = [r.get("project_id") for r in rows if r.get("project_id") is not None]
+    if not project_ids:
+        return
+
+    # One bind per id, never string interpolation — same rule as
+    # aggregate_annotations().
+    id_binds = {f"icid{i}": pid for i, pid in enumerate(project_ids)}
+    in_clause = ", ".join(f":{k}" for k in id_binds)
+
+    try:
+        counts = fetch_all(
+            f"""
+            SELECT project_id, COUNT(*) AS incomplete_count
+            FROM cat_annotations
+            WHERE project_id IN ({in_clause})
+              AND deleted_at IS NULL
+              AND NVL(TRIM(JSON_VALUE(properties_json, '$.spcode')), '-') IN ('-', '')
+            GROUP BY project_id
+            """,
+            id_binds,
+        )
+    except Exception as exc:
+        logger.info("Skipping incomplete_count (JSON query unavailable): %s", exc)
+        return
+
+    by_id = {c["project_id"]: int(c.get("incomplete_count") or 0) for c in counts}
+    for row in rows:
+        row["incomplete_count"] = by_id.get(row.get("project_id"), 0)
+
+
+def _visible_project_where(current_user: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    """WHERE-clause fragment + binds restricting to projects the caller can
+    see. Open-read baseline: every authenticated user can see every
+    project (matches _get_effective_project_role's 'viewer' floor) — only
+    editing is restricted by role/collaborator status, not visibility.
+    Kept as a function (rather than inlining '1=1' at each call site) so
+    filter-options/export/qc share one place to change if visibility policy
+    is ever narrowed again."""
+    return "1=1", {}
+
+
+def _scope_where(scope: Optional[str], current_user: Dict[str, Any]) -> Tuple[str, Dict[str, Any], str]:
+    """WHERE-clause fragment + binds + normalized scope name for the
+    Mine/All ownership filter — the "My Projects" vs "All Projects" toggle
+    on the Project Manager, extracted here so the QC dashboard and the
+    Export page's project list can apply the exact same rule (list_projects
+    below used to be the only place this logic lived).
+
+    "mine" (default) is projects I own OR am a collaborator on. "all" drops
+    the ownership condition entirely — still subject to _visible_project_where
+    wherever the caller applies both. "user:<id>" (used by list_projects,
+    not exposed on QC/export yet) scopes to one specific owner.
+    """
+    scope = (scope or "mine").strip()
+    if scope == "all":
+        return "1=1", {}, "all"
+    if scope.startswith("user:"):
+        try:
+            owner_id = int(scope.split(":", 1)[1])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid scope: expected 'user:<id>'")
+        return "owner_user_id = :owner_user_id", {"owner_user_id": owner_id}, scope
+
+    return (
+        """
+        (owner_user_id = :owner_user_id OR project_id IN (
+            SELECT project_id FROM cat_project_collaborators WHERE user_id = :owner_user_id
+        ))
+        """,
+        {"owner_user_id": current_user["user_id"]},
+        "mine",
+    )
+
+
+@router.get("/projects/filter-options")
+def project_filter_options(current_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
+    """Distinct region/year values across projects visible to the caller —
+    feeds the region/year filter dropdowns on the export page. Registered
+    ahead of /projects/{project_id} below: that route has no int converter
+    on its path param, so Starlette would otherwise match this static path
+    to it first (project_id="filter-options") and 422 before ever reaching
+    this handler."""
+    _ensure_oracle_mode()
+    visible_where, params = _visible_project_where(current_user)
+
+    regions = fetch_all(
+        f"SELECT DISTINCT region FROM cat_projects WHERE {visible_where} AND region IS NOT NULL ORDER BY region",
+        params,
+    )
+    years = fetch_all(
+        f"SELECT DISTINCT year_num FROM cat_projects WHERE {visible_where} AND year_num IS NOT NULL ORDER BY year_num DESC",
+        params,
+    )
+    return {
+        "success": True,
+        "regions": [r["region"] for r in regions],
+        "years": [int(y["year_num"]) for y in years],
+    }
+
+
+@router.get("/projects/qc")
+def projects_qc(
+    project_ids: Optional[str] = None,
+    region: Optional[str] = None,
+    year: Optional[int] = None,
+    scope: Optional[str] = "all",
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Cross-project QC/completeness dashboard. Same project-selection rules
+    as the exporter (_resolve_export_project_ids: explicit project_ids, else
+    region/year filter, else every project the caller can see) — returns an
+    overall rollup plus a per-project breakdown with completeness/consistency
+    flags, so a reviewer sees both the aggregate picture and exactly which
+    projects need attention. `scope` is the same Mine/All ownership filter
+    the Project Manager's project list uses ("mine" = owned + collaborator).
+    Registered ahead of /projects/{project_id} for the same routing reason
+    as filter-options above."""
+    _ensure_oracle_mode()
+    ids = _resolve_export_project_ids(project_ids, region, year, current_user, scope)
+
+    if not ids:
+        return {"project_ids": [], "rollup": aggregate_annotations([]), "projects": []}
+
+    id_binds = {f"pid{i}": pid for i, pid in enumerate(ids)}
+    in_clause = ", ".join(f":{k}" for k in id_binds)
+    project_rows = fetch_all(
+        f"SELECT project_id, project_name, region, year_num FROM cat_projects "
+        f"WHERE project_id IN ({in_clause}) ORDER BY project_name",
+        id_binds,
+    )
+
+    rollup = aggregate_annotations(ids)
+
+    projects = []
+    for p in project_rows:
+        pid = p["project_id"]
+        stats = aggregate_annotations([pid])
+        missing_spcode = stats["missing_fields"]["spcode"]
+        missing_con1 = stats["missing_fields"]["con_1"]
+        unrecognized = stats.get("by_unrecognized_species") or []
+        unrecognized_total = sum(u["count"] for u in unrecognized)
+
+        flags = []
+        if stats["annotation_count"] == 0:
+            flags.append({"type": "empty", "count": 0, "message": "No annotations yet"})
+        if missing_spcode:
+            flags.append({
+                "type": "missing_species", "count": missing_spcode,
+                "message": f"{missing_spcode} annotation(s) missing species",
+            })
+        if missing_con1:
+            flags.append({
+                "type": "missing_condition", "count": missing_con1,
+                "message": f"{missing_con1} annotation(s) missing condition",
+            })
+        if unrecognized:
+            codes = ", ".join(u["spcode"] for u in unrecognized[:5])
+            flags.append({
+                "type": "unrecognized_species", "count": unrecognized_total,
+                "message": f"{unrecognized_total} annotation(s) with unrecognized species code(s): {codes}",
+            })
+
+        projects.append({
+            "project_id": pid,
+            "project_name": p.get("project_name"),
+            "region": p.get("region"),
+            "year": p.get("year_num"),
+            "annotation_count": stats["annotation_count"],
+            "missing_species": missing_spcode,
+            "missing_condition": missing_con1,
+            "unrecognized_species_count": unrecognized_total,
+            "flags": flags,
+        })
+
+    # Projects with the most issues first, so reviewers see problems immediately.
+    projects.sort(key=lambda pr: -len(pr["flags"]))
+
+    return {"project_ids": ids, "rollup": rollup, "projects": projects}
+
+
 @router.get("/projects/{project_id}")
-def get_project(project_id: int) -> Dict[str, Any]:
+def get_project(project_id: int, _current_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
     _ensure_oracle_mode()
 
     project = fetch_one(
@@ -475,7 +721,11 @@ def get_project(project_id: int) -> Dict[str, Any]:
 
 
 @router.get("/projects/{project_id}/snapshot")
-def get_project_snapshot(project_id: int, include_annotations: bool = True) -> Dict[str, Any]:
+def get_project_snapshot(
+    project_id: int,
+    include_annotations: bool = True,
+    _current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
     """
     Return project structure. Pass include_annotations=false to skip the annotation
     payload and load them lazily via GET /annotations (4d).
@@ -510,7 +760,13 @@ def get_project_snapshot(project_id: int, include_annotations: bool = True) -> D
     # Optionally skip annotations for faster initial load (4d)
     if include_annotations:
         annotations = fetch_all(
-            "SELECT * FROM cat_annotations WHERE project_id = :project_id AND deleted_at IS NULL ORDER BY created_at ASC",
+            """
+            SELECT a.*, creator.display_name AS creator_display_name, creator.username AS creator_username
+            FROM cat_annotations a
+            LEFT JOIN cat_users creator ON creator.user_id = a.created_by_user_id
+            WHERE a.project_id = :project_id AND a.deleted_at IS NULL
+            ORDER BY a.created_at ASC
+            """,
             {"project_id": project_id},
         )
         normalized_annotations = [_normalize_annotation_row(r) for r in annotations]
@@ -778,6 +1034,39 @@ def list_project_activity(
     return {"success": True, "activity": activity}
 
 
+@router.get("/projects/{project_id}/assets")
+def list_project_assets(
+    project_id: int,
+    _current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """A project's imagery/elevation assets on their own.
+
+    /snapshot already returns these, but it also returns every annotation in
+    the project — fine when opening the annotator, absurd for a details
+    panel that only wants to know which COGs exist and where their tiles
+    live. Separate endpoint so the panel costs one small query.
+    """
+    _ensure_oracle_mode()
+
+    project = fetch_one(
+        "SELECT project_id FROM cat_projects WHERE project_id = :project_id",
+        {"project_id": project_id},
+    )
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    rows = fetch_all(
+        "SELECT * FROM cat_project_assets WHERE project_id = :project_id "
+        "ORDER BY created_at ASC",
+        {"project_id": project_id},
+    )
+    return {
+        "success": True,
+        "count": len(rows),
+        "assets": [_normalize_asset_row(r) for r in rows],
+    }
+
+
 @router.post("/projects/{project_id}/assets")
 def add_project_asset(
     project_id: int,
@@ -864,14 +1153,20 @@ def create_annotation(
 
 
 @router.get("/projects/{project_id}/annotations")
-def list_annotations(project_id: int, limit: int = 500, offset: int = 0) -> Dict[str, Any]:
+def list_annotations(
+    project_id: int,
+    limit: int = 500,
+    offset: int = 0,
+    _current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
     _ensure_oracle_mode()
 
     sql = """
-        SELECT *
-        FROM cat_annotations
-        WHERE project_id = :project_id AND deleted_at IS NULL
-        ORDER BY created_at ASC
+        SELECT a.*, creator.display_name AS creator_display_name, creator.username AS creator_username
+        FROM cat_annotations a
+        LEFT JOIN cat_users creator ON creator.user_id = a.created_by_user_id
+        WHERE a.project_id = :project_id AND a.deleted_at IS NULL
+        ORDER BY a.created_at ASC
         OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
     """
     rows = fetch_all(
@@ -1157,12 +1452,34 @@ def bulk_create_annotations(
 
 
 @router.get("/projects/{project_id}/annotations/geojson")
-def annotations_geojson(project_id: int) -> Dict[str, Any]:
+def annotations_geojson(
+    project_id: int,
+    limit: Optional[int] = None,
+    _current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
     _ensure_oracle_mode()
 
+    # `limit` is optional and defaults to "all", which is what the annotation
+    # page needs — it is drawing the project, so a partial set would be a bug
+    # there. The details drawer's preview map passes a cap instead, so opening
+    # a panel on a 5,000-annotation project doesn't pull every geometry CLOB
+    # just to sketch an outline.
+    params: Dict[str, Any] = {"project_id": project_id}
+    limit_sql = ""
+    if limit is not None:
+        params["limit"] = max(1, min(int(limit), 20000))
+        limit_sql = "FETCH FIRST :limit ROWS ONLY"
+
     rows = fetch_all(
-        "SELECT * FROM cat_annotations WHERE project_id = :project_id AND deleted_at IS NULL ORDER BY created_at ASC",
-        {"project_id": project_id},
+        f"""
+        SELECT a.*, creator.display_name AS creator_display_name, creator.username AS creator_username
+        FROM cat_annotations a
+        LEFT JOIN cat_users creator ON creator.user_id = a.created_by_user_id
+        WHERE a.project_id = :project_id AND a.deleted_at IS NULL
+        ORDER BY a.created_at ASC
+        {limit_sql}
+        """,
+        params,
     )
 
     features = []
@@ -1171,9 +1488,13 @@ def annotations_geojson(project_id: int) -> Dict[str, Any]:
         features.append(
             {
                 "type": "Feature",
-                "geometry": normalized.get("feature"),
+                # The bare geometry, not normalized["feature"] (a whole
+                # nested Feature) — see _normalize_annotation_row.
+                "geometry": normalized.get("geometry"),
                 "properties": {
                     "annotation_id": normalized.get("annotation_id"),
+                    "created_by_user_id": normalized.get("created_by_user_id"),
+                    "creator_display_name": normalized.get("creator_display_name") or normalized.get("creator_username"),
                     **(normalized.get("properties") or {}),
                 },
             }
@@ -1374,6 +1695,7 @@ def aggregate_annotations(project_ids: List[int]) -> Dict[str, Any]:
         "by_species": [],
         "by_condition": [],
         "by_shape_type": [],
+        "by_unrecognized_species": [],
         "total_area": {"value": 0.0, "unit": "relative", "computable_count": 0, "missing_count": 0},
         "total_length": {"value": 0.0, "unit": "relative", "computable_count": 0, "missing_count": 0},
         "missing_fields": {"spcode": 0, "con_1": 0},
@@ -1447,6 +1769,7 @@ def aggregate_annotations(project_ids: List[int]) -> Dict[str, Any]:
     species_counts: Dict[str, int] = {}
     condition_counts: Dict[str, int] = {}
     shape_counts: Dict[str, int] = {}
+    unrecognized_species_counts: Dict[str, int] = {}  # spcode present but not in cat_coral_species
     missing_spcode = 0
     missing_con1 = 0
     total_area_value = 0.0
@@ -1480,6 +1803,8 @@ def aggregate_annotations(project_ids: List[int]) -> Dict[str, Any]:
                     missing_spcode += 1
                 else:
                     species_counts[spcode] = species_counts.get(spcode, 0) + 1
+                    if spcode not in species_lookup:
+                        unrecognized_species_counts[spcode] = unrecognized_species_counts.get(spcode, 0) + 1
 
                 con1 = props.get("con_1")
                 if con1 is None or (isinstance(con1, str) and not con1.strip()):
@@ -1528,6 +1853,9 @@ def aggregate_annotations(project_ids: List[int]) -> Dict[str, Any]:
     by_shape_type = [{"shape_type": k, "count": c} for k, c in shape_counts.items()]
     by_shape_type.sort(key=lambda d: (-d["count"], str(d["shape_type"])))
 
+    by_unrecognized_species = [{"spcode": k, "count": c} for k, c in unrecognized_species_counts.items()]
+    by_unrecognized_species.sort(key=lambda d: (-d["count"], str(d["spcode"])))
+
     length_unit = "m" if geographic else "relative"
 
     return {
@@ -1535,6 +1863,10 @@ def aggregate_annotations(project_ids: List[int]) -> Dict[str, Any]:
         "by_species": by_species,
         "by_condition": by_condition,
         "by_shape_type": by_shape_type,
+        # spcode values that were present but don't match any row in
+        # cat_coral_species — likely typos/stale codes, a data-consistency
+        # signal distinct from "missing" (empty) spcode above.
+        "by_unrecognized_species": by_unrecognized_species,
         "total_area": {
             "value": round(total_area_value, 6),
             "unit": area_unit,
@@ -1552,7 +1884,7 @@ def aggregate_annotations(project_ids: List[int]) -> Dict[str, Any]:
 
 
 @router.get("/projects/{project_id}/report")
-def project_report(project_id: int) -> Dict[str, Any]:
+def project_report(project_id: int, _current_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
     _ensure_oracle_mode()
     project = fetch_one("SELECT * FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
     if not project:
@@ -1563,6 +1895,219 @@ def project_report(project_id: int) -> Dict[str, Any]:
         "project_name": project.get("project_name") or project.get("PROJECT_NAME"),
         **stats,
     }
+
+
+# ---------------------------------------------------------------------------
+# Multi-project export (region/year filtered) — CAT v10 roadmap item 2
+# ---------------------------------------------------------------------------
+
+def _resolve_export_project_ids(
+    project_ids_csv: Optional[str],
+    region: Optional[str],
+    year: Optional[int],
+    current_user: Dict[str, Any],
+    scope: Optional[str] = "all",
+) -> List[int]:
+    """Resolve which project ids an export/QC run covers: an explicit
+    comma-separated project_ids list takes priority over region/year
+    filters. Always intersected with the caller's visible projects (see
+    _visible_project_where) and with the Mine/All ownership scope (see
+    _scope_where — same "mine" = owned + collaborator rule the Project
+    Manager's own list uses). Defaults to "all" rather than "mine" so a
+    request that omits scope (an old bookmark, a script hitting the API
+    directly) keeps seeing what it always has; the QC and Export page UIs
+    pass scope explicitly."""
+    visible_where, params = _visible_project_where(current_user)
+    scope_sql, scope_params, _scope = _scope_where(scope, current_user)
+    params.update(scope_params)
+
+    base_conditions = [visible_where]
+    if scope_sql != "1=1":
+        base_conditions.append(scope_sql)
+
+    if project_ids_csv and project_ids_csv.strip():
+        try:
+            requested = [int(x) for x in project_ids_csv.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="project_ids must be a comma-separated list of integers")
+        if not requested:
+            return []
+        id_binds = {f"pid{i}": pid for i, pid in enumerate(requested)}
+        in_clause = ", ".join(f":{k}" for k in id_binds)
+        rows = fetch_all(
+            f"SELECT project_id FROM cat_projects WHERE project_id IN ({in_clause}) AND {' AND '.join(base_conditions)}",
+            {**id_binds, **params},
+        )
+        return [r["project_id"] for r in rows]
+
+    conditions = list(base_conditions)
+    if region and region.strip():
+        params["region"] = region.strip()
+        conditions.append("region = :region")
+    if year is not None:
+        params["year"] = year
+        conditions.append("year_num = :year")
+
+    rows = fetch_all(f"SELECT project_id FROM cat_projects WHERE {' AND '.join(conditions)}", params)
+    return [r["project_id"] for r in rows]
+
+
+def _fetch_export_annotations(ids: List[int]) -> Tuple[Dict[int, Dict[str, Any]], List[Dict[str, Any]]]:
+    """Shared fetch for both export formats: project id -> {name, region,
+    year} map, and every non-deleted annotation row (normalized) across the
+    given project ids."""
+    id_binds = {f"pid{i}": pid for i, pid in enumerate(ids)}
+    in_clause = ", ".join(f":{k}" for k in id_binds)
+
+    projects = fetch_all(
+        f"SELECT project_id, project_name, region, year_num FROM cat_projects WHERE project_id IN ({in_clause})",
+        id_binds,
+    )
+    project_by_id = {
+        p["project_id"]: {"name": p.get("project_name"), "region": p.get("region"), "year": p.get("year_num")}
+        for p in projects
+    }
+
+    rows = fetch_all(
+        f"SELECT * FROM cat_annotations WHERE project_id IN ({in_clause}) AND deleted_at IS NULL "
+        "ORDER BY project_id, created_at ASC",
+        id_binds,
+    )
+    return project_by_id, [_normalize_annotation_row(r) for r in rows]
+
+
+def _species_taxon_lookup() -> Dict[str, str]:
+    """spcode -> taxon_name map for CSV export enrichment. Empty on failure
+    (species table missing/unreachable) rather than aborting the export —
+    the taxon_name column just comes back blank."""
+    try:
+        return {
+            s.get("spcode"): s.get("taxon_name")
+            for s in fetch_all("SELECT spcode, taxon_name FROM cat_coral_species")
+            if s.get("spcode")
+        }
+    except Exception:
+        return {}
+
+
+@router.get("/projects/export/geojson")
+def export_projects_geojson(
+    project_ids: Optional[str] = None,
+    region: Optional[str] = None,
+    year: Optional[int] = None,
+    scope: Optional[str] = "all",
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Response:
+    """Combined GeoJSON export across one or more projects, selected either by
+    an explicit project_ids list or by region/year filter. Every feature
+    carries project_id/project_name in its properties so a multi-project
+    export stays attributable once downloaded. `scope` is the Mine/All
+    ownership filter (see _scope_where)."""
+    _ensure_oracle_mode()
+    ids = _resolve_export_project_ids(project_ids, region, year, current_user, scope)
+
+    features = []
+    if ids:
+        project_by_id, annotations = _fetch_export_annotations(ids)
+        for normalized in annotations:
+            pid = normalized.get("project_id")
+            proj = project_by_id.get(pid) or {}
+            features.append(
+                {
+                    "type": "Feature",
+                    # Bare geometry — normalized["feature"] is a whole
+                    # nested Feature and would make every exported feature's
+                    # geometry invalid GeoJSON (a Feature where a geometry
+                    # is expected), unreadable by QGIS/ArcGIS/geopandas.
+                    "geometry": normalized.get("geometry"),
+                    "properties": {
+                        "annotation_id": normalized.get("annotation_id"),
+                        "project_id": pid,
+                        "project_name": proj.get("name"),
+                        "project_region": proj.get("region"),
+                        "project_year": proj.get("year"),
+                        **(normalized.get("properties") or {}),
+                    },
+                }
+            )
+
+    payload = {
+        "type": "FeatureCollection",
+        "project_ids": ids,
+        "feature_count": len(features),
+        "features": features,
+    }
+    filename = f"cat_export_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.geojson"
+    return Response(
+        content=json.dumps(payload, default=_numpy_safe_json),
+        media_type="application/geo+json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/projects/export/csv")
+def export_projects_csv(
+    project_ids: Optional[str] = None,
+    region: Optional[str] = None,
+    year: Optional[int] = None,
+    scope: Optional[str] = "all",
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Response:
+    """Flat CSV export across one or more projects (same selection rules as
+    the GeoJSON export). One row per annotation; geometry is summarized as
+    its type only (full geometry belongs in the GeoJSON export, not a flat
+    table) plus a raw properties_json catch-all column for anything not
+    broken out into its own column. spcode is enriched with its taxon_name
+    from cat_coral_species so the CSV is usable without a separate species
+    lookup. `scope` is the Mine/All ownership filter (see _scope_where)."""
+    _ensure_oracle_mode()
+    import csv
+    import io
+
+    ids = _resolve_export_project_ids(project_ids, region, year, current_user, scope)
+    species_lookup = _species_taxon_lookup() if ids else {}
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "project_id", "project_name", "project_region", "project_year",
+        "annotation_id", "created_at", "geometry_type",
+        "spcode", "taxon_name", "con_1", "properties_json",
+    ])
+
+    if ids:
+        project_by_id, annotations = _fetch_export_annotations(ids)
+        for normalized in annotations:
+            pid = normalized.get("project_id")
+            proj = project_by_id.get(pid) or {}
+            props = normalized.get("properties") or {}
+            # Bare geometry, not the whole Feature — normalized["feature"]'s
+            # own "type" is always the literal string "Feature", which is
+            # what made the geometry_type column below read "Feature" for
+            # every single row ever exported instead of Polygon/LineString/
+            # Point.
+            geom = normalized.get("geometry") or {}
+            spcode = props.get("spcode")
+            writer.writerow([
+                pid,
+                proj.get("name"),
+                proj.get("region"),
+                proj.get("year"),
+                normalized.get("annotation_id"),
+                normalized.get("created_at"),
+                geom.get("type") if isinstance(geom, dict) else None,
+                spcode,
+                species_lookup.get(spcode) if spcode else None,
+                props.get("con_1"),
+                json.dumps(props, default=_numpy_safe_json),
+            ])
+
+    filename = f"cat_export_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/projects/{project_id}/overlay-layers")
@@ -1604,7 +2149,7 @@ def create_overlay_layer(
 
 
 @router.get("/projects/{project_id}/overlay-layers")
-def list_overlay_layers(project_id: int) -> Dict[str, Any]:
+def list_overlay_layers(project_id: int, _current_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
     _ensure_oracle_mode()
 
     rows = fetch_all(
@@ -1885,7 +2430,9 @@ def create_overlay_feature(
 
 
 @router.get("/projects/{project_id}/overlay-layers/{layer_id}/features")
-def list_overlay_features(project_id: int, layer_id: int) -> Dict[str, Any]:
+def list_overlay_features(
+    project_id: int, layer_id: int, _current_user: Dict[str, Any] = Depends(require_auth)
+) -> Dict[str, Any]:
     _ensure_oracle_mode()
 
     layer = fetch_one(
@@ -2345,7 +2892,7 @@ def update_overlay_layer(
     payload: Dict[str, Any],
     _current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
-    """Update overlay layer metadata (name, style, is_active, display_order)"""
+    """Update overlay layer metadata (name, style, is_active, display_order, is_locked)"""
     _ensure_oracle_mode()
 
     # Verify layer exists and belongs to project
@@ -2379,6 +2926,10 @@ def update_overlay_layer(
     if "layer_type" in payload:
         update_fields.append("layer_type = :layer_type")
         params["layer_type"] = payload["layer_type"]
+
+    if "is_locked" in payload:
+        update_fields.append("is_locked = :is_locked")
+        params["is_locked"] = 1 if payload["is_locked"] else 0
 
     if not update_fields:
         return {"success": True, "message": "No fields to update"}
@@ -2424,13 +2975,14 @@ def update_overlay_feature(
     layer_id: int,
     feature_id: int,
     payload: Dict[str, Any],
-    _current_user: Dict[str, Any] = Depends(require_auth),
+    current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
     """Update an overlay feature's geometry and/or properties.
-    
+
     Accepts JSON body with optional keys:
       - feature: GeoJSON geometry object (or full Feature)
       - properties: dict of updated properties
+      - is_locked: 0/1 — lock gate for move/rotate/vertex-edit on this feature
     """
     _ensure_oracle_mode()
 
@@ -2469,6 +3021,18 @@ def update_overlay_feature(
         update_fields.append("properties_json = :properties_json")
         params["properties_json"] = json.dumps(payload["properties"])
 
+    if "is_locked" in payload:
+        is_locked = 1 if payload["is_locked"] else 0
+        update_fields.append("is_locked = :is_locked")
+        params["is_locked"] = is_locked
+        if is_locked:
+            update_fields.append("locked_by_user_id = NULL")
+            update_fields.append("locked_at = NULL")
+        else:
+            update_fields.append("locked_by_user_id = :locked_by_user_id")
+            update_fields.append("locked_at = CURRENT_TIMESTAMP")
+            params["locked_by_user_id"] = current_user.get("user_id")
+
     if not update_fields:
         return {"success": True, "message": "No fields to update"}
 
@@ -2476,6 +3040,109 @@ def update_overlay_feature(
     execute(sql, params)
 
     return {"success": True, "feature_id": feature_id, "message": "Feature updated"}
+
+
+@router.put("/projects/{project_id}/overlay-layers/{layer_id}/features/{feature_id}/width")
+def resize_overlay_feature_width(
+    project_id: int,
+    layer_id: int,
+    feature_id: int,
+    payload: OverlayFeatureResizeRequest,
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Recompute a segment's rectangle at a new width, keeping its centerline
+    (the transect chord it was buffered from) fixed in place. This is the
+    "resize" affordance for segments — hand-dragging the buffer polygon's own
+    vertices (there can be 100+) is what used to crash the tab, and a
+    vertex was never individually meaningful anyway since it's mechanically
+    derived from the transect line + a width. Only supported for features
+    carrying a Width_m property (segments produced by generate-transect) —
+    the corner order is relied on to identify the width edges (corners[0]-
+    corners[3] and corners[1]-corners[2], per _build_transect_geometry's
+    construction order, which our own move/rotate code preserves)."""
+    _ensure_oracle_mode()
+    _require_project_role(project_id, current_user, "editor")
+
+    if payload.width_m <= 0:
+        raise HTTPException(status_code=400, detail="Width must be greater than 0")
+
+    row = fetch_one(
+        """
+        SELECT f.* FROM cat_overlay_features f
+        JOIN cat_overlay_layers l ON f.layer_id = l.layer_id
+        WHERE l.project_id = :project_id AND f.layer_id = :layer_id AND f.feature_id = :feature_id
+        """,
+        {"project_id": project_id, "layer_id": layer_id, "feature_id": feature_id},
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Overlay feature not found")
+
+    geom_dict = _parse_json_field(row.get("feature_geojson"), default=None)
+    props = _parse_json_field(row.get("properties_json"), default={}) or {}
+    if not geom_dict or "Width_m" not in props:
+        raise HTTPException(status_code=400, detail="This feature isn't a resizable segment (no Width_m)")
+
+    geometry = geom_dict.get("geometry") if geom_dict.get("type") == "Feature" else geom_dict
+    coords = (geometry or {}).get("coordinates")
+    if not geometry or geometry.get("type") != "Polygon" or not coords or len(coords[0]) < 5:
+        raise HTTPException(status_code=400, detail="Feature geometry isn't a resizable rectangle")
+
+    ring = coords[0]
+    c0, c1, c2, c3 = ring[0], ring[1], ring[2], ring[3]
+
+    try:
+        import math
+        from pyproj import Transformer
+        from shapely.geometry import Polygon, mapping
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"Missing required package: {exc}")
+
+    utm_epsg = _utm_epsg_for_lonlat(c0[0], c0[1])
+    to_utm = Transformer.from_crs(4326, utm_epsg, always_xy=True)
+    to_wgs84 = Transformer.from_crs(utm_epsg, 4326, always_xy=True)
+
+    u0, u1, u2, u3 = (to_utm.transform(x, y) for (x, y) in (c0, c1, c2, c3))
+
+    def midpoint(a, b):
+        return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+
+    start = midpoint(u0, u3)
+    end = midpoint(u1, u2)
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    chord_len = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / chord_len, dy / chord_len
+    px, py = -uy, ux  # perpendicular unit vector
+
+    half_w = payload.width_m / 2.0
+    new_corners_utm = [
+        (start[0] + px * half_w, start[1] + py * half_w),
+        (end[0] + px * half_w, end[1] + py * half_w),
+        (end[0] - px * half_w, end[1] - py * half_w),
+        (start[0] - px * half_w, start[1] - py * half_w),
+    ]
+    new_corners_wgs = [to_wgs84.transform(cx, cy) for cx, cy in new_corners_utm]
+    polygon = Polygon(new_corners_wgs + [new_corners_wgs[0]])
+
+    new_props = {**props, "Width_m": payload.width_m, "Area_m2": round(chord_len * payload.width_m, 3)}
+    new_feature_geojson = {"type": "Feature", "geometry": mapping(polygon), "properties": new_props}
+
+    execute(
+        "UPDATE cat_overlay_features SET feature_geojson = :feature_geojson, properties_json = :properties_json WHERE feature_id = :feature_id",
+        {
+            "feature_geojson": json.dumps(new_feature_geojson),
+            "properties_json": json.dumps(new_props),
+            "feature_id": feature_id,
+        },
+    )
+
+    return {
+        "success": True,
+        "feature": {
+            "feature_id": feature_id,
+            "feature": new_feature_geojson,
+            "properties": new_props,
+        },
+    }
 
 
 @router.put("/projects/{project_id}/overlay-layers/reorder")
@@ -2508,7 +3175,9 @@ def reorder_overlay_layers(
 
 
 @router.post("/projects/{project_id}/sessions/start")
-def start_session(project_id: int, payload: SessionStart) -> Dict[str, Any]:
+def start_session(
+    project_id: int, payload: SessionStart, _current_user: Dict[str, Any] = Depends(require_auth)
+) -> Dict[str, Any]:
     _ensure_oracle_mode()
 
     project = fetch_one("SELECT project_id FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
@@ -2553,7 +3222,9 @@ def start_session(project_id: int, payload: SessionStart) -> Dict[str, Any]:
 
 
 @router.put("/projects/{project_id}/sessions/{session_id}")
-def update_session(project_id: int, session_id: int, payload: SessionUpdate) -> Dict[str, Any]:
+def update_session(
+    project_id: int, session_id: int, payload: SessionUpdate, _current_user: Dict[str, Any] = Depends(require_auth)
+) -> Dict[str, Any]:
     _ensure_oracle_mode()
 
     session = fetch_one(
@@ -2592,7 +3263,9 @@ def update_session(project_id: int, session_id: int, payload: SessionUpdate) -> 
 
 
 @router.post("/projects/{project_id}/sessions/{session_id}/end")
-def end_session(project_id: int, session_id: int) -> Dict[str, Any]:
+def end_session(
+    project_id: int, session_id: int, _current_user: Dict[str, Any] = Depends(require_auth)
+) -> Dict[str, Any]:
     _ensure_oracle_mode()
 
     session = fetch_one(
@@ -2623,7 +3296,9 @@ def end_session(project_id: int, session_id: int) -> Dict[str, Any]:
 
 
 @router.post("/projects/{project_id}/sessions/{session_id}/heartbeat")
-def session_heartbeat(project_id: int, session_id: int) -> Dict[str, Any]:
+def session_heartbeat(
+    project_id: int, session_id: int, _current_user: Dict[str, Any] = Depends(require_auth)
+) -> Dict[str, Any]:
     """Keep a session alive — call every ~5 minutes to prevent stale-session cleanup (4c)."""
     _ensure_oracle_mode()
 
@@ -2639,7 +3314,9 @@ def session_heartbeat(project_id: int, session_id: int) -> Dict[str, Any]:
 
 
 @router.get("/projects/{project_id}/sessions/stats")
-def session_stats(project_id: int, username: Optional[str] = None) -> Dict[str, Any]:
+def session_stats(
+    project_id: int, username: Optional[str] = None, _current_user: Dict[str, Any] = Depends(require_auth)
+) -> Dict[str, Any]:
     _ensure_oracle_mode()
 
     if username:

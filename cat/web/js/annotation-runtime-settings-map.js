@@ -9,7 +9,9 @@
     }
 
     function _applySettings(s) {
-      if (typeof map === 'undefined') return;
+      // `map` is null until the map is built, and in a popout window it is a
+      // deliberate no-op stub — neither has anything to configure.
+      if (typeof map === 'undefined' || !map || !map.options) return;
       map.options.zoomDelta = s.zoomDelta;
       map.options.zoomSnap  = s.zoomDelta;
       if (map.scrollWheelZoom && map.scrollWheelZoom._wheelSpeedFactor !== undefined) {

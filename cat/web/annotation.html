@@ -11,6 +11,9 @@
   <link rel="stylesheet" href="css/annotation-panels.css" />
   <link rel="stylesheet" href="css/annotation-controls.css" />
   <link rel="stylesheet" href="css/annotation-v2.css" />
+  <!-- Layers sidebar (v12) — must load after annotation-panels.css, whose
+       floating .layer-control geometry it overrides in docked mode. -->
+  <link rel="stylesheet" href="css/annotation-sidebar.css" />
   <!-- Popout mode detection — must run before any runtime scripts -->
   <script src="js/annotation-popout-boot.js"></script>
   <script src="/vendor/leaflet/leaflet.js"></script>
@@ -54,8 +57,14 @@
         <div class="nav-dropdown" data-dropdown="view">
           <button class="nav-dropdown-btn" onclick="toggleNavDropdown('view')">View <span class="caret">▾</span></button>
           <div class="nav-dropdown-menu dd-menu-left" id="dd-view">
+            <div class="dd-label">Layers Sidebar</div>
+            <button class="dd-item" onclick="if(typeof catLayersToggleSidebar==='function') catLayersToggleSidebar(); closeNavDropdowns();">▤ Show/Hide Layers Sidebar</button>
+            <button class="dd-item" id="ddLayersDockToggle" onclick="if(typeof catLayersToggleDockMode==='function') catLayersToggleDockMode(); closeNavDropdowns();">🪟 Float Layers Panel</button>
+            <div class="dd-divider"></div>
+            <div class="dd-label">Annotation Panel</div>
             <button class="dd-item" onclick="toggleLayoutMode(); closeNavDropdowns();" id="ddLayoutToggle">⬛ Dock Right</button>
             <button class="dd-item" onclick="openAnnotationPopout(); closeNavDropdowns();"><svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#external-link"/></svg> Pop Out Panel</button>
+            <div class="dd-divider"></div>
             <button class="dd-item" onclick="document.getElementById('toggleLabels').click(); closeNavDropdowns();">🏷️ Toggle Labels</button>
             <button class="dd-item" onclick="if(typeof refreshAnnotations==='function') refreshAnnotations(); closeNavDropdowns();">🔄 Refresh Annotations</button>
             <button class="dd-item" onclick="if(typeof openBookmarksModal==='function') openBookmarksModal(); closeNavDropdowns();"><svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#bookmark"/></svg> Bookmarks</button>
@@ -233,6 +242,12 @@
             <input type="checkbox" id="toggleLabels" onchange="toggleAnnotationLabels(this.checked)" class="inline-checkbox" checked>
             <span>Show Species Labels</span>
           </label>
+        </div>
+        <div class="opacity-control opacity-control-spaced" id="annotationContributorsSection" style="display:none;">
+          <label style="display:block; margin-bottom:4px;">By Contributor</label>
+          <div id="annotationContributorsContainer">
+            <!-- Per-contributor visibility checkboxes injected by buildContributorVisibilityPanel() -->
+          </div>
         </div>
       </div>
     </div>
@@ -735,6 +750,7 @@
   <script src="js/annotation-runtime-shell-init.js"></script>
   <script src="js/annotation-runtime-layer-controls.js"></script>
   <script src="js/annotation-runtime-panel-ui.js"></script>
+  <script src="js/annotation-runtime-layers-sidebar.js"></script>
   <script src="js/annotation-runtime-symbology.js"></script>
   <script src="js/annotation-runtime-measure.js"></script>
   <script src="js/annotation-runtime-snapping.js"></script>
@@ -813,6 +829,14 @@
       </div>
       <!-- Body -->
       <div class="settings-modal-body">
+        <!-- Show/hide the badge entirely -->
+        <label class="settings-toggle-row">
+          <div>
+            <div class="settings-toggle-row-title">👁️ Show timer</div>
+            <div class="settings-toggle-row-sub">Display the timer badge in the toolbar. Turn off if you'd rather not see it ticking — time is still tracked either way.</div>
+          </div>
+          <input type="checkbox" id="tsShowTimer" checked class="settings-checkbox">
+        </label>
         <!-- Auto-start -->
         <label class="settings-toggle-row">
           <div>

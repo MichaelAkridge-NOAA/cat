@@ -189,6 +189,15 @@
   background: var(--cat-primary);
 }
 
+/* Drag-the-top-edge only makes sense for the floating bottom bar. Docked
+   right the panel is a full-height column (height:100vh) whose width is
+   adjusted by #layout-resize-handle instead, so this handle would offer a
+   drag that changes nothing; in a popout the panel fills the window. */
+body.layout-docked .annotation-panel .resize-handle,
+html.cat-popout-panel .annotation-panel .resize-handle {
+  display: none;
+}
+
 /* Table height control buttons */
 .table-size-controls {
   display: flex;

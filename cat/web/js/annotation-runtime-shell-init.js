@@ -333,7 +333,14 @@
       fitBounds: ()=>{}, setView: ()=>{}, setZoom: ()=>{},
       getBounds: ()=>null, getCenter: ()=>({lat:0,lng:0}), getZoom: ()=>2,
       getPane: ()=>null, createPane: ()=>{}, getContainer: ()=>null,
-      invalidateSize: ()=>{}, panTo: ()=>{},
+      invalidateSize: ()=>{}, panTo: ()=>{}, closePopup: ()=>{},
+      // Every real L.Map has an `options` bag, and code that tweaks map
+      // behaviour writes straight into it (annotation-runtime-settings-map.js
+      // does `map.options.zoomDelta = ...` on load). Omitting it made that an
+      // uncaught TypeError on every popout open, which aborted the rest of that
+      // module's init — so the popout was throwing before it finished booting.
+      options: {},
+      scrollWheelZoom: null,
       _panes: {}, _layers: {}
     } : null;
     let drawnItems = {
@@ -781,6 +788,10 @@
         console.log('⌨️ ESC pressed - discarding unsaved annotation');
         drawnItems.removeLayer(currentAnnotation.layer);
         currentAnnotation = null;
+        // An open popout is still holding this geometry in its form; without
+        // this it would happily save an annotation for a shape that no longer
+        // exists on the map.
+        if (window._catChannel) window._catChannel.postMessage({ type: 'shape-discarded' });
         // Clear form fields (preserve session fields)
         ['transect','segment','seglength','segwidth','no_colony','spcode','juvenile',
          'juv_substrate','remnant','morph_code','ex_bound','olddead',
@@ -806,6 +817,8 @@
         console.log('🧹 Discarding unsaved annotation via button');
         drawnItems.removeLayer(currentAnnotation.layer);
         currentAnnotation = null;
+        // Keep an open popout's form from saving the shape we just threw away.
+        if (window._catChannel) window._catChannel.postMessage({ type: 'shape-discarded' });
         // Clear per-annotation form fields (preserve session fields)
         ['transect','segment','seglength','segwidth','no_colony','spcode','juvenile',
          'juv_substrate','remnant','morph_code','ex_bound','olddead',

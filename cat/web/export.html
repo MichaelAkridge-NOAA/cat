@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CAT: Export Data</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1.0, width=device-width">
+  <link rel="stylesheet" href="css/cat-theme.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--cat-font);
+      background: var(--cat-surface-alt);
+      color: var(--cat-ink);
+      min-height: 100vh;
+    }
+
+    .header-band { color: #fff; padding: 40px 20px; }
+    .header-inner { max-width: 1100px; margin: 0 auto; display: flex; align-items: center; gap: 24px; }
+    .header-inner img { width: 88px; height: 88px; object-fit: contain; flex-shrink: 0; }
+    .brand { display: flex; flex-direction: column; gap: 4px; }
+    .brand .acronym { font-size: 36px; font-weight: 800; line-height: 1; letter-spacing: -0.5px; }
+    .brand .full-name { font-size: 18px; font-weight: 600; opacity: 0.95; }
+    .brand .tagline { font-size: 13px; opacity: 0.8; margin-top: 6px; line-height: 1.5; max-width: 560px; }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 32px 20px 20px; }
+
+    .export-filters {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: var(--cat-space-3);
+      margin-bottom: var(--cat-space-4);
+      padding: var(--cat-space-3);
+      background: var(--cat-surface);
+      border: 1px solid var(--cat-border);
+      border-radius: var(--cat-radius);
+    }
+    .export-field { display: flex; flex-direction: column; gap: 4px; min-width: 160px; }
+    .export-field label { font-size: 12px; color: var(--cat-ink-soft); text-transform: uppercase; letter-spacing: 0.4px; }
+    .export-field select {
+      padding: 7px 10px; border: 1px solid var(--cat-border); border-radius: var(--cat-radius);
+      background: var(--cat-surface); color: var(--cat-ink); font-size: 13px; min-width: 160px;
+    }
+
+    .export-titlebar {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+      gap: var(--cat-space-3); margin-bottom: var(--cat-space-3);
+    }
+    .export-titlebar h2 { font-size: 18px; font-weight: 700; }
+    .export-actions { display: flex; gap: var(--cat-space-2); flex-wrap: wrap; }
+
+    .export-list-controls {
+      display: flex; align-items: center; gap: var(--cat-space-3); margin-bottom: var(--cat-space-2);
+      font-size: 13px; color: var(--cat-ink-soft);
+    }
+    .export-list-controls label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+
+    .export-table-wrap {
+      background: var(--cat-surface); border: 1px solid var(--cat-border); border-radius: var(--cat-radius);
+      overflow: hidden; margin-bottom: var(--cat-space-4);
+    }
+    table.export-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.export-table th, table.export-table td {
+      text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--cat-border);
+    }
+    table.export-table th {
+      color: var(--cat-ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;
+      background: var(--cat-surface-alt);
+    }
+    table.export-table tbody tr:last-child td { border-bottom: none; }
+    table.export-table tbody tr:hover { background: var(--cat-surface-alt); }
+    td.checkbox-cell, th.checkbox-cell { width: 34px; }
+
+    #exportEmpty, #exportError {
+      font-size: 14px; color: var(--cat-ink-soft); text-align: center;
+      padding: var(--cat-space-5) var(--cat-space-3);
+    }
+    #exportError { color: var(--cat-error); }
+
+    .export-note {
+      font-size: 12px; color: var(--cat-ink-soft); margin-top: var(--cat-space-2);
+    }
+  </style>
+</head>
+<body>
+  <div class="header-band">
+    <div class="header-inner">
+      <img src="/logo2.png" alt="CAT Logo">
+      <div class="brand">
+        <span class="acronym">CAT</span>
+        <span class="full-name">Export Data</span>
+        <span class="tagline">Download annotation data for one or more projects, filtered by region and/or year.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <main>
+      <div class="export-filters">
+        <div class="export-field">
+          <label for="exportRegion">Region</label>
+          <select id="exportRegion"><option value="">All regions</option></select>
+        </div>
+        <div class="export-field">
+          <label for="exportYear">Year</label>
+          <select id="exportYear"><option value="">All years</option></select>
+        </div>
+        <div class="export-field">
+          <label for="exportScope">Show</label>
+          <select id="exportScope">
+            <option value="mine" selected>My projects (owned + shared with me)</option>
+            <option value="all">All projects</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="export-titlebar">
+        <h2>Projects</h2>
+        <div class="export-actions">
+          <button id="exportGeojsonBtn" class="cat-btn cat-btn--primary" type="button">
+            <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#download"/></svg> Export GeoJSON
+          </button>
+          <button id="exportCsvBtn" class="cat-btn cat-btn--outline" type="button">
+            <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#download"/></svg> Export CSV
+          </button>
+        </div>
+      </div>
+
+      <div id="exportError" style="display:none;"></div>
+
+      <div class="export-list-controls">
+        <label><input type="checkbox" id="exportSelectAll"> Select all shown</label>
+        <span id="exportSelectedCount">0 selected</span>
+      </div>
+
+      <div class="export-table-wrap">
+        <table class="export-table">
+          <thead>
+            <tr>
+              <th class="checkbox-cell"></th>
+              <th>Project</th>
+              <th>Region</th>
+              <th>Year</th>
+              <th>Owner</th>
+            </tr>
+          </thead>
+          <tbody id="exportProjectRows"></tbody>
+        </table>
+        <div id="exportEmpty" style="display:none;">No projects match these filters.</div>
+      </div>
+
+      <p class="export-note">
+        Leave every project unchecked to export by the Region/Year filters above (covers every matching project you
+        can see, not just the ones currently listed). Check one or more projects to export exactly those, regardless
+        of filters.
+      </p>
+    </main>
+
+    <footer class="cat-footer">
+      <p><strong>CAT: Coral Annotation Tool</strong> — NOAA Pacific Islands Fisheries Science Center, Ecosystem Sciences Division.</p>
+      <p>This application is a scientific product and is not official communication of the National Oceanic and
+         Atmospheric Administration or the United States Department of Commerce. All NOAA project content is
+         provided on an "as is" basis, and the user assumes responsibility for its use.</p>
+      <p><a href="https://github.com/MichaelAkridge-NOAA/cat">Source repository</a> ·
+         <a href="/docs">API documentation</a></p>
+    </footer>
+  </div>
+
+  <script src="js/cat-nav.js"></script>
+  <script src="js/cat-auth.js"></script>
+  <script>
+    if (window.CatAuth) { CatAuth.requireLogin(); }
+  </script>
+  <script src="js/export.js"></script>
+</body>
+</html>

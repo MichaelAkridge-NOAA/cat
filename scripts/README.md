@@ -206,3 +206,48 @@ python -m cat.scripts.make_cog \
   gcloud auth login
   gcloud auth application-default login
   ```
+
+---
+
+## Database Backup
+
+### backup_to_gcs.sh
+
+Full backup of the CAT Oracle schema (Data Pump `.dmp` export), raw Oracle
+datafiles, config, and reference CSVs — uploaded to a GCS bucket. Run by
+hand from the host (needs Docker + `gsutil`):
+
+```bash
+./scripts/backup_to_gcs.sh -b gs://my-bucket
+```
+
+See the script's own header comment for the full option list and restore
+steps (`impdp`).
+
+### schedule_backup_cron.sh
+
+Registers (or removes) a cron job on the current host that runs
+`backup_to_gcs.sh` unattended on a schedule, logging to
+`backups/cron_backup.log`. It only ever manages one crontab line (tagged
+`# cat-backup-cron`) — nothing else in your crontab is touched.
+
+```bash
+# Install a daily 02:00 backup
+./scripts/schedule_backup_cron.sh install -b gs://my-bucket
+
+# Custom schedule (5-field cron syntax)
+./scripts/schedule_backup_cron.sh install -b gs://my-bucket --cron "0 3 * * 0"
+
+# Preview the crontab line without installing it
+./scripts/schedule_backup_cron.sh install -b gs://my-bucket --dry-run
+
+# Check whether it's installed + recent log output
+./scripts/schedule_backup_cron.sh status
+
+# Remove it
+./scripts/schedule_backup_cron.sh uninstall
+```
+
+For unattended runs to actually succeed, `.env` needs `ORACLE_PASSWORD` set
+(cron has no TTY to prompt for it) and `gsutil` needs to already be
+authenticated for whichever user's crontab this installs into.

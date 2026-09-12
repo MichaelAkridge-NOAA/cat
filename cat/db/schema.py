@@ -719,6 +719,88 @@ DDL_BLOCKS: List[str] = [
     ON (dst.migration_id = src.mid)
     WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
     """,
+    # -----------------------------------------------------------------
+    # Lock gate for overlay transect/segment geometry editing.
+    # Both features AND layers default LOCKED (is_locked=1) so every
+    # existing row becomes locked on migration and every existing insert
+    # path inherits the locked-by-default behavior with no code changes.
+    # A stray Ctrl+drag must not be able to bulk-move an entire layer any
+    # more than a plain drag should move one feature — the layer-level
+    # lock requires the same deliberate one-click unlock before Ctrl+drag
+    # does anything.
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_overlay_features ADD (is_locked NUMBER(1) DEFAULT 1 NOT NULL)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_overlay_features ADD (locked_by_user_id NUMBER)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_overlay_features ADD (locked_at TIMESTAMP)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_overlay_layers ADD (is_locked NUMBER(1) DEFAULT 1 NOT NULL)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0012' AS mid, 'Overlay lock gate: is_locked (+locked_by_user_id/locked_at) on cat_overlay_features, is_locked on cat_overlay_layers (both default locked)' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
+    # -----------------------------------------------------------------
+    # Add a 'team_lead' global role, alongside the existing 'admin' and
+    # 'annotator'. team_lead is a read/export elevated tier (see
+    # _visible_project_where / _get_effective_project_role in
+    # db_projects.py) — it does NOT gain admin's edit-everything or
+    # user-management powers. Widening a CHECK constraint in Oracle means
+    # drop + re-add; both sides tolerate "already done" re-runs (ORA-02443
+    # = constraint doesn't exist, on the drop; a duplicate-name error on
+    # the re-add would only happen if some other migration path already
+    # created a constraint by this name with different rules, which none
+    # does).
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_users DROP CONSTRAINT ck_cat_users_role';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -2443 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[ALTER TABLE cat_users ADD CONSTRAINT ck_cat_users_role CHECK (role IN ('admin', 'team_lead', 'annotator'))]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE NOT IN (-2264, -2265) THEN RAISE; END IF;
+    END;
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0013' AS mid, 'Add team_lead global role (widen ck_cat_users_role); open read-access baseline for all authenticated users' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
 ]
 
 

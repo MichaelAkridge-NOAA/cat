@@ -258,7 +258,12 @@
       // Also add drag-resize handle to annotation panel
       const panel = document.getElementById('annotationFormPanel');
       if (panel && !panel.querySelector('.resize-handle')) {
-        panel.style.position = 'absolute'; // ensure positioning
+        // Deliberately NOT setting panel.style.position here. `.annotation-panel`
+        // is already position:absolute in annotation-panels.css, so the inline
+        // write was redundant in the default float layout — and because inline
+        // styles beat stylesheets it permanently defeated the two layouts that
+        // reposition the panel: dock-right's position:fixed, and the popout's
+        // position:static (which only survived by shouting !important at it).
         const handle = document.createElement('div');
         handle.className = 'resize-handle';
         handle.title = 'Drag to resize';
@@ -1049,7 +1054,29 @@
     });
   }
 
+  // Bulk/lasso selection only ever surfaced as a table-row highlight — while
+  // dragging a lasso on the map (table not visible), there was no way to see
+  // what got picked. DOM-level styling (not layer.setStyle) so it can't be
+  // clobbered by the opacity/line-width sliders, which unconditionally
+  // restyle every layer.
+  function _syncMapSelectionHighlight() {
+    if (typeof drawnItems === 'undefined' || typeof annotations === 'undefined') return;
+    // Index once per call instead of annotations.indexOf() per layer inside
+    // eachLayer — that's O(layers * annotations), which gets very slow on
+    // large projects since this runs on every selection change.
+    const idxByData = new Map();
+    annotations.forEach((a, i) => idxByData.set(a, i));
+    drawnItems.eachLayer(layer => {
+      if (!layer.annotationData) return;
+      const idx = idxByData.get(layer.annotationData);
+      const selected = idx !== undefined && selectedRows.has(idx);
+      const el = layer._path || layer._icon;
+      if (el) el.style.filter = selected ? 'drop-shadow(0 0 3px #3b82f6) drop-shadow(0 0 3px #3b82f6)' : '';
+    });
+  }
+
   function updateSelectionUI() {
+    _syncMapSelectionHighlight();
     const bar = document.getElementById('v2SelectionBar');
     if (!bar) return;
     const count = selectedRows.size;

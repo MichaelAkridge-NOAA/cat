@@ -93,6 +93,35 @@
       }
     }
     
+    // Reveal the timer badge in its resting ("not started yet") state,
+    // without starting the clock. Called once a project has finished
+    // loading (see the project-load poller in annotation-runtime-settings-
+    // app.js) so the timer is visible and clickable from the moment
+    // there's something to time — previously the badge stayed
+    // display:none (its inline default in annotation.html) until EITHER
+    // auto-start was on, or an annotation was drawn (which auto-starts it
+    // via shell-init.js), meaning with auto-start off there was no way to
+    // discover the control or start it manually before drawing something.
+    function showIdleTimerBadge() {
+      if (timerState.isRunning) return; // already running/paused — leave its look alone
+      // Respect the "Show timer" setting (Settings -> Timer): a project
+      // load shouldn't override someone who's explicitly opted out of
+      // seeing the badge at all.
+      if (window._timerSettings && window._timerSettings.showTimer === false) return;
+      const timerBadge = document.getElementById('annotationTimer');
+      if (!timerBadge) return;
+      timerBadge.style.display = 'inline-block';
+      // Explicit neutral/grey — .timer-badge's own CSS default is the same
+      // green startTimer() uses for "running", so falling back to it here
+      // would make idle and running indistinguishable at a glance.
+      timerBadge.style.background = 'rgba(0, 0, 0, 0.06)';
+      timerBadge.style.color = 'var(--cat-ink-soft, #6c757d)';
+      timerBadge.title = 'Click to start timer';
+      const display = document.getElementById('timerDisplay');
+      if (display) display.textContent = formatTime(0);
+    }
+    window.showIdleTimerBadge = showIdleTimerBadge;
+
     function startTimer() {
       // Task A2 Step 4: this is the existing isRunning guard that makes
       // startTimer() idempotent against the double auto-start mechanism
@@ -150,8 +179,13 @@
       timerState.totalPauseSeconds = 0;
       
       console.log('⏱️ Timer started (file mode)');
-      
-      timerBadge.style.display = 'inline-block';
+
+      // Respect "Show timer" (Settings -> Timer): starting the clock still
+      // starts the clock even for someone who's opted out of seeing it —
+      // this only decides whether the badge itself is drawn.
+      if (!window._timerSettings || window._timerSettings.showTimer !== false) {
+        timerBadge.style.display = 'inline-block';
+      }
       timerBadge.style.background = 'rgba(40, 167, 69, 0.1)';
       timerBadge.style.color = '#28a745';
       timerBadge.title = 'Click to pause timer';

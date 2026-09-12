@@ -43,6 +43,15 @@ from cat.api.sites import router as sites_router
 # Import raster derivative tools (hillshade, slope, zonal statistics)
 from cat.api.raster_tools import router as raster_tools_router
 
+# Import shapefile -> annotation import (used by the Project Manager create flow)
+from cat.api.annotation_import import router as annotation_import_router
+
+# Import COG thumbnail rendering (project cards, site browser)
+from cat.api.thumbnails import router as thumbnails_router
+
+# Shared GDAL settings for every COG read (tiles and thumbnails alike)
+from cat.gdal_env import GCS_GDAL_ENV
+
 # Import Oracle DB project API (optional backend)
 try:
     from cat.api.db_projects import router as db_projects_router
@@ -297,27 +306,35 @@ app.include_router(coral_router)
 
 # Include sites reference routes
 app.include_router(sites_router)
-print("âœ… Sites reference API enabled at /api/sites/*")
+print("✅ Sites reference API enabled at /api/sites/*")
 
 # Include raster derivative tools (hillshade, slope, zonal statistics)
 app.include_router(raster_tools_router)
-print("âœ… Raster tools API enabled at /api/raster/*")
+print("✅ Raster tools API enabled at /api/raster/*")
+
+# Include shapefile -> annotation import used by the Project Manager create flow
+app.include_router(annotation_import_router)
+print("✅ Annotation import API enabled at /api/annotations/*")
+
+# Include COG thumbnail rendering (project cards, site browser)
+app.include_router(thumbnails_router)
+print("✅ Thumbnail API enabled at /api/thumbnails/*")
 
 # Include file-based project routes
 app.include_router(file_projects_router)
-print("âœ… File-based project API enabled at /api/file-projects/*")
+print("✅ File-based project API enabled at /api/file-projects/*")
 
 # Include DB project routes
 if DB_API_AVAILABLE:
     app.include_router(db_projects_router)
-    print("âœ… DB project API enabled at /api/db/*")
+    print("✅ DB project API enabled at /api/db/*")
 
 # Include user login/session routes (Oracle mode only)
 if AUTH_API_AVAILABLE:
     app.include_router(auth_router)
-    print("âœ… Auth API enabled at /api/auth/*")
+    print("✅ Auth API enabled at /api/auth/*")
 else:
-    print("â„¹ï¸ DB project API not available")
+    print("ℹ️ DB project API not available")
 
 # Include segmentation (SAM3) routes
 if SEGMENTATION_API_AVAILABLE:
@@ -376,14 +393,9 @@ async def prepend_data_path_middleware(request: Request, call_next):
 # Create a TilerFactory for Cloud-Optimized GeoTIFFs
 # Pass GDAL settings via environment_dependency so they are active inside
 # every rasterio.Env() context that titiler creates per-request.
-_GCS_GDAL_ENV = {
-    "GS_NO_SIGN_REQUEST": "YES",               # read public GCS buckets without credentials
-    "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
-    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
-    "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.geotiff",
-    "GDAL_HTTP_MULTIPLEX": "YES",
-    "GDAL_HTTP_VERSION": "2",
-}
+# Shared with the thumbnail renderer (cat/api/thumbnails.py) via cat.gdal_env,
+# so both COG readers use one set of GDAL settings.
+_GCS_GDAL_ENV = GCS_GDAL_ENV
 
 cog = TilerFactory(environment_dependency=lambda: _GCS_GDAL_ENV)
 
@@ -619,6 +631,22 @@ def read_report():
     if report_file.exists():
         return report_file.read_text(encoding="utf-8")
     return "<h1>Report page not found</h1>"
+
+# Serve the multi-project export page
+@app.get("/export", response_class=HTMLResponse)
+def read_export():
+    export_file = BASE_DIR / "web" / "export.html"
+    if export_file.exists():
+        return export_file.read_text(encoding="utf-8")
+    return "<h1>Export page not found</h1>"
+
+# Serve the cross-project QC dashboard
+@app.get("/qc", response_class=HTMLResponse)
+def read_qc():
+    qc_file = BASE_DIR / "web" / "qc.html"
+    if qc_file.exists():
+        return qc_file.read_text(encoding="utf-8")
+    return "<h1>QC dashboard not found</h1>"
 
 
 @app.get("/login", response_class=HTMLResponse)

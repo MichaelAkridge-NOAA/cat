@@ -1,0 +1,104 @@
+/* ================================================
+   CAT - COG thumbnails
+
+   Shared by the Project Manager's project list and the Sites browser, so a
+   project and the site it came from show their imagery the same way.
+   Backed by /api/thumbnails/cog and /api/db/projects/{id}/thumbnail.
+   ================================================ */
+
+/* The frame reserves its space before the image arrives, so a list of
+   lazy-loaded thumbnails doesn't reflow as they stream in. */
+.cat-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: var(--cat-thumb-size, 88px);
+  aspect-ratio: 4 / 3;
+  border-radius: var(--cat-radius);
+  overflow: hidden;
+  background: var(--cat-surface-alt);
+  border: 1px solid var(--cat-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cat-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  /* Fade in on decode so a slow render doesn't pop. */
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.cat-thumb img.is-loaded {
+  opacity: 1;
+}
+
+/* Placeholder shown before the image loads, and left in place when it can't
+   be rendered at all (no asset, unreadable COG, DB unavailable). Sits behind
+   the <img>, so a successful load simply covers it. */
+.cat-thumb-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--cat-ink-soft);
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--cat-primary) 7%, var(--cat-surface-alt)),
+      var(--cat-surface-alt));
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  text-align: center;
+  padding: 4px;
+  line-height: 1.3;
+}
+
+/* Once the image is in, drop the placeholder out of the box entirely rather
+   than leaving it painted underneath: it stays in the text/accessibility
+   tree otherwise, so a project that DOES have imagery still read as
+   "No imagery" to a screen reader and to any text extraction of the page. */
+.cat-thumb:has(img.is-loaded) .cat-thumb-fallback {
+  display: none;
+}
+
+.cat-thumb-fallback svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  opacity: 0.55;
+}
+
+/* Corner badge naming what the thumbnail actually is (DEM vs imagery), so an
+   elevation-only project isn't mistaken for a strangely-coloured photo. */
+.cat-thumb-badge {
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-family: var(--cat-font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+/* Larger variants */
+.cat-thumb--sm { --cat-thumb-size: 64px; }
+.cat-thumb--lg { --cat-thumb-size: 132px; }
+
+@media (max-width: 640px) {
+  .cat-thumb { --cat-thumb-size: 64px; }
+  .cat-thumb--lg { --cat-thumb-size: 88px; }
+}

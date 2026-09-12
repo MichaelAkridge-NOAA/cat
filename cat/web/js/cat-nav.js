@@ -2,7 +2,7 @@
  * CAT shared top navigation.
  *
  * Single source of truth for cross-page navigation on the "content" pages
- * (index, sites, report, converter, project_creator). Include with:
+ * (index, sites, report, converter, project_creator, export, qc). Include with:
  *     <script src="js/cat-nav.js"></script>
  * and it prepends a consistent sticky nav bar to <body>. Styled by the
  * `.cat-topnav*` tokens in css/cat-theme.css. No dependencies, no external
@@ -16,11 +16,19 @@
 
   // Canonical destinations — every href is a real route. Report is
   // intentionally omitted (it needs a project_id and is reached contextually).
+  //
+  // Sites is deliberately hidden here, not deleted: the Site Browser tab
+  // (project_creator.html) grew its own Cards/Table/Map view covering the
+  // same region/depth/COG filters plus a live-filtered map, which made a
+  // separate top-level Sites destination redundant. The /sites route and
+  // js/sites-map.js are untouched — this is a one-line change to bring
+  // the link back if that changes.
   var PRIMARY = [
     { href: '/', label: 'Home', icon: 'home' },
     { href: '/project_creator.html', label: 'Projects', icon: 'folder' },
-    { href: '/sites', label: 'Sites', icon: 'map' },
-    { href: '/converter', label: 'Converter', icon: 'layers' }
+    { href: '/converter', label: 'Converter', icon: 'layers' },
+    { href: '/qc', label: 'QC', icon: 'check-circle' },
+    { href: '/export', label: 'Export', icon: 'download' }
   ];
   var SECONDARY = { href: '/docs', label: 'API Docs', icon: 'book-open' };
 

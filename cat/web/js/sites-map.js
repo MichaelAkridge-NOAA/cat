@@ -255,9 +255,25 @@
 
     const actionHtml = buildActionLinkHtml(site);
 
+    // Show the site's imagery, not just the words "COG status: Available".
+    // Falls back to the DEM when that's all that exists, and to a
+    // placeholder when the site has no COG yet (the common case on a fresh
+    // scan) — see js/cat-thumbnail.js.
+    const previewUri = site.cog_uri || site.dem_uri || null;
+    const thumbHtml = (typeof window.catThumbnailHtml === 'function')
+      ? `<div style="margin-bottom:8px;">${window.catThumbnailHtml({
+            cogUrl: previewUri,
+            size: 220,
+            alt: previewUri ? `Imagery for ${site.site_name}` : '',
+            label: site.has_cog ? 'Preview' : 'Not yet converted',
+            badge: (!site.cog_uri && site.dem_uri) ? 'DEM' : ''
+          })}</div>`
+      : '';
+
     return `
       <div style="min-width:220px; font-family:var(--cat-font);">
         <div style="font-weight:700; font-size:14px; margin-bottom:6px;">${escapeHtml(site.site_name)}</div>
+        ${thumbHtml}
         ${rowsHtml}
         <div style="margin-top:10px;">
           ${actionHtml}

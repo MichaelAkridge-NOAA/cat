@@ -104,7 +104,15 @@
 
   function _onMouseMove(e) {
     if (!lassoActive || !drawing) return;
-    const latlng = map.containerPointToLatLng(L.point(e.offsetX, e.offsetY));
+    // e.offsetX/offsetY are relative to e.target, not the map container —
+    // while dragging over an interactive overlay feature (a shapefile
+    // transect/segment line, which carries an invisible ~18px hit-stroke
+    // for easier clicking) e.target becomes that <path> element instead
+    // of the container, so offsetX/Y suddenly measure from the path's own
+    // tiny bounding box. That made the lasso polygon warp/jump right at
+    // shapefile borders. mouseEventToContainerPoint uses clientX/clientY
+    // against the container's own bounding rect, independent of e.target.
+    const latlng = map.containerPointToLatLng(map.mouseEventToContainerPoint(e));
     lassoPoints.push(latlng);
 
     // Throttle overlay updates to every 5 points for performance
@@ -210,6 +218,13 @@
 
   // ── Init ─────────────────────────────────────────────────
   function init() {
+    // A popout window has no map — `map` there is a no-op stub whose
+    // getContainer() returns null, so this used to die on the line below with
+    // "Cannot read properties of null", skipping the rest of init (including
+    // the toggleBulkMode wrapper) on every popout open. Lasso selection is a
+    // drag-on-the-map tool; there is nothing here for it to attach to.
+    if (window._catPopoutMode) return;
+
     _injectStyles();
 
     // Wait for the v2 toolbar to be injected by v2-bulk.js
@@ -220,6 +235,7 @@
 
         // Attach mouse events to the map container
         const container = map.getContainer();
+        if (!container) { console.warn('v2-lasso: no map container; lasso disabled'); return; }
         container.addEventListener('mousedown', _onMouseDown);
         container.addEventListener('mousemove', _onMouseMove);
         container.addEventListener('mouseup', _onMouseUp);

@@ -138,6 +138,11 @@ services:
       # Shared VRT cache (LOCAL_CS rasters) - read-write, sam3-service mounts read-only
       - cat-vrt-cache:/home/catuser/.cat/vrt_cache
 
+      # Rendered COG thumbnails (project cards, site browser). Kept in a volume
+      # so a redeploy doesn't force every card to re-read its COG from GCS;
+      # size-capped in cat/api/thumbnails.py (CAT_THUMBNAIL_CACHE_MB).
+      - cat-thumbnail-cache:/home/catuser/.cat/thumbnail_cache
+
       # Optional: mount config for overrides
       # - ./cat/config.yaml:/app/cat/config.yaml:ro
     networks:
@@ -178,6 +183,9 @@ volumes:
   # Shared VRT cache (LOCAL_CS reprojection) - written by cat-app, read by sam3-service
   cat-vrt-cache:
     name: cat-vrt-cache
+  # Rendered COG thumbnails - safe to delete, costs one re-render per entry
+  cat-thumbnail-cache:
+    name: cat-thumbnail-cache
 
 # =============================================================================
 # Networks

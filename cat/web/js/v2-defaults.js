@@ -49,6 +49,45 @@
     } catch (e) { /* ignore */ }
   }
 
+  // Seed defaults from the signed-in account's saved preferences.
+  //
+  // Preferences → Default annotation settings writes default_species and
+  // default_morphology server-side, but nothing ever read them back: the
+  // whole section saved, reloaded on its own page, and changed nothing about
+  // annotating. This connects the two, and because the values live on the
+  // account rather than in localStorage they follow an analyst between
+  // machines.
+  //
+  // Deliberately does NOT overwrite: a default captured here with
+  // "Set Defaults" is a per-session choice about the project in front of
+  // you, and should outrank a long-standing account-wide preference.
+  const PREFERENCE_TO_FIELD = {
+    default_species: 'spcode',
+    default_morphology: 'morph_code'
+  };
+
+  function seedDefaultsFromAccount() {
+    if (!window.CatAuth || typeof CatAuth.fetchCurrentUser !== 'function') return;
+
+    CatAuth.fetchCurrentUser().then(function (data) {
+      const prefs = (data && data.preferences) || {};
+      let changed = false;
+
+      Object.keys(PREFERENCE_TO_FIELD).forEach(function (prefKey) {
+        const fieldId = PREFERENCE_TO_FIELD[prefKey];
+        const value = prefs[prefKey];
+        if (!value || String(value).trim() === '') return;
+        if (fieldDefaults[fieldId]) return; // a local default wins
+        fieldDefaults[fieldId] = String(value).trim();
+        changed = true;
+      });
+
+      if (changed) applyDefaultsToForm();
+    }).catch(function () {
+      // Not signed in, or auth disabled (file mode) — local defaults still work.
+    });
+  }
+
   function applyDefaultsToForm() {
     Object.keys(fieldDefaults).forEach(id => {
       const el = document.getElementById(id);
@@ -251,6 +290,7 @@
   // ===================================================================
   function init() {
     loadDefaults();
+    seedDefaultsFromAccount();
     initAllCaps();
     injectDefaultsBar();
     // Delay hookIntoSave to ensure v1 functions are defined

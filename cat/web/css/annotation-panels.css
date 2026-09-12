@@ -783,19 +783,23 @@ body.layout-docked #layout-resize-handle {
 
 /* ─── Popout Window Modes ─── */
 
-html.cat-popout-form .navbar,
-html.cat-popout-form #map,
-html.cat-popout-form .layer-control,
-html.cat-popout-form #statsPanel,
-html.cat-popout-form .leaflet-container,
-html.cat-popout-table .navbar,
-html.cat-popout-table #map,
-html.cat-popout-table .layer-control,
-html.cat-popout-table #statsPanel,
-html.cat-popout-table .leaflet-container { display: none !important; }
+/* There is one popout mode — 'panel' — set by annotation-popout-boot.js as
+   html.cat-popout-panel. These rules used to name 'form' and 'table', two
+   modes that were merged away, so none of them matched anything and the
+   popout's layout rested entirely on the <style> the boot script injects.
+   Keeping them (correctly named) means the popout still lays out sensibly if
+   that inline style is ever removed, and covers the layers sidebar, which is
+   a body child the boot allowlist hides but which also needs its map reflow
+   suppressed. */
+html.cat-popout-panel .navbar,
+html.cat-popout-panel #map,
+html.cat-popout-panel .layer-control,
+html.cat-popout-panel #statsPanel,
+html.cat-popout-panel #layersRailBtn,
+html.cat-popout-panel #layers-resize-handle,
+html.cat-popout-panel .leaflet-container { display: none !important; }
 
-html.cat-popout-form #annotationFormPanel,
-html.cat-popout-table #annotationFormPanel {
+html.cat-popout-panel #annotationFormPanel {
   position: static !important;
   display: block !important;
   max-height: none !important;
@@ -806,10 +810,7 @@ html.cat-popout-table #annotationFormPanel {
   padding: 12px;
 }
 
-/* Both popout modes show the full panel — no section-specific hiding */
-
-html.cat-popout-form body,
-html.cat-popout-table body {
+html.cat-popout-panel body {
   overflow: auto !important;
   background: #f0f4ff !important;
 }

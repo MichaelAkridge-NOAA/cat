@@ -12,6 +12,49 @@
     }
     window.isAnnotationComplete = isAnnotationComplete;
 
+    // ── Annotation display settings (the Annotations layer's sliders) ──
+    // These used to live only in the DOM, applied once per drag to whatever
+    // layers happened to exist at that moment. Every later redraw — and in DB
+    // mode refreshAnnotations() runs after *every* save — rebuilt the layers
+    // straight from getAnnotationLayerStyle()'s hardcoded weight 7 / opacity
+    // 0.8, so a line width the analyst had dialled down snapped back the next
+    // time they saved. Holding the values here and applying them as the last
+    // step of getAnnotationLayerStyle() makes them stick, because every code
+    // path that (re)styles an annotation already goes through that function.
+    const ANNOTATION_DISPLAY_DEFAULTS = { opacityPct: 80, lineWidth: 7 };
+    const ANNOTATION_DISPLAY_KEY = 'cat_annotation_display';
+    let annotationDisplay = Object.assign({}, ANNOTATION_DISPLAY_DEFAULTS);
+    window.catAnnotationDisplay = annotationDisplay;
+
+    function saveAnnotationDisplay() {
+      try {
+        localStorage.setItem(ANNOTATION_DISPLAY_KEY, JSON.stringify(annotationDisplay));
+      } catch (e) { /* private mode / quota — the session still works */ }
+    }
+
+    // Restore before any annotation is drawn, so the very first render already
+    // uses the analyst's chosen width rather than flashing the default and
+    // needing a slider nudge to correct itself.
+    function restoreAnnotationDisplay() {
+      let saved = null;
+      try { saved = JSON.parse(localStorage.getItem(ANNOTATION_DISPLAY_KEY) || 'null'); }
+      catch (e) { saved = null; }
+      if (saved && typeof saved === 'object') {
+        const o = parseInt(saved.opacityPct, 10);
+        const w = parseInt(saved.lineWidth, 10);
+        if (!isNaN(o) && o >= 0 && o <= 100) annotationDisplay.opacityPct = o;
+        if (!isNaN(w) && w >= 1 && w <= 10) annotationDisplay.lineWidth = w;
+      }
+      const oSlider = document.getElementById('annotationsOpacity');
+      const oLabel = document.getElementById('annotationsOpacityValue');
+      const wSlider = document.getElementById('lineWidth');
+      const wLabel = document.getElementById('lineWidthValue');
+      if (oSlider) oSlider.value = annotationDisplay.opacityPct;
+      if (oLabel) oLabel.textContent = annotationDisplay.opacityPct;
+      if (wSlider) wSlider.value = annotationDisplay.lineWidth;
+      if (wLabel) wLabel.textContent = annotationDisplay.lineWidth;
+    }
+
     function getAnnotationLayerStyle(ann) {
       // Flat format (file mode / normalized) or nested properties (DB/GeoJSON mode) —
       // same pattern as isAnnotationComplete() above.
@@ -20,19 +63,44 @@
       const base = (detectionMethod && String(detectionMethod).indexOf('sam3-') === 0)
         ? { color: '#06b6d4', weight: 7, opacity: 0.85, fillOpacity: 0.25, dashArray: '2 6' }
         : isAnnotationComplete(ann)
-          ? { color: '#3388ff', weight: 7, opacity: 0.8, fillOpacity: 0.3 }
+          // dashArray: null, not omitted. setStyle() merges into the layer's
+          // existing options, so an annotation that was dashed as incomplete
+          // (or as SAM3) and has since been given a species kept its dashes
+          // forever — the "complete" style simply never mentioned dashArray,
+          // so there was nothing to clear it. Leaflet removes the attribute
+          // for a falsy dashArray, which is exactly what's wanted here.
+          ? { color: '#3388ff', weight: 7, opacity: 0.8, fillOpacity: 0.3, dashArray: null }
           : { color: '#e67e22', weight: 7, opacity: 0.9, fillOpacity: 0.25, dashArray: '6 4' };
 
       // Attribute-driven symbology (annotation-runtime-symbology.js): when a
       // color-by mode is active, override just the color/fillColor so the
       // dash-pattern cues above (SAM3, incomplete) still read correctly.
+      let style = base;
       if (typeof window.catSymbologyColorFor === 'function') {
         const symColor = window.catSymbologyColorFor(ann);
-        if (symColor) return Object.assign({}, base, { color: symColor, fillColor: symColor });
+        if (symColor) style = Object.assign({}, base, { color: symColor, fillColor: symColor });
       }
-      return base;
+
+      return applyAnnotationDisplay(style);
     }
     window.getAnnotationLayerStyle = getAnnotationLayerStyle;
+
+    // Scale a computed style by the current display sliders. Fill is kept at
+    // the 0.3 ratio of stroke opacity the sliders have always used, but scaled
+    // by the base style's own fill ratio so the fainter SAM3/incomplete fills
+    // stay distinguishable instead of all flattening to one value.
+    function applyAnnotationDisplay(style) {
+      const opacity = annotationDisplay.opacityPct / 100;
+      const baseOpacity = (style.opacity != null) ? style.opacity : 0.8;
+      const fillRatio = (style.fillOpacity != null && baseOpacity > 0)
+        ? style.fillOpacity / baseOpacity
+        : 0.3;
+      return Object.assign({}, style, {
+        weight: annotationDisplay.lineWidth,
+        opacity: opacity,
+        fillOpacity: opacity * fillRatio
+      });
+    }
 
     function toggleAnnotationsLayer() {
       const checked = document.getElementById('toggleAnnotations').checked;
@@ -49,30 +117,48 @@
       }
     }
     
-    function setAnnotationsOpacity(value) {
-      document.getElementById('annotationsOpacityValue').textContent = value;
-      const opacity = value / 100;
+    // Re-apply the display settings to every annotation currently on the map.
+    // Restyling through getAnnotationLayerStyle() (rather than pushing a bare
+    // {opacity} / {weight} patch) means a slider drag also picks up whatever
+    // the layer's colour and dash pattern should currently be — symbology
+    // mode, SAM3 origin, missing-species state — instead of leaving those to
+    // drift until the next full redraw.
+    function restyleAllAnnotations() {
+      if (!drawnItems || typeof drawnItems.eachLayer !== 'function') return;
       drawnItems.eachLayer(function(layer) {
-        if (layer.setStyle) {
-          const currentStyle = layer.options;
-          layer.setStyle({
-            opacity: opacity,
-            fillOpacity: opacity * 0.3
-          });
+        if (!layer.setStyle) return;
+        if (layer.annotationData) {
+          layer.setStyle(getAnnotationLayerStyle(layer.annotationData));
+        } else {
+          // A shape that is still being drawn has no annotation behind it yet.
+          // Keep the drawing tool's own colour (pink polyline / blue polygon /
+          // amber rectangle — deliberate per-tool cues) and only follow the
+          // sliders, which is what these handlers always did.
+          layer.setStyle(applyAnnotationDisplay({
+            opacity: layer.options && layer.options.opacity,
+            fillOpacity: layer.options && layer.options.fillOpacity
+          }));
         }
       });
     }
-    
+    window.catRestyleAllAnnotations = restyleAllAnnotations;
+
+    function setAnnotationsOpacity(value) {
+      const el = document.getElementById('annotationsOpacityValue');
+      if (el) el.textContent = value;
+      const pct = parseInt(value, 10);
+      annotationDisplay.opacityPct = isNaN(pct) ? ANNOTATION_DISPLAY_DEFAULTS.opacityPct : pct;
+      restyleAllAnnotations();
+      saveAnnotationDisplay();
+    }
+
     function setLineWidth(value) {
-      document.getElementById('lineWidthValue').textContent = value;
-      const width = parseInt(value);
-      drawnItems.eachLayer(function(layer) {
-        if (layer.setStyle) {
-          layer.setStyle({
-            weight: width
-          });
-        }
-      });
+      const el = document.getElementById('lineWidthValue');
+      if (el) el.textContent = value;
+      const width = parseInt(value, 10);
+      annotationDisplay.lineWidth = isNaN(width) ? ANNOTATION_DISPLAY_DEFAULTS.lineWidth : width;
+      restyleAllAnnotations();
+      saveAnnotationDisplay();
     }
     
     // Species label management
@@ -188,24 +274,148 @@
           font-weight: bold;
           white-space: nowrap;
           box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-          pointer-events: none;
+          cursor: pointer;
           text-shadow: 0 1px 2px rgba(0,0,0,0.4);
         ">${spcode} #${colonyId}</div>`,
         iconSize: null,
         iconAnchor: [0, 0]
       });
-      
-      // Create marker for label
+
+      // Create marker for label — interactive so clicking the text tag
+      // itself opens the same popup as clicking the annotation's shape
+      // (useful for thin lines/small shapes where the label is a much
+      // easier target).
       const labelMarker = L.marker(center, {
         icon: labelIcon,
-        interactive: false,
+        interactive: true,
         pane: 'annotationsPane'
       });
-      
+      labelMarker.on('click', (e) => {
+        L.DomEvent.stopPropagation(e);
+        if (typeof showAnnotationPopup === 'function') showAnnotationPopup(layer, center);
+      });
+
       labelMarker.addTo(map);
       annotationLabels.set(annotationId, labelMarker);
     }
-    
+
+    // ── Multi-user: per-contributor visibility toggle ──────────────────────
+    // Every annotation layer carries _creatorUserId/_creatorLabel (set once
+    // in loadProjectAnnotations(), annotation-runtime-project-layers.js).
+    // Hiding is done at the raw DOM level (display:none on the rendered
+    // path/marker element) rather than via layer.setStyle()/setOpacity(),
+    // so it can't be silently undone by the unrelated opacity/line-width
+    // sliders (setAnnotationsOpacity/setLineWidth above, which unconditionally
+    // restyle every layer) and doesn't touch drawnItems membership — Leaflet.
+    // Draw's own edit/delete toolbar keeps working on hidden layers exactly
+    // as before.
+    let _hiddenContributorIds = new Set(); // keys: String(user_id), or 'unknown'
+
+    function _contributorKeyFor(layer) {
+      return layer._creatorUserId != null ? String(layer._creatorUserId) : 'unknown';
+    }
+
+    // Mirrors addLabelToAnnotation()'s key resolution above: every layer we
+    // render (loadProjectAnnotations / refreshAnnotations) sets .annotationData,
+    // so its "file mode" branch (keyed by _leaflet_id) is the one that's
+    // actually always taken — the layer.feature.id branch is effectively
+    // unreachable since .annotationData is checked first.
+    function _labelKeyFor(layer) {
+      return layer._leaflet_id;
+    }
+
+    function _escapeForContributorLabel(str) {
+      return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function buildContributorVisibilityPanel() {
+      const section = document.getElementById('annotationContributorsSection');
+      const container = document.getElementById('annotationContributorsContainer');
+      if (!section || !container || !drawnItems) return;
+
+      const contributors = new Map(); // key -> { label, count }
+      drawnItems.eachLayer(function (layer) {
+        const key = _contributorKeyFor(layer);
+        const entry = contributors.get(key) || { label: layer._creatorLabel || 'Unknown', count: 0 };
+        entry.count += 1;
+        contributors.set(key, entry);
+      });
+
+      // A single-author project has nothing worth toggling — keep the panel
+      // out of the way. Clear any stale hide-state left over from a
+      // differently-authored project viewed earlier in this tab, and
+      // un-hide whatever it was hiding so annotations don't render
+      // invisible with no UI left to un-hide them.
+      if (contributors.size <= 1) {
+        if (_hiddenContributorIds.size > 0) {
+          _hiddenContributorIds.forEach(function (key) { _applyContributorVisibility(key, true); });
+          _hiddenContributorIds.clear();
+        }
+        section.style.display = 'none';
+        container.innerHTML = '';
+        return;
+      }
+
+      section.style.display = 'block';
+      const sorted = Array.from(contributors.entries()).sort((a, b) => a[1].label.localeCompare(b[1].label));
+      const quickLinks =
+        '<div style="font-size:10px; margin-bottom:4px;">' +
+        '<a href="#" onclick="setAllContributorsVisible(true); return false;" style="color:#3388ff;">All</a> · ' +
+        '<a href="#" onclick="setAllContributorsVisible(false); return false;" style="color:#3388ff;">None</a>' +
+        '</div>';
+      const rows = sorted.map(function ([key, entry]) {
+        const checked = !_hiddenContributorIds.has(key);
+        const safeId = 'contributorToggle_' + key.replace(/[^a-zA-Z0-9_-]/g, '_');
+        return (
+          '<label for="' + safeId + '" class="inline-checkbox-label" ' +
+          'style="display:flex; align-items:center; gap:4px; font-size:12px; margin-top:2px;">' +
+          '<input type="checkbox" id="' + safeId + '" class="inline-checkbox" ' + (checked ? 'checked' : '') +
+          ' onchange="toggleContributorVisibility(\'' + key + '\', this.checked)">' +
+          '<span>' + _escapeForContributorLabel(entry.label) + ' (' + entry.count + ')</span>' +
+          '</label>'
+        );
+      }).join('');
+      container.innerHTML = quickLinks + rows;
+
+      // Re-apply any hide state that predates this rebuild (e.g. a remote
+      // change-polling refresh reloaded annotations while a contributor was
+      // toggled off).
+      _hiddenContributorIds.forEach(function (key) { _applyContributorVisibility(key, false); });
+    }
+    window.buildContributorVisibilityPanel = buildContributorVisibilityPanel;
+
+    function toggleContributorVisibility(key, visible) {
+      if (visible) {
+        _hiddenContributorIds.delete(key);
+      } else {
+        _hiddenContributorIds.add(key);
+      }
+      _applyContributorVisibility(key, visible);
+    }
+    window.toggleContributorVisibility = toggleContributorVisibility;
+
+    function setAllContributorsVisible(visible) {
+      const keys = new Set();
+      drawnItems.eachLayer(function (layer) { keys.add(_contributorKeyFor(layer)); });
+      keys.forEach(function (key) {
+        if (visible) _hiddenContributorIds.delete(key); else _hiddenContributorIds.add(key);
+      });
+      keys.forEach(function (key) { _applyContributorVisibility(key, visible); });
+      buildContributorVisibilityPanel();
+    }
+    window.setAllContributorsVisible = setAllContributorsVisible;
+
+    function _applyContributorVisibility(key, visible) {
+      drawnItems.eachLayer(function (layer) {
+        if (_contributorKeyFor(layer) !== key) return;
+        const el = layer._path || layer._icon;
+        if (el) el.style.display = visible ? '' : 'none';
+        const label = annotationLabels.get(_labelKeyFor(layer));
+        if (label && label._icon) label._icon.style.display = visible ? '' : 'none';
+      });
+    }
+
     function showAnnotationPopup(layer, latlng) {
       if (!layer.annotationData) return;
       
@@ -340,9 +550,22 @@
     // Toggle panel collapse/expand
     function togglePanel(panelId) {
       const panel = document.getElementById(panelId);
+      if (!panel) return;
+
+      // Collapse-to-title-bar is a floating-panel affordance. When the map
+      // layers panel is docked as the left sidebar it is already a full-height
+      // column with its own hide control, and the sidebar stylesheet forces the
+      // body open regardless — so toggling here would only leave a stale
+      // 'collapsed' class behind to surprise the user on the next switch back
+      // to float mode. Route the click to the sidebar's own hide instead.
+      if (panelId === 'mapLayersPanel' && document.body.classList.contains('layers-docked')) {
+        if (typeof window.catLayersToggleSidebar === 'function') window.catLayersToggleSidebar();
+        return;
+      }
+
       const header = panel.querySelector('.panel-header');
       const content = panel.querySelector('.panel-content');
-      
+
       header.classList.toggle('collapsed');
       content.classList.toggle('collapsed');
       panel.classList.toggle('collapsed');
@@ -456,6 +679,11 @@
         if (e.target.closest && e.target.closest('button, input, select, textarea, a')) return;
         // Popout/dock modes force position:static on these panels — dragging is meaningless there.
         if (getComputedStyle(panel).position === 'static') return;
+        // A panel docked as a full-height sidebar (annotation-runtime-layers-sidebar.js
+        // sets this flag) is position:fixed, so the static check above doesn't catch
+        // it — dragging one would strand it mid-map with the map still reflowed
+        // around the empty gutter it left behind.
+        if (panel.dataset.catDocked === '1') return;
 
         pointerDown = true;
         dragging = false;
@@ -520,6 +748,7 @@
     window.makePanelDraggable = makePanelDraggable;
 
     document.addEventListener('DOMContentLoaded', function() {
+      restoreAnnotationDisplay();
       makePanelDraggable('uploadPanel');
       makePanelDraggable('mapLayersPanel');
       makePanelDraggable('statsPanel', 'h4');

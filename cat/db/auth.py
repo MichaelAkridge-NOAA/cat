@@ -142,7 +142,7 @@ def list_users(limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
 
 
 def set_user_role(user_id: int, role: str) -> None:
-    if role not in ("admin", "annotator"):
+    if role not in ("admin", "team_lead", "annotator"):
         raise ValueError(f"Invalid role: {role}")
     execute(
         "UPDATE cat_users SET role = :role WHERE user_id = :user_id",
