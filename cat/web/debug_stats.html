@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CAT: Debug Stats</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1.0">
+  <link rel="stylesheet" href="css/cat-theme.css" />
+  <style>
+    body { margin: 0; padding: 0; font-family: var(--cat-font);
+      background: var(--cat-surface-alt); color: var(--cat-ink); }
+    .container { max-width: 1100px; margin: 40px auto; padding: 0 20px; }
+    h1 { font-size: 24px; margin-bottom: var(--cat-space-2); }
+    .subtitle { font-size: 13px; color: var(--cat-ink-muted, #666); margin-bottom: var(--cat-space-4); }
+    h2 { font-size: 16px; margin: var(--cat-space-4) 0 var(--cat-space-2); }
+    .table-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 600px; }
+    th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--cat-border); font-size: 13px; }
+    th { font-weight: 700; color: var(--cat-ink-muted, #555); }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .row-slow { background: rgba(220, 53, 69, 0.08); }
+    .row-slow td.num.ms { color: var(--cat-error, #c0392b); font-weight: 700; }
+    .empty-msg { font-size: 13px; color: var(--cat-ink-muted, #666); padding: var(--cat-space-4) 0; }
+    .refresh-note { font-size: 12px; color: var(--cat-ink-muted, #888); margin-top: var(--cat-space-2); }
+    .toolbar { display: flex; justify-content: flex-end; margin-bottom: var(--cat-space-2); }
+    .export-btn { font-size: 13px; padding: 6px 12px; border-radius: var(--cat-radius);
+      border: 1px solid var(--cat-border); background: var(--cat-surface, #fff);
+      color: var(--cat-ink); cursor: pointer; text-decoration: none; display: inline-block; }
+    .export-btn:hover { background: var(--cat-surface-alt); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="cat-card">
+      <h1>Debug Stats</h1>
+      <div class="subtitle">
+        Live timings for the raster hot path (tile serving, statistics, the
+        LOCAL_CS CRS check, previews). In-memory only — resets on restart,
+        holds the most recent 300 requests.
+      </div>
+
+      <div class="toolbar">
+        <a class="export-btn" href="/api/debug/tile-stats.csv" download>Export CSV</a>
+      </div>
+
+      <h2>Summary by endpoint</h2>
+      <div class="table-scroll">
+        <table id="summaryTable">
+          <thead>
+            <tr>
+              <th>Endpoint</th>
+              <th class="num">Count</th>
+              <th class="num">p50 (ms)</th>
+              <th class="num">p95 (ms)</th>
+              <th class="num">Max (ms)</th>
+            </tr>
+          </thead>
+          <tbody id="summaryBody"></tbody>
+        </table>
+      </div>
+      <div class="empty-msg" id="summaryEmpty" hidden>No requests recorded yet — load the annotation page in another tab.</div>
+
+      <h2>Recent requests</h2>
+      <div class="table-scroll">
+        <table id="recentTable">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Endpoint</th>
+              <th>COG</th>
+              <th class="num">Status</th>
+              <th class="num">ms</th>
+            </tr>
+          </thead>
+          <tbody id="recentBody"></tbody>
+        </table>
+      </div>
+      <div class="empty-msg" id="recentEmpty" hidden>Nothing yet.</div>
+      <div class="refresh-note">Refreshes every 3s.</div>
+    </div>
+  </div>
+
+  <script src="js/cat-nav.js"></script>
+  <script src="js/cat-auth.js"></script>
+  <script>
+    var SLOW_MS = 500;
+    var summaryBody = document.getElementById('summaryBody');
+    var summaryEmpty = document.getElementById('summaryEmpty');
+    var recentBody = document.getElementById('recentBody');
+    var recentEmpty = document.getElementById('recentEmpty');
+
+    function fmtTime(ts) {
+      return new Date(ts * 1000).toLocaleTimeString();
+    }
+
+    function render(data) {
+      var summary = data.summary || [];
+      summaryBody.innerHTML = '';
+      summaryEmpty.hidden = summary.length > 0;
+      summary.forEach(function (row) {
+        var tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + row.group + '</td>' +
+          '<td class="num">' + row.count + '</td>' +
+          '<td class="num">' + row.p50_ms + '</td>' +
+          '<td class="num">' + row.p95_ms + '</td>' +
+          '<td class="num">' + row.max_ms + '</td>';
+        summaryBody.appendChild(tr);
+      });
+
+      var recent = data.recent || [];
+      recentBody.innerHTML = '';
+      recentEmpty.hidden = recent.length > 0;
+      recent.forEach(function (row) {
+        var tr = document.createElement('tr');
+        var slow = row.ms >= SLOW_MS;
+        if (slow) tr.className = 'row-slow';
+        tr.innerHTML =
+          '<td>' + fmtTime(row.ts) + '</td>' +
+          '<td>' + row.group + '</td>' +
+          '<td>' + (row.cog || '') + '</td>' +
+          '<td class="num">' + row.status + '</td>' +
+          '<td class="num ms">' + row.ms + '</td>';
+        recentBody.appendChild(tr);
+      });
+    }
+
+    function poll() {
+      fetch('/api/debug/tile-stats').then(function (r) { return r.json(); }).then(render).catch(function () {});
+    }
+
+    poll();
+    setInterval(poll, 3000);
+  </script>
+</body>
+</html>

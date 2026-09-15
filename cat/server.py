@@ -49,6 +49,9 @@ from cat.api.annotation_import import router as annotation_import_router
 # Import COG thumbnail rendering (project cards, site browser)
 from cat.api.thumbnails import router as thumbnails_router
 
+# Import the raster-hot-path timing probe (admin Debug page)
+from cat.api import debug_stats
+
 # Shared GDAL settings for every COG read (tiles and thumbnails alike)
 from cat.gdal_env import GCS_GDAL_ENV
 
@@ -320,6 +323,10 @@ print("✅ Annotation import API enabled at /api/annotations/*")
 app.include_router(thumbnails_router)
 print("✅ Thumbnail API enabled at /api/thumbnails/*")
 
+# Include the raster-hot-path timing probe (admin Debug page)
+app.include_router(debug_stats.router)
+print("✅ Debug stats API enabled at /api/debug/tile-stats")
+
 # Include file-based project routes
 app.include_router(file_projects_router)
 print("✅ File-based project API enabled at /api/file-projects/*")
@@ -388,6 +395,28 @@ async def prepend_data_path_middleware(request: Request, call_next):
                 from starlette.requests import Request as StarletteRequest
                 request = StarletteRequest(scope, request.receive)
     response = await call_next(request)
+    return response
+
+# Timing probe for the raster hot path (tiles, statistics, check-cog-crs,
+# preview, info, bounds) — feeds the admin-only Debug page
+# (cat/web/debug_stats.html) via cat.api.debug_stats. Registered after
+# prepend_data_path_middleware so it measures the full request including
+# that rewrite, not just the route handler.
+import time as _time
+
+@app.middleware("http")
+async def record_tile_timing_middleware(request: Request, call_next):
+    if debug_stats.group_for_path(request.url.path) is None:
+        return await call_next(request)
+    start = _time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (_time.perf_counter() - start) * 1000
+    debug_stats.record(
+        request.url.path,
+        request.url.query,
+        duration_ms,
+        response.status_code,
+    )
     return response
 
 # Create a TilerFactory for Cloud-Optimized GeoTIFFs
@@ -674,6 +703,14 @@ def read_user_preferences():
     if preferences_file.exists():
         return preferences_file.read_text(encoding="utf-8")
     return "<h1>Preferences page not found</h1>"
+
+
+@app.get("/debug_stats.html", response_class=HTMLResponse)
+def read_debug_stats():
+    debug_stats_file = BASE_DIR / "web" / "debug_stats.html"
+    if debug_stats_file.exists():
+        return debug_stats_file.read_text(encoding="utf-8")
+    return "<h1>Debug stats page not found</h1>"
 
 # Serve the annotation page
 @app.get("/annotate", response_class=HTMLResponse)

@@ -95,6 +95,12 @@
             adminLink.className = 'cat-topnav-link';
             adminLink.textContent = 'Users';
             menu.appendChild(adminLink);
+
+            var debugLink = document.createElement('a');
+            debugLink.href = '/debug_stats.html';
+            debugLink.className = 'cat-topnav-link';
+            debugLink.textContent = 'Debug';
+            menu.appendChild(debugLink);
           }
 
           var prefsLink = document.createElement('a');

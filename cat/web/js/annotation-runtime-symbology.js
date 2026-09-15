@@ -27,7 +27,9 @@
   ];
   const MISSING_COLOR = '#9ca3af';
 
-  let mode = 'off';
+  // Species is the more commonly useful default view; a saved browser
+  // preference (below) still wins once someone picks something else.
+  let mode = 'spcode';
   try {
     const saved = localStorage.getItem(MODE_KEY);
     if (saved && FIELDS[saved]) mode = saved;

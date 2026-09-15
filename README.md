@@ -1,15 +1,11 @@
 # CAT: Coral Annotation Tool
 <a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="https://github.com/MichaelAkridge-NOAA/cat/raw/main/docs/logo.png" align="right" alt="logo" width="400"/></a>
-  **C**oral **A**nnotation **T**ool — Docker-deployed, Oracle-backed Structure from Motion (SfM) orthomosaic coral reef annotation and project management system.
-
-> **Branch:** `cat_db` — Oracle database backend with auto-bootstrap.  
-> For the lightweight, file-based version see the [`main` branch](https://github.com/MichaelAkridge-NOAA/cat).
-
+  **C**oral **A**nnotation **T**ool - File-based , Structure from Motion (SfM) Orthomosaic coral reef annotation and visualization tool to support coral reef research.
 ### About
 
-**CAT** is an annotation and visualization platform designed for marine scientists working with Structure from Motion (SfM) orthomosaic imagery. This branch adds an **Oracle database backend** for centralized project management, persistent annotations, overlay layer support, and multi-user workflows — all deployed via Docker Compose.
+**CAT** is a lightweight, file-based annotation system designed specifically for marine scientists and coral reef researchers working with Structure from Motion (SfM) orthomosaic imagery. Built with modern web technologies and Cloud Optimized GeoTIFF (COG) support, CAT provides a streamlined workflow for annotating, analyzing, and managing coral reef datasets without the complexity of databases or heavy dependencies.
 
-On first startup the system auto-bootstraps: Oracle init scripts create the schema, and the CAT app ingests reference data from CSVs — no manual DDL required.
+Perfect for field research environments where simplicity, speed, and reliability are essential.
 
 ### Features
 > ⚠️ **Note: Under Active Development**: CAT is under active development. Features are being added regularly and some functionality may change. See the [Roadmap](#roadmap) section for planned improvements.
@@ -27,12 +23,10 @@ On first startup the system auto-bootstraps: Oracle init scripts create the sche
 - **Annotation Timer** - Track time spent on each annotation session
 
 ### **Project Management**
-- **Oracle Database Backend** - Centralized project and annotation storage
-- **Auto-Bootstrap** - Schema and reference data created on first startup
-- **Shapefile Overlay Layers** - Import, edit, reorder, and style vector overlays per project
-- **GeoJSON Export** - Export annotations in standard GeoJSON format
+- **File-Based Storage** - No database required, pure JSON format
 - **Drag & Drop Interface** - Easy project creation with multiple TIF files
-- **Live Status Dashboard** - Homepage shows DB connection, project count at a glance
+- **GeoJSON Export** - Export annotations in standard GeoJSON format
+- **Project Templates** - Reusable project structures for consistent workflows
 
 ### **Cloud Optomized GeoTiff (COG) Processing** (https://github.com/MichaelAkridge-NOAA/sfm-orthomosaic-tile-viewer)
 - **Batch Conversion** - Convert multiple GeoTIFFs to COG format simultaneously
@@ -45,166 +39,91 @@ On first startup the system auto-bootstraps: Oracle init scripts create the sche
 <img src="./docs/example_01.png"/>
 <img src="./docs/example_02.png"/>
 
-## Quick Start (Docker + Oracle)
+## Quick Start
 
 ### Prerequisites
-- Docker & Docker Compose (v2+)
-- Git
+- Python 3.9 or higher
+- Local Installation & usage only. (*Note: database and cloud version in development.)
 
-### 1. Clone & Configure
+### Installation
 
-```bash
-git clone -b cat_db_v10 https://github.com/MichaelAkridge-NOAA/cat.git
-cd cat
-mkdir -p models
-# Create your .env from the template and set passwords
-cp .env.example .env
-nano .env   # <-- change ORACLE_PASSWORD and APP_SCHEMA_PASSWORD
-
-gcloud auth login
-```
-
-### 2. Start
-
-CAT's Docker setup is two compose files, so you pick how much you build:
-
-| Stack | Command | Builds |
-|---|---|---|
-| **Base** (recommended default) | `docker compose -f docker-compose.cat.yml up -d --build` | Oracle + CAT app only. Fast — no SAM3, no GPU, no multi-GB torch/CUDA download. |
-| **Base + SAM3** | `docker compose -f docker-compose.cat.yml -f docker-compose.sam3.yml up -d --build` | Everything above, **plus** the SAM3 segmentation microservice. Slow on the first build (installs torch + CUDA + segment-geospatial — expect a long time and several GB of downloads). |
-
-`sam3-service` is not defined in `docker-compose.cat.yml` at all — it lives
-entirely in `docker-compose.sam3.yml` — specifically so the base command
-above can never resolve, build, or start it, no matter what. (An earlier
-version of this setup tried to keep SAM3 optional with a Compose `profiles:`
-gate on a single combined file; that alone wasn't reliably enough to stop a
-plain `up` from still building it. Two files removes the ambiguity.)
-
-```bash
-# Base stack — Oracle + CAT app:
-docker compose -f docker-compose.cat.yml up -d --build
-
-# Stop / logs / reset, same pattern with the base file:
-docker compose -f docker-compose.cat.yml down
-docker compose -f docker-compose.cat.yml logs -f
-docker compose -f docker-compose.cat.yml down -v   # also wipes Oracle data
-```
-
-Once containers exist, day-to-day restarts don't need `--build` — source
-under `./cat` is bind-mounted into the container, so most Python edits are
-picked up on container restart (`docker compose -f docker-compose.cat.yml restart cat-app`)
-without rebuilding the image at all. `--build` is only needed after changing
-the `Dockerfile` or `requirements.txt`.
-
-On first startup:
-1. Oracle Free initializes and runs `scripts/db-init/*.sql` (creates schema + tables)
-2. CAT app waits for Oracle, verifies schema, ingests reference CSVs
-3. FastAPI server starts on **http://localhost:8000**
-
-### 3. Verify
-
-```bash
-# Service status
-docker compose -f docker-compose.cat.yml ps
-
-# Health + config
-curl http://localhost:8000/health
-curl http://localhost:8000/api/config
-```
-
-### Optional: AI Segmentation (SAM3, GPU-accelerated)
-
-CAT can run AI-assisted coral segmentation (text/point/box/tiled prompts) via
-a separate GPU microservice, `sam3-service`, defined in
-`docker-compose.sam3.yml`. It's a separate file specifically so the base
-stack above never builds/starts it on non-GPU hosts — you opt in by adding
-that file with `-f` alongside the base file.
-
-**Prerequisites:** an NVIDIA GPU with the [NVIDIA Container
-Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-configured for Docker, and a local SAM3 checkpoint (no Hugging Face
-account/auth needed — the app never downloads the model itself).
-
-```bash
-# In .env: point CAT_SAM3_CHECKPOINT_DIR at the host folder containing your
-# checkpoint. docker-compose.sam3.yml already flips CAT_SEGMENTATION_ENABLED
-# on for you -- no separate env var edit needed for that part.
-
-# Build just the SAM3 service (first build pulls a multi-GB CUDA/PyTorch
-# base image and installs segment-geospatial + SAM3 from source — expect
-# several minutes, or longer on a slow connection):
-docker compose -f docker-compose.cat.yml -f docker-compose.sam3.yml build sam3-service
-
-# Bring up the full stack, Oracle + CAT app + sam3-service together:
-docker compose -f docker-compose.cat.yml -f docker-compose.sam3.yml up -d --build
-
-# Stop the full stack the same way (both -f flags, every time you touch this stack):
-docker compose -f docker-compose.cat.yml -f docker-compose.sam3.yml down
-
-# Check the model loaded (device should read "cuda"):
-curl http://localhost:8000/api/segmentation/status
-```
-
-If you started with the base stack and want to *add* SAM3 without losing
-Oracle's data, just re-run `up -d --build` with both `-f` flags — Compose
-reconciles in place, it won't recreate `database-oracle-free`.
-
-If `CAT_SEGMENTATION_ENABLED=false` or `sam3-service` isn't running, the
-"AI Segment" button in the annotation UI stays hidden — the rest of CAT
-works unaffected either way.
-
-### Google Cloud Workstation Deployment
-
-For a full automated install (Docker, systemd auto-start, management scripts):
-
-```bash
-# Base stack (Oracle + CAT app)
-sudo bash install_cat.sh
-
-# GPU stack (Oracle + CAT app + SAM3; requires an NVIDIA GPU)
-sudo bash install_cat_gpu.sh
-```
-
-Before starting the GPU stack, set `CAT_SAM3_CHECKPOINT_DIR` in `.env` to the
-host directory containing the local SAM3 checkpoint.
-
-See [docs/DEPLOYMENT_PLAN.md](docs/DEPLOYMENT_PLAN.md) for architecture details.
-
-### Standalone / File Mode (no database)
-
-CAT also works without Oracle for local, file-based workflows:
+**Option 1: Install from PyPI (Recommended)**
+- Link: https://pypi.org/project/coral-annotation-tool
 
 ```bash
 pip install coral-annotation-tool
-cat   # starts server at http://localhost:8000
 ```
 
-Or from source: `python main.py`
+```bash
+# Or Install with desktop shortcut support (one-time)
+pip install coral-annotation-tool[shortcuts]
+# Create shortcuts
+cat-create-shortcuts
+```
+
+### Running the Application
+<a href="https://github.com/MichaelAkridge-NOAA/cat" target="_blank"><img src="./docs/desktop_shortcut.png" align="right" alt="logo" /></a>
+After installation, simply run:
+- Double click on Desktop icon
+- Start Menu (Windows) or Applications (Mac/Linux)
+- Command line: `cat`
+```bash
+cat
+```
+
+The application will be available at: **http://localhost:8000**
+
+
+**Option 2: Install from source (Local Development)**
+
+```bash
+git clone https://github.com/MichaelAkridge-NOAA/cat
+cd cat
+pip install -e .
+```
+
+**If installed locally (from source):**
+```bash
+# Install with shortcut support
+pip install -e .[shortcuts]
+
+# Create shortcuts
+cat-create-shortcuts
+
+# Or use the helper scripts in the repo:
+# Windows: Double-click create_shortcuts.bat
+# Mac/Linux: ./create_shortcuts.sh
+```
+
+**Remove shortcuts (if needed):**
+```bash
+cat-remove-shortcuts
+```
 ---
 
 ## Usage
 
 ### Creating Your First Project
 
-1. **Open the Project Manager**
-   - Navigate to http://localhost:8000
-   - Click the **Project Manager** card (the primary action)
+1. **Navigate to Project Creator**
+   - Open http://localhost:8000
+   - Click "Create Project" card
 
-2. **Create a New Project** (Oracle mode)
-   - Click **"Quick Create"** in the Oracle Projects panel
-   - Fill in: Project Name, Site, Island, Year, Cruise, Observer
-   - Add COG TIF file paths (GCS `gs://` URLs or local paths)
-   - Click **Create Project**
+2. **Add Your Data**
+   - Drag & drop TIF/GeoTIFF files
+   - Optionally add shapefile layers (.shp, .shx, .dbf, .prj)
+   - Fill in project metadata (Site, Year, Cruise, Observer, etc.)
 
-3. **Add Overlay Layers** (optional)
-   - Open a project and click **"Manage Layers"**
-   - Upload shapefiles (ZIP or loose .shp/.shx/.dbf/.prj)
-   - Toggle visibility, reorder, change colors, zoom to layer extent
+3. **Generate Project**
+   - Click "Generate Project"
+   - Review the JSON structure
+   - Download the project file
 
 4. **Start Annotating**
-   - Click **"Open"** on any project to launch the annotation view
-   - Draw polygons, lines, and points on the orthomosaic
-   - Annotations save to Oracle automatically
+   - Click "Coral Annotation" from homepage
+   - Upload your project JSON file
+   - Wait for COG conversion (first time only)
+   - Begin annotating coral features!
 
 ### Annotation Workflow
 
@@ -303,18 +222,11 @@ Located in: `data/reference/list_of_coral.csv`
 
 ## Roadmap
 <a href="./docs/example_ai_0.png" target="_blank"><img src="./docs/example_ai_0.png" align="right" alt="logo" /></a>
-
-### ✅ Completed (this branch)
-- **Oracle Database Backend** - Centralized project, annotation, and session storage
-- **Google Cloud Storage (GCS) Integration** - Native `gs://` bucket paths for COG imagery
-- **Cloud Workstation Support** - Docker Compose deployment with auto-bootstrap
-- **Shapefile Overlay Layers** - Import, edit, reorder, style, and persist vector overlays
-- **Geometry Editing** - Double-click to edit overlay features, auto-save to Oracle
-- **Live Status Dashboard** - Homepage shows DB health, project count
-- **AI-Assisted Segmentation (SAM3)** - Optional GPU-accelerated text/point/box/tiled coral segmentation, auto-saved as reviewable annotations (see [Optional: AI Segmentation](#optional-ai-segmentation-sam3-gpu-accelerated) above)
-
 ### 🚧 In Progress
-- **AI-Assisted Classification** - Automated species classification on top of AI-segmented detections (YOLO)
+- **AI-Assisted Annotation** - Automated and Semi-automated coral detection, segmentation and classification features (YOLO,SAM3)
+- **Google Cloud Storage (GCS) Integration** - Native support for `gs://` bucket paths
+- **Cloud Workstation Support** - Optimized deployment for Google Cloud Workstations
+- **Database Backend** - Optional Oracle/SQLlite/PostgreSQL/GIS backend for large projects
 - **Multi-user Support** - Shared annotation sessions with user tracking
 <a href="./docs/example_ai_01.png" target="_blank"><img src="./docs/example_ai_01.png"  alt="logo" /></a>
 
@@ -346,5 +258,4 @@ This repository is a scientific product and is not official communication of the
 This repository's code is available under the terms specified in [LICENSE.md](./LICENSE.md).
 
 ## Acknowledgments
-- This project uses [TiTiler](https://github.com/developmentseed/titiler) by Development Seed for dynamic tile generation. TiTiler is licensed under the [MIT License](https://github.com/developmentseed/titiler/blob/main/LICENSE).
-- [pyshortcuts](https://github.com/newville/pyshortcuts)
+This project uses [TiTiler](https://github.com/developmentseed/titiler) by Development Seed for dynamic tile generation. TiTiler is licensed under the [MIT License](https://github.com/developmentseed/titiler/blob/main/LICENSE).

@@ -258,6 +258,17 @@
             });
           }
 
+          // Add click handler for editing -- every other annotation-creation
+          // path (normal single-draw save, the DB page-load renderer, the
+          // upload/import path) binds this; bulk draw was the one gap, which
+          // left bulk-drawn shapes unclickable until a refresh re-rendered
+          // them through loadProjectAnnotations() (which does bind it).
+          layer.off('click');
+          layer.on('click', function (e) {
+            L.DomEvent.stopPropagation(e);
+            if (typeof showAnnotationPopup === 'function') showAnnotationPopup(layer, e.latlng);
+          });
+
           // Add to project annotations array
           let annotationIndex = -1;
           if (typeof annotations !== 'undefined') {
