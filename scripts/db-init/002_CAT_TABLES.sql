@@ -238,21 +238,31 @@ BEGIN
         CREATE TABLE cat_site_visits (
             visit_id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             site_name VARCHAR2(120) NOT NULL,
+            mission_id VARCHAR2(120),
+            occ_site_id VARCHAR2(120),
             survey_date VARCHAR2(50),
             cruise_leg VARCHAR2(120),
             photographer VARCHAR2(120),
             team VARCHAR2(120),
+            camera_number VARCHAR2(50),
             region VARCHAR2(50),
             island VARCHAR2(120),
             sector VARCHAR2(120),
+            reef_zone VARCHAR2(120),
+            depth_bin VARCHAR2(10),
             survey_size VARCHAR2(255),
             latitude NUMBER,
             longitude NUMBER,
             survey_type VARCHAR2(120),
             total_images VARCHAR2(255),
             notes VARCHAR2(2000),
+            processing_status VARCHAR2(120),
+            color_correct VARCHAR2(50),
+            exposure_correct VARCHAR2(50),
+            mosaic_issues VARCHAR2(2000),
             modeling_priority VARCHAR2(255),
-            annotation_time VARCHAR2(255)
+            annotation_time VARCHAR2(255),
+            piclea_file_path VARCHAR2(2000)
         )
     ]';
     DBMS_OUTPUT.PUT_LINE('Created table: cat_site_visits');

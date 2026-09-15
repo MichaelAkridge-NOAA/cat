@@ -193,21 +193,31 @@ DDL_BLOCKS: List[str] = [
             CREATE TABLE cat_site_visits (
                 visit_id          NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 site_name         VARCHAR2(120) NOT NULL,
+                mission_id        VARCHAR2(120),
+                occ_site_id       VARCHAR2(120),
                 survey_date       VARCHAR2(50),
                 cruise_leg        VARCHAR2(120),
                 photographer      VARCHAR2(120),
                 team              VARCHAR2(120),
+                camera_number     VARCHAR2(50),
                 region            VARCHAR2(50),
                 island            VARCHAR2(120),
                 sector            VARCHAR2(120),
+                reef_zone         VARCHAR2(120),
+                depth_bin         VARCHAR2(10),
                 survey_size       VARCHAR2(255),
                 latitude          NUMBER,
                 longitude         NUMBER,
                 survey_type       VARCHAR2(120),
                 total_images      VARCHAR2(255),
                 notes             VARCHAR2(2000),
+                processing_status VARCHAR2(120),
+                color_correct     VARCHAR2(50),
+                exposure_correct  VARCHAR2(50),
+                mosaic_issues     VARCHAR2(2000),
                 modeling_priority VARCHAR2(255),
-                annotation_time   VARCHAR2(255)
+                annotation_time   VARCHAR2(255),
+                piclea_file_path  VARCHAR2(2000)
             )
         ]';
     EXCEPTION
@@ -282,6 +292,86 @@ DDL_BLOCKS: List[str] = [
     """
     BEGIN
         EXECUTE IMMEDIATE 'ALTER TABLE cat_annotation_sessions ADD (last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP)';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_site_visits ADD (mission_id VARCHAR2(120))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_site_visits ADD (reef_zone VARCHAR2(120))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_site_visits ADD (depth_bin VARCHAR2(10))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_site_visits ADD (piclea_file_path VARCHAR2(2000))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_site_visits ADD (occ_site_id VARCHAR2(120))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_site_visits ADD (camera_number VARCHAR2(50))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_site_visits ADD (processing_status VARCHAR2(120))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_site_visits ADD (color_correct VARCHAR2(50))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_site_visits ADD (exposure_correct VARCHAR2(50))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_site_visits ADD (mosaic_issues VARCHAR2(2000))';
     EXCEPTION
         WHEN OTHERS THEN
             IF SQLCODE != -1430 THEN RAISE; END IF;

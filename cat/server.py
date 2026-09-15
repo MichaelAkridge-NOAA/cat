@@ -290,9 +290,10 @@ async def lifespan(app: FastAPI):
                     from cat.db.sites import count_db_sites, seed_sites_from_csv
                     seed_result = seed_sites_from_csv()
                     logger.info(
-                        "Site reference data seeded (upsert): %d sites, %d visits.",
+                        "2026 site reference data synchronized: %d sites, %d visits, %d stale sites removed.",
                         seed_result["sites_seeded"],
                         seed_result["visits_seeded"],
+                        seed_result["sites_removed"],
                     )
                 except Exception as seed_exc:
                     logger.warning("Site auto-seed failed (non-fatal): %s", seed_exc)

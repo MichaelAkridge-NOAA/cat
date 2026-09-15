@@ -27,16 +27,16 @@ Batch convert orthomosaic GeoTIFFs from one GCS bucket/prefix to another.
 
 ```bash
 python -m cat.scripts.convert_gcs_mos_to_cog \
-  --source-prefix gs://your-bucket/orthomosaic/2025 \
-  --dest-prefix   gs://your-bucket/orthomosaic_cog/2025
+  --source-prefix gs://your-bucket/orthomosaic/2026 \
+  --dest-prefix   gs://your-bucket/orthomosaic_cog/2026
 ```
 
 ### Dry run first (recommended)
 
 ```bash
 python -m cat.scripts.convert_gcs_mos_to_cog \
-  --source-prefix gs://your-bucket/orthomosaic/2025 \
-  --dest-prefix   gs://your-bucket/orthomosaic_cog/2025 \
+  --source-prefix gs://your-bucket/orthomosaic/2026 \
+  --dest-prefix   gs://your-bucket/orthomosaic_cog/2026 \
   --dry-run
 ```
 
@@ -44,8 +44,8 @@ python -m cat.scripts.convert_gcs_mos_to_cog \
 
 ```bash
 python -m cat.scripts.convert_gcs_mos_to_cog \
-  --source-prefix gs://your-bucket/orthomosaic/2025 \
-  --dest-prefix   gs://your-bucket/orthomosaic_cog/2025 \
+  --source-prefix gs://your-bucket/orthomosaic/2026 \
+  --dest-prefix   gs://your-bucket/orthomosaic_cog/2026 \
   --workers 4
 ```
 
@@ -53,8 +53,8 @@ python -m cat.scripts.convert_gcs_mos_to_cog \
 
 ```bash
 python -m cat.scripts.convert_gcs_mos_to_cog \
-  --source-prefix gs://your-bucket/orthomosaic/2025 \
-  --dest-prefix   gs://your-bucket/orthomosaic_cog/2025 \
+  --source-prefix gs://your-bucket/orthomosaic/2026 \
+  --dest-prefix   gs://your-bucket/orthomosaic_cog/2026 \
   --profile jpeg --quality 95
 ```
 # TEST
@@ -71,8 +71,8 @@ python -m cat.scripts.convert_gcs_mos_to_cog \
 
 ```bash
 python -m cat.scripts.convert_gcs_mos_to_cog \
-  --source-prefix gs://your-bucket/orthomosaic/2025 \
-  --dest-prefix   gs://your-bucket/orthomosaic_cog/2025 \
+  --source-prefix gs://your-bucket/orthomosaic/2026 \
+  --dest-prefix   gs://your-bucket/orthomosaic_cog/2026 \
   --flat
 ```
 
@@ -109,16 +109,16 @@ Batch convert DEM GeoTIFFs from one GCS bucket/prefix to another.
 
 ```bash
 python -m cat.scripts.convert_gcs_dem_to_cog \
-  --source-prefix gs://your-bucket/dem/2025 \
-  --dest-prefix   gs://your-bucket/dem_cog/2025
+  --source-prefix gs://your-bucket/dem/2026 \
+  --dest-prefix   gs://your-bucket/dem_cog/2026
 ```
 
 ### Dry run first (recommended)
 
 ```bash
 python -m cat.scripts.convert_gcs_dem_to_cog \
-  --source-prefix gs://your-bucket/dem/2025 \
-  --dest-prefix   gs://your-bucket/dem_cog/2025 \
+  --source-prefix gs://your-bucket/dem/2026 \
+  --dest-prefix   gs://your-bucket/dem_cog/2026 \
   --dry-run
 ```
 
@@ -126,8 +126,8 @@ python -m cat.scripts.convert_gcs_dem_to_cog \
 
 ```bash
 python -m cat.scripts.convert_gcs_dem_to_cog \
-  --source-prefix gs://your-bucket/dem/2025 \
-  --dest-prefix   gs://your-bucket/dem_cog/2025 \
+  --source-prefix gs://your-bucket/dem/2026 \
+  --dest-prefix   gs://your-bucket/dem_cog/2026 \
   --nodata -9999
 ```
 
@@ -135,8 +135,8 @@ python -m cat.scripts.convert_gcs_dem_to_cog \
 
 ```bash
 python -m cat.scripts.convert_gcs_dem_to_cog \
-  --source-prefix gs://your-bucket/dem/2025 \
-  --dest-prefix   gs://your-bucket/dem_cog/2025 \
+  --source-prefix gs://your-bucket/dem/2026 \
+  --dest-prefix   gs://your-bucket/dem_cog/2026 \
   --profile zstd
 ```
 
@@ -144,8 +144,8 @@ python -m cat.scripts.convert_gcs_dem_to_cog \
 
 ```bash
 python -m cat.scripts.convert_gcs_dem_to_cog \
-  --source-prefix gs://your-bucket/dem/2025 \
-  --dest-prefix   gs://your-bucket/dem_cog/2025 \
+  --source-prefix gs://your-bucket/dem/2026 \
+  --dest-prefix   gs://your-bucket/dem_cog/2026 \
   --pattern "*dsm*.tif" \
   --workers 4
 ```

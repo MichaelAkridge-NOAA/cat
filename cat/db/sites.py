@@ -10,6 +10,7 @@ Entry: get_sites(use_db, gcs_cog_map)
 """
 
 import csv
+from datetime import datetime
 import logging
 import re
 from pathlib import Path
@@ -18,8 +19,14 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 _REF_DIR = Path(__file__).parent.parent / "data" / "reference"
-_SITE_LIST_CSV = _REF_DIR / "site_list.csv"
-_SITE_VISIT_CSV = _REF_DIR / "site_visit_info.csv"
+_SITE_VISIT_CSV = _REF_DIR / "site_visit_info_2026.csv"
+
+_DEPTH_BIN_CODES = {
+    "shallow": "S",
+    "mid": "M",
+    "medium": "M",
+    "deep": "D",
+}
 
 # Matches: 2025_WAK-2104_mos_cog.tif  or  WAK-2104_mos.tif
 _SITE_RE = re.compile(r"(?:^|[/_])(\d{4}_)?([A-Z]{2,4}-\d{3,5})(?:[_.]|$)")
@@ -30,35 +37,38 @@ _SITE_RE = re.compile(r"(?:^|[/_])(\d{4}_)?([A-Z]{2,4}-\d{3,5})(?:[_.]|$)")
 # ---------------------------------------------------------------------------
 
 def load_site_list_csv() -> Dict[str, dict]:
-    """Return {site_name: {site_name, depth_bin, region}} from site_list.csv."""
+    """Return the unique 2026 sites derived from the visit CSV."""
     sites: Dict[str, dict] = {}
-    if not _SITE_LIST_CSV.exists():
-        logger.warning("site_list.csv not found at %s", _SITE_LIST_CSV)
-        return sites
-    with open(_SITE_LIST_CSV, newline="", encoding="utf-8") as fh:
-        for row in csv.DictReader(fh):
-            name = (row.get("site") or row.get("Site") or "").strip()
-            if not name:
-                continue
-            region = name.split("-")[0] if "-" in name else ""
-            depth_bin = (row.get("depth_bin") or row.get("Depth_bin") or "").strip()
-            sites[name] = {
-                "site_name": name,
-                "depth_bin": depth_bin,
-                "region": region,
-            }
+    for name, visits in load_visit_info_csv().items():
+        primary = visits[0]
+        depth_bin = next((v.get("depth_bin") for v in visits if v.get("depth_bin")), "")
+        sites[name] = {
+            "site_name": name,
+            "depth_bin": depth_bin,
+            "region": name.split("-")[0] if "-" in name else "",
+            "visit": primary,
+            "visits": visits,
+        }
     return sites
 
 
-def load_visit_info_csv() -> Dict[str, dict]:
-    """Return {site_name: visit_dict} from site_visit_info.csv.
+def _visit_sort_key(visit: dict) -> tuple:
+    value = visit.get("survey_date") or ""
+    try:
+        return (datetime.strptime(value, "%m/%d/%Y"), value)
+    except (TypeError, ValueError):
+        return (datetime.min, value)
+
+
+def load_visit_info_csv() -> Dict[str, List[dict]]:
+    """Return all 2026 visits grouped by site name, newest first.
 
     The CSV has a two-row header: row 1 is group labels (Markers, Agisoft,
     etc.) and row 2 holds the actual column names.  We skip row 1.
     """
-    visits: Dict[str, dict] = {}
+    visits: Dict[str, List[dict]] = {}
     if not _SITE_VISIT_CSV.exists():
-        logger.warning("site_visit_info.csv not found at %s", _SITE_VISIT_CSV)
+        logger.warning("2026 site visit CSV not found at %s", _SITE_VISIT_CSV)
         return visits
     with open(_SITE_VISIT_CSV, newline="", encoding="utf-8") as fh:
         fh.readline()  # skip group-label header row
@@ -79,23 +89,37 @@ def load_visit_info_csv() -> Dict[str, dict]:
                 except (ValueError, TypeError):
                     return None
 
-            visits[name] = {
-                "survey_date":       _s("Survey Date"),
+            raw_depth_bin = _s("Depth Bin") or ""
+            visit = {
+                "mission_id":        _s("Mission ID"),
+                "occ_site_id":       _s("OCC Site ID"),
+                "survey_date":       _s("Date"),
                 "cruise_leg":        _s("Cruise Leg"),
                 "photographer":      _s("Photographer"),
                 "team":              _s("Team"),
-                "region":            _s("Region"),
+                "camera_number":     _s("Camera #"),
+                "region":            name.split("-")[0] if "-" in name else "",
                 "island":            _s("Island"),
                 "sector":            _s("Sector"),
+                "reef_zone":         _s("Reef Zone"),
+                "depth_bin":         _DEPTH_BIN_CODES.get(raw_depth_bin.lower(), raw_depth_bin),
                 "survey_size":       _s("Survey Size"),
                 "latitude":          _f("Lat (N)"),
                 "longitude":         _f("Long (E)"),
                 "survey_type":       _s("Survey Type"),
                 "total_images":      _s("total images shot"),
-                "notes":             _s("Notes"),
+                "notes":             _s("Field Notes") or _s("Notes"),
+                "processing_status": _s("Status"),
+                "color_correct":     _s("Color Correct"),
+                "exposure_correct":  _s("Exposure Correct"),
+                "mosaic_issues":     _s("Mosaic Issues"),
                 "modeling_priority": _s("Modeling Priority"),
                 "annotation_time":   _s("Annotation Time"),
+                "piclea_file_path":  _s("PICLEA FIle Path"),
             }
+            visits.setdefault(name, []).append(visit)
+    for site_visits in visits.values():
+        site_visits.sort(key=_visit_sort_key, reverse=True)
     return visits
 
 
@@ -103,12 +127,10 @@ def build_sites_from_csv(
     gcs_cog_map: Optional[Dict[str, str]] = None,
     gcs_asset_map: Optional[Dict[str, Dict[str, Optional[str]]]] = None,
 ) -> List[dict]:
-    """Merge site_list + visit_info CSVs, optionally overlay GCS COG URIs."""
+    """Build unique 2026 sites, optionally overlaying GCS COG URIs."""
     sites_base = load_site_list_csv()
-    visits = load_visit_info_csv()
     result = []
     for name, s in sites_base.items():
-        visit = visits.get(name)
         assets = (gcs_asset_map or {}).get(name) or {
             "cog_uri": (gcs_cog_map or {}).get(name),
             "dem_uri": None,
@@ -121,25 +143,7 @@ def build_sites_from_csv(
             "has_dem": bool(dem_uri),
             "cog_uri": cog_uri,
             "dem_uri": dem_uri,
-            "visit": visit,
         })
-    for name, visit in visits.items():
-        if name not in sites_base:
-            region = name.split("-")[0] if "-" in name else (visit.get("region") or "")
-            assets = (gcs_asset_map or {}).get(name) or {
-                "cog_uri": (gcs_cog_map or {}).get(name),
-                "dem_uri": None,
-            }
-            cog_uri = assets.get("cog_uri")
-            dem_uri = assets.get("dem_uri")
-            result.append({
-                "site_name": name, "depth_bin": "", "region": region,
-                "has_cog": bool(cog_uri or dem_uri),
-                "has_dem": bool(dem_uri),
-                "cog_uri": cog_uri,
-                "dem_uri": dem_uri,
-                "visit": visit,
-            })
     return sorted(result, key=lambda s: s["site_name"])
 
 
@@ -222,13 +226,12 @@ def count_db_sites() -> int:
 
 
 def seed_sites_from_csv() -> dict:
-    """Upsert all sites and visit info from bundled CSVs into Oracle.
+    """Replace Oracle reference data with the bundled 2026 site data.
 
-    Safe to call multiple times -- uses MERGE (upsert) semantics.
-    Returns {"sites_seeded": N, "visits_seeded": M}.
+    Existing COG URIs are retained for sites still present in 2026. Project,
+    asset, annotation, and user tables are not modified.
     """
     sites_base = load_site_list_csv()
-    visits = load_visit_info_csv()
 
     site_rows = [
         {
@@ -239,27 +242,37 @@ def seed_sites_from_csv() -> dict:
         for v in sites_base.values()
     ]
 
-    visit_rows = [
-        {
-            "site_name":         name,
-            "survey_date":       v.get("survey_date"),
-            "cruise_leg":        v.get("cruise_leg"),
-            "photographer":      v.get("photographer"),
-            "team":              v.get("team"),
-            "region":            v.get("region"),
-            "island":            v.get("island"),
-            "sector":            v.get("sector"),
-            "survey_size":       v.get("survey_size"),
-            "latitude":          v.get("latitude"),
-            "longitude":         v.get("longitude"),
-            "survey_type":       v.get("survey_type"),
-            "total_images":      v.get("total_images"),
-            "notes":             v.get("notes"),
-            "modeling_priority": v.get("modeling_priority"),
-            "annotation_time":   v.get("annotation_time"),
-        }
-        for name, v in visits.items()
-    ]
+    visit_rows = []
+    for name, site in sites_base.items():
+        for visit in site["visits"]:
+            visit_rows.append({
+                "site_name":         name,
+                "mission_id":        visit.get("mission_id"),
+                "occ_site_id":       visit.get("occ_site_id"),
+                "survey_date":       visit.get("survey_date"),
+                "cruise_leg":        visit.get("cruise_leg"),
+                "photographer":      visit.get("photographer"),
+                "team":              visit.get("team"),
+                "camera_number":     visit.get("camera_number"),
+                "region":            visit.get("region"),
+                "island":            visit.get("island"),
+                "sector":            visit.get("sector"),
+                "reef_zone":         visit.get("reef_zone"),
+                "depth_bin":         visit.get("depth_bin"),
+                "survey_size":       visit.get("survey_size"),
+                "latitude":          visit.get("latitude"),
+                "longitude":         visit.get("longitude"),
+                "survey_type":       visit.get("survey_type"),
+                "total_images":      visit.get("total_images"),
+                "notes":             visit.get("notes"),
+                "processing_status": visit.get("processing_status"),
+                "color_correct":     visit.get("color_correct"),
+                "exposure_correct":  visit.get("exposure_correct"),
+                "mosaic_issues":     visit.get("mosaic_issues"),
+                "modeling_priority": visit.get("modeling_priority"),
+                "annotation_time":   visit.get("annotation_time"),
+                "piclea_file_path":  visit.get("piclea_file_path"),
+            })
 
     site_merge = """
         MERGE INTO cat_sites dst
@@ -276,116 +289,150 @@ def seed_sites_from_csv() -> dict:
                        dst.region    = src.region
     """
 
-    visit_merge = """
-        MERGE INTO cat_site_visits dst
-        USING (SELECT :site_name AS site_name FROM dual) src
-        ON (dst.site_name = src.site_name)
-        WHEN NOT MATCHED THEN
-            INSERT (site_name, survey_date, cruise_leg, photographer, team,
-                    region, island, sector, survey_size, latitude, longitude,
-                    survey_type, total_images, notes, modeling_priority, annotation_time)
-            VALUES (:site_name, :survey_date, :cruise_leg, :photographer, :team,
-                    :region, :island, :sector, :survey_size, :latitude, :longitude,
-                    :survey_type, :total_images, :notes, :modeling_priority, :annotation_time)
-        WHEN MATCHED THEN
-            UPDATE SET dst.survey_date       = :survey_date,
-                       dst.cruise_leg        = :cruise_leg,
-                       dst.photographer      = :photographer,
-                       dst.team              = :team,
-                       dst.region            = :region,
-                       dst.island            = :island,
-                       dst.sector            = :sector,
-                       dst.survey_size       = :survey_size,
-                       dst.latitude          = :latitude,
-                       dst.longitude         = :longitude,
-                       dst.survey_type       = :survey_type,
-                       dst.total_images      = :total_images,
-                       dst.notes             = :notes,
-                       dst.modeling_priority = :modeling_priority,
-                       dst.annotation_time   = :annotation_time
+    visit_insert = """
+        INSERT INTO cat_site_visits (
+            site_name, mission_id, occ_site_id, survey_date, cruise_leg,
+            photographer, team, camera_number, region, island, sector, reef_zone,
+            depth_bin, survey_size, latitude, longitude, survey_type, total_images,
+            notes, processing_status, color_correct, exposure_correct, mosaic_issues,
+            modeling_priority, annotation_time, piclea_file_path
+        ) VALUES (
+            :site_name, :mission_id, :occ_site_id, :survey_date, :cruise_leg,
+            :photographer, :team, :camera_number, :region, :island, :sector,
+            :reef_zone, :depth_bin, :survey_size, :latitude, :longitude,
+            :survey_type, :total_images, :notes, :processing_status,
+            :color_correct, :exposure_correct, :mosaic_issues,
+            :modeling_priority, :annotation_time, :piclea_file_path
+        )
     """
 
     from cat.db.oracle import get_connection
     with get_connection() as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT site_name FROM cat_sites")
+            current_names = {row[0] for row in cur.fetchall()}
+            active_names = set(sites_base)
+            stale_rows = [{"site_name": name} for name in current_names - active_names]
+
+            cur.execute("DELETE FROM cat_site_visits")
             cur.executemany(site_merge, site_rows)
-            cur.executemany(visit_merge, visit_rows)
+            cur.executemany(visit_insert, visit_rows)
+            if stale_rows:
+                cur.executemany(
+                    "DELETE FROM cat_sites WHERE site_name = :site_name",
+                    stale_rows,
+                )
         conn.commit()
 
     return {
         "sites_seeded": len(site_rows),
         "visits_seeded": len(visit_rows),
+        "sites_removed": len(stale_rows),
     }
+
+
+def _group_site_rows(
+    rows: List[dict],
+    gcs_cog_map: Optional[Dict[str, str]] = None,
+    gcs_asset_map: Optional[Dict[str, Dict[str, Optional[str]]]] = None,
+) -> List[dict]:
+    grouped: Dict[str, dict] = {}
+    for row in rows:
+        site_name = row["site_name"]
+        site = grouped.get(site_name)
+        if site is None:
+            overlay = (gcs_asset_map or {}).get(site_name) or {}
+            cog_uri = overlay.get("cog_uri") or (gcs_cog_map or {}).get(site_name) or row.get("cog_uri")
+            dem_uri = overlay.get("dem_uri") or _guess_dem_uri_from_cog(cog_uri)
+            site = {
+                "site_name": site_name,
+                "depth_bin": row.get("site_depth_bin") or "",
+                "region": row.get("site_region") or "",
+                "has_cog": bool(cog_uri or dem_uri),
+                "has_dem": bool(dem_uri),
+                "cog_uri": cog_uri,
+                "dem_uri": dem_uri,
+                "visit": None,
+                "visits": [],
+            }
+            grouped[site_name] = site
+
+        if any(row.get(key) for key in ("survey_date", "cruise_leg", "latitude")):
+            site["visits"].append({
+                "mission_id":        row.get("mission_id"),
+                "occ_site_id":       row.get("occ_site_id"),
+                "survey_date":       row.get("survey_date"),
+                "cruise_leg":        row.get("cruise_leg"),
+                "photographer":      row.get("photographer"),
+                "team":              row.get("team"),
+                "camera_number":     row.get("camera_number"),
+                "region":            row.get("visit_region") or site["region"],
+                "island":            row.get("island"),
+                "sector":            row.get("sector"),
+                "reef_zone":         row.get("reef_zone"),
+                "depth_bin":         row.get("visit_depth_bin") or site["depth_bin"],
+                "survey_size":       row.get("survey_size"),
+                "latitude":          row.get("latitude"),
+                "longitude":         row.get("longitude"),
+                "survey_type":       row.get("survey_type"),
+                "total_images":      row.get("total_images"),
+                "notes":             row.get("notes"),
+                "processing_status": row.get("processing_status"),
+                "color_correct":     row.get("color_correct"),
+                "exposure_correct":  row.get("exposure_correct"),
+                "mosaic_issues":     row.get("mosaic_issues"),
+                "modeling_priority": row.get("modeling_priority"),
+                "annotation_time":   row.get("annotation_time"),
+                "piclea_file_path":  row.get("piclea_file_path"),
+            })
+
+    for site in grouped.values():
+        site["visits"].sort(key=_visit_sort_key, reverse=True)
+        site["visit"] = site["visits"][0] if site["visits"] else None
+    return sorted(grouped.values(), key=lambda site: site["site_name"])
 
 
 def fetch_sites_from_db(
     gcs_cog_map: Optional[Dict[str, str]] = None,
     gcs_asset_map: Optional[Dict[str, Dict[str, Optional[str]]]] = None,
 ) -> List[dict]:
-    """Query cat_sites + cat_site_visits via LEFT JOIN from Oracle."""
+    """Query Oracle and return one site with a newest-first visit history."""
     from cat.db.oracle import fetch_all
     rows = fetch_all("""
         SELECT s.site_name,
-               s.depth_bin,
-               s.region,
+               s.depth_bin AS site_depth_bin,
+               s.region AS site_region,
                s.cog_uri,
+               v.mission_id,
+               v.occ_site_id,
                v.survey_date,
                v.cruise_leg,
                v.photographer,
                v.team,
+               v.camera_number,
+               v.region AS visit_region,
                v.island,
                v.sector,
+               v.reef_zone,
+               v.depth_bin AS visit_depth_bin,
                v.survey_size,
                v.latitude,
                v.longitude,
                v.survey_type,
                v.total_images,
                v.notes,
+               v.processing_status,
+               v.color_correct,
+               v.exposure_correct,
+               v.mosaic_issues,
                v.modeling_priority,
-               v.annotation_time
+               v.annotation_time,
+               v.piclea_file_path
         FROM   cat_sites s
         LEFT JOIN cat_site_visits v ON v.site_name = s.site_name
-        ORDER BY s.site_name
+        ORDER BY s.site_name, v.survey_date DESC, v.visit_id DESC
     """)
-
-    result = []
-    for r in rows:
-        site_name = r["site_name"]
-        # Live overlay takes precedence over the stored value
-        overlay = (gcs_asset_map or {}).get(site_name) or {}
-        cog_uri = overlay.get("cog_uri") or (gcs_cog_map or {}).get(site_name) or r.get("cog_uri")
-        dem_uri = overlay.get("dem_uri") or _guess_dem_uri_from_cog(cog_uri)
-        has_visit = any(r.get(k) for k in ("survey_date", "cruise_leg", "latitude"))
-        visit = None
-        if has_visit:
-            visit = {
-                "survey_date":       r.get("survey_date"),
-                "cruise_leg":        r.get("cruise_leg"),
-                "photographer":      r.get("photographer"),
-                "team":              r.get("team"),
-                "region":            r.get("region"),
-                "island":            r.get("island"),
-                "sector":            r.get("sector"),
-                "survey_size":       r.get("survey_size"),
-                "latitude":          r.get("latitude"),
-                "longitude":         r.get("longitude"),
-                "survey_type":       r.get("survey_type"),
-                "total_images":      r.get("total_images"),
-                "notes":             r.get("notes"),
-                "modeling_priority": r.get("modeling_priority"),
-                "annotation_time":   r.get("annotation_time"),
-            }
-        result.append({
-            "site_name": site_name,
-            "depth_bin": r.get("depth_bin") or "",
-            "region":    r.get("region") or "",
-            "has_cog":   bool(cog_uri or dem_uri),
-            "has_dem":   bool(dem_uri),
-            "cog_uri":   cog_uri,
-            "dem_uri":   dem_uri,
-            "visit":     visit,
-        })
-    return result
+    return _group_site_rows(rows, gcs_cog_map, gcs_asset_map)
 
 
 def update_cog_uris(cog_map: Dict[str, Any]) -> int:

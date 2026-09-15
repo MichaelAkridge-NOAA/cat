@@ -27,7 +27,6 @@ from cat.db.sites import (
     build_gcs_cog_map,
     count_db_sites,
     get_sites,
-    load_site_list_csv,
     seed_sites_from_csv,
     site_name_from_uri,
     update_cog_uris,
@@ -67,8 +66,17 @@ def list_sites(
             s
             for s in sites
             if q in s["site_name"].lower()
-            or (s["visit"] and q in (s["visit"].get("cruise_leg") or "").lower())
-            or (s["visit"] and q in (s["visit"].get("island") or "").lower())
+            or any(
+                any(
+                    q in (visit.get(field) or "").lower()
+                    for field in (
+                        "survey_date", "mission_id", "cruise_leg", "island",
+                        "photographer", "team", "sector", "reef_zone",
+                        "survey_type",
+                    )
+                )
+                for visit in s.get("visits", [])
+            )
         ]
     if has_cog is not None:
         sites = [s for s in sites if s["has_cog"] == has_cog]
@@ -88,20 +96,10 @@ def list_sites(
 
 @router.get("/regions")
 def list_regions():
-    if _use_db():
-        try:
-            from cat.db.oracle import fetch_all
-
-            rows = fetch_all(
-                "SELECT DISTINCT region FROM cat_sites "
-                "WHERE region IS NOT NULL ORDER BY region"
-            )
-            return {"regions": [r["region"] for r in rows], "source": "db"}
-        except Exception as exc:
-            logger.warning("DB region query failed: %s", exc)
-    sites = load_site_list_csv()
-    regions = sorted({s["region"] for s in sites.values() if s["region"]})
-    return {"regions": regions, "source": "csv"}
+    use_db = _use_db()
+    sites = get_sites(use_db=use_db)
+    regions = sorted({s["region"] for s in sites if s["region"]})
+    return {"regions": regions, "source": "db" if use_db else "csv"}
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +110,7 @@ def list_regions():
 def sites_status():
     use_db = _use_db()
     db_count = count_db_sites() if use_db else None
-    csv_count = len(load_site_list_csv())
+    csv_count = len(get_sites(use_db=False))
     return {
         "backend": "oracle" if use_db else "file",
         "source": "db" if use_db else "csv",

@@ -116,6 +116,10 @@
           '<div class="pd-section-title">Site info</div>' +
           '<dl class="pd-facts" id="sdInfo"></dl>' +
         '</div>' +
+        '<div class="pd-section">' +
+          '<div class="pd-section-title">Visit history <span class="pd-count" id="sdVisitCount"></span></div>' +
+          '<div id="sdVisits"></div>' +
+        '</div>' +
       '</div>';
 
     document.body.appendChild(overlayEl);
@@ -170,6 +174,7 @@
     $('sdClose').focus();
 
     renderInfo(site);
+    renderVisits(site);
     renderMap(site);
     renderAssets(site);
   }
@@ -411,7 +416,10 @@
       ['Depth', { S: 'Shallow', M: 'Medium', D: 'Deep' }[site.depth_bin] || site.depth_bin || '—'],
     ];
     if (v.survey_date) rows.push(['Survey date', v.survey_date]);
+    if (v.mission_id) rows.push(['Mission', v.mission_id]);
     if (v.cruise_leg) rows.push(['Cruise', v.cruise_leg]);
+    if (v.survey_type) rows.push(['Survey type', v.survey_type]);
+    if (v.team) rows.push(['Team', v.team]);
     if (v.island) rows.push(['Island', v.island]);
     if (v.photographer) rows.push(['Photographer', v.photographer]);
     if (v.latitude != null && v.longitude != null) {
@@ -421,6 +429,53 @@
 
     setHtml('sdInfo', rows.map(function (r) {
       return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>';
+    }).join(''));
+  }
+
+  function renderVisits(site) {
+    var visits = Array.isArray(site.visits) && site.visits.length
+      ? site.visits
+      : (site.visit ? [site.visit] : []);
+    var count = $('sdVisitCount');
+    if (count) count.textContent = visits.length ? visits.length : '';
+    if (!visits.length) {
+      setHtml('sdVisits', '<div class="pd-empty">No visit details recorded.</div>');
+      return;
+    }
+    setHtml('sdVisits', visits.map(function (visit) {
+      var details = [visit.mission_id, visit.cruise_leg, visit.team, visit.photographer]
+        .filter(Boolean).map(esc).join(' · ');
+      var location = [visit.island, visit.sector, visit.reef_zone]
+        .filter(Boolean).map(esc).join(' · ');
+      var facts = [];
+      if (visit.survey_type) facts.push(['Survey type', visit.survey_type]);
+      if (visit.survey_size) facts.push(['Survey size', visit.survey_size]);
+      if (visit.occ_site_id) facts.push(['OCC site ID', visit.occ_site_id]);
+      if (visit.camera_number) facts.push(['Camera', visit.camera_number]);
+      if (visit.total_images) facts.push(['Images', visit.total_images]);
+      if (visit.processing_status) facts.push(['Processing', visit.processing_status]);
+      var corrections = [
+        visit.color_correct ? 'Color: ' + visit.color_correct : '',
+        visit.exposure_correct ? 'Exposure: ' + visit.exposure_correct : '',
+      ].filter(Boolean).join(' · ');
+      if (corrections) facts.push(['Corrections', corrections]);
+      if (visit.latitude != null && visit.longitude != null) {
+        facts.push(['Coordinates', Number(visit.latitude).toFixed(5) + ', ' + Number(visit.longitude).toFixed(5)]);
+      }
+      return '<div class="pd-asset">' +
+        '<div class="pd-asset-head"><span class="pd-asset-name">' +
+          esc(visit.survey_date || 'Date not recorded') + '</span>' +
+          (visit.depth_bin ? '<span class="pd-tag">' + esc(visit.depth_bin) + '</span>' : '') +
+        '</div>' +
+        (details ? '<div class="pd-sub">' + details + '</div>' : '') +
+        (location ? '<div class="pd-sub">' + location + '</div>' : '') +
+        (facts.length ? '<dl class="pd-facts">' + facts.map(function (fact) {
+          return '<dt>' + esc(fact[0]) + '</dt><dd>' + esc(fact[1]) + '</dd>';
+        }).join('') + '</dl>' : '') +
+        (visit.mosaic_issues ? '<div class="pd-sub"><strong>Mosaic issues:</strong> ' + esc(visit.mosaic_issues) + '</div>' : '') +
+        (visit.notes ? '<div class="pd-sub"><strong>Notes:</strong> ' + esc(visit.notes) + '</div>' : '') +
+        (visit.piclea_file_path ? '<div class="pd-uri" title="' + esc(visit.piclea_file_path) + '">' + esc(visit.piclea_file_path) + '</div>' : '') +
+      '</div>';
     }).join(''));
   }
 })();

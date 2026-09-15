@@ -549,7 +549,7 @@
           <div style="display:flex; gap:10px; align-items:center;">
             <input type="text" 
                    id="basePath" 
-                   placeholder="e.g., C:\Sites\2025\SE2503_MARI\GUA\GUA-2838\Products"
+                   placeholder="e.g., C:\Sites\2026\SE2602_PRIA\PAL\PAL-5171\Products"
                    style="flex:1; padding:12px; border:2px solid var(--cat-primary); border-radius:6px; font-family:monospace; font-size:12px;">
             <button class="btn btn-primary" onclick="applyBasePath()" style="white-space:nowrap;">
               ✓ Apply to All Files
@@ -640,7 +640,7 @@
             </div>
             <div class="form-group">
               <label>Year</label>
-              <input type="number" id="year" value="2025">
+              <input type="number" id="year" value="2026">
             </div>
             <div class="form-group">
               <label>Region</label>
@@ -827,6 +827,9 @@
             <option value="M">Medium (M)</option>
             <option value="D">Deep (D)</option>
           </select>
+          <select id="sbSurveyTypeFilter" onchange="renderSiteBrowser()">
+            <option value="">All Survey Types</option>
+          </select>
           <select id="sbCogFilter" onchange="renderSiteBrowser()">
             <option value="">All Sites</option>
             <option value="with">With COG</option>
@@ -865,7 +868,7 @@
             <thead>
               <tr>
                 <th>Site</th><th>Region</th><th>Depth</th><th>Year</th>
-                <th>Cruise</th><th>Island</th><th>Imagery</th><th></th>
+                <th>Survey</th><th>Cruise</th><th>Island</th><th>Imagery</th><th></th>
               </tr>
             </thead>
             <tbody id="sbSiteTableRows"></tbody>
@@ -904,7 +907,7 @@
             </div>
             <div class="gcs-row">
               <input type="text" id="gcsPrefixInput"
-                placeholder="gs://nmfs_odp_pifsc/PIFSC/ESD/ARP/StRS_Sites_Products/orthomosaic_cog/2025"
+                placeholder="gs://nmfs_odp_pifsc/PIFSC/ESD/ARP/StRS_Sites_Products/orthomosaic_cog/2026"
                 style="font-size:12px;">
               <select id="gcsPatternSelect">
                 <option value="*_mos_cog*.tif">*_mos_cog*.tif</option>
@@ -931,7 +934,7 @@
           </h3>
           <div class="modal-field">
             <label>Project Name *</label>
-            <input type="text" id="ocProjectName" placeholder="e.g., WAK-2104 2025 Survey">
+            <input type="text" id="ocProjectName" placeholder="e.g., PAL-5171 2026 Survey">
           </div>
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
             <div class="modal-field">
@@ -944,7 +947,7 @@
             </div>
             <div class="modal-field">
               <label>Year</label>
-              <input type="number" id="ocYear" value="2025">
+              <input type="number" id="ocYear" value="2026">
             </div>
             <div class="modal-field">
               <label>Region</label>
@@ -1304,18 +1307,30 @@
           regionSel.appendChild(opt);
         });
 
-        // Populate year filter. No dedicated year field on a site — derived
-        // from the visit's survey_date (e.g. "2025-06-22" -> "2025"), same
-        // source the card's 📅 badge already reads.
+        // Populate year filter from every recorded visit for each site.
         const yearSel = document.getElementById('sbYearFilter');
         const currentYear = yearSel.value;
-        const years = Array.from(new Set(sbAllSites.map(_sbSiteYear).filter(Boolean))).sort().reverse();
+        const years = Array.from(new Set(sbAllSites.flatMap(_sbSiteYears))).sort().reverse();
         yearSel.innerHTML = '<option value="">All Years</option>';
         years.forEach(y => {
           const opt = document.createElement('option');
           opt.value = y; opt.textContent = y;
           if (y === currentYear) opt.selected = true;
           yearSel.appendChild(opt);
+        });
+
+        const surveyTypeSel = document.getElementById('sbSurveyTypeFilter');
+        const currentSurveyType = surveyTypeSel.value;
+        const surveyTypes = Array.from(new Set(
+          sbAllSites.flatMap(site => _sbVisits(site).map(visit => visit.survey_type)).filter(Boolean)
+        )).sort();
+        surveyTypeSel.innerHTML = '<option value="">All Survey Types</option>';
+        surveyTypes.forEach(surveyType => {
+          const opt = document.createElement('option');
+          opt.value = surveyType;
+          opt.textContent = surveyType;
+          if (surveyType === currentSurveyType) opt.selected = true;
+          surveyTypeSel.appendChild(opt);
         });
 
         renderSiteBrowser();
@@ -1339,6 +1354,19 @@
       const d = site && site.visit && site.visit.survey_date;
       const m = d && String(d).match(/\d{4}/);
       return m ? m[0] : '';
+    }
+
+    function _sbVisits(site) {
+      return site && Array.isArray(site.visits) && site.visits.length
+        ? site.visits
+        : (site && site.visit ? [site.visit] : []);
+    }
+
+    function _sbSiteYears(site) {
+      return _sbVisits(site).map(v => {
+        const match = v.survey_date && String(v.survey_date).match(/\d{4}/);
+        return match ? match[0] : '';
+      }).filter(Boolean);
     }
 
     function _sbEsc(value) {
@@ -1369,21 +1397,24 @@
       const region   = document.getElementById('sbRegionFilter').value;
       const year     = document.getElementById('sbYearFilter').value;
       const depth    = document.getElementById('sbDepthFilter').value;
+      const surveyType = document.getElementById('sbSurveyTypeFilter').value;
       const cogFilt  = document.getElementById('sbCogFilter').value;
       const search   = (document.getElementById('sbSearchInput').value || '').toLowerCase();
 
       let sites = _applyCogMap(sbAllSites, sbCogMap);
 
       if (region)  sites = sites.filter(s => s.region === region);
-      if (year)    sites = sites.filter(s => _sbSiteYear(s) === year);
+      if (year)    sites = sites.filter(s => _sbSiteYears(s).includes(year));
       if (depth)   sites = sites.filter(s => s.depth_bin === depth);
+      if (surveyType) sites = sites.filter(s => _sbVisits(s).some(v => v.survey_type === surveyType));
       if (cogFilt === 'with')    sites = sites.filter(s => s.has_cog);
       if (cogFilt === 'without') sites = sites.filter(s => !s.has_cog);
       if (search) sites = sites.filter(s =>
         s.site_name.toLowerCase().includes(search) ||
-        (s.visit?.cruise_leg || '').toLowerCase().includes(search) ||
-        (s.visit?.island || '').toLowerCase().includes(search) ||
-        (s.visit?.photographer || '').toLowerCase().includes(search)
+        _sbVisits(s).some(v => [
+          v.survey_date, v.mission_id, v.cruise_leg, v.island,
+          v.photographer, v.team, v.sector, v.reef_zone, v.survey_type,
+        ].some(value => (value || '').toLowerCase().includes(search)))
       );
 
       renderSiteStats(sites);
@@ -1497,7 +1528,7 @@
     function renderSiteTable(sites) {
       const tbody = document.getElementById('sbSiteTableRows');
       if (sites.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="site-empty-state">No sites match your filters</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="site-empty-state">No sites match your filters</td></tr>';
         return;
       }
 
@@ -1514,6 +1545,7 @@
             <td>${_sbEsc(site.region) || '—'}</td>
             <td>${depthLabel}</td>
             <td>${_sbSiteYear(site) || '—'}</td>
+            <td>${_sbEsc(v.survey_type) || '—'}</td>
             <td>${_sbEsc(v.cruise_leg) || '—'}</td>
             <td>${_sbEsc(v.island) || '—'}</td>
             <td>${imagery}</td>
@@ -1702,7 +1734,10 @@
             region: document.getElementById('ocRegion').value || null,
             observer: document.getElementById('ocObserver').value || null,
             notes: document.getElementById('ocNotes').value || null,
-            metadata: _ocSite?.visit ? { visit_info: _ocSite.visit } : {},
+            metadata: _ocSite?.visit ? {
+              visit_info: _ocSite.visit,
+              visit_history: _sbVisits(_ocSite),
+            } : {},
           })
         });
         if (!projResp.ok) {

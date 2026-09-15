@@ -137,6 +137,7 @@
     const regionSel = document.getElementById('siteFilterRegion');
     const islandSel = document.getElementById('siteFilterIsland');
     const depthSel = document.getElementById('siteFilterDepth');
+    const surveyTypeSel = document.getElementById('siteFilterSurveyType');
     const cogSel = document.getElementById('siteFilterHasCog');
 
     if (regionSel) {
@@ -151,7 +152,7 @@
 
     if (islandSel) {
       const islands = Array.from(
-        new Set(allSites.map((s) => s?.visit?.island).filter((v) => v))
+        new Set(allSites.flatMap((s) => siteVisits(s).map((v) => v.island)).filter((v) => v))
       ).sort();
       islandSel.innerHTML = '<option value="">All Islands</option>';
       islands.forEach((i) => {
@@ -173,6 +174,19 @@
         opt.value = d;
         opt.textContent = depthLabels[d] || d;
         depthSel.appendChild(opt);
+      });
+    }
+
+    if (surveyTypeSel) {
+      const surveyTypes = Array.from(
+        new Set(allSites.flatMap((s) => siteVisits(s).map((v) => v.survey_type)).filter(Boolean))
+      ).sort();
+      surveyTypeSel.innerHTML = '<option value="">All Survey Types</option>';
+      surveyTypes.forEach((surveyType) => {
+        const opt = document.createElement('option');
+        opt.value = surveyType;
+        opt.textContent = surveyType;
+        surveyTypeSel.appendChild(opt);
       });
     }
 
@@ -241,6 +255,7 @@
       ['Depth', site.depth_bin || '—'],
       ['Survey date', v.survey_date || '—'],
       ['Cruise leg', v.cruise_leg || '—'],
+      ['Survey type', v.survey_type || '—'],
       ['COG status', site.has_cog ? 'Available' : 'Not yet converted'],
     ];
 
@@ -349,7 +364,7 @@
   }
 
   function wireFilterHandlers() {
-    ['siteFilterRegion', 'siteFilterIsland', 'siteFilterDepth', 'siteFilterHasCog'].forEach((id) => {
+    ['siteFilterRegion', 'siteFilterIsland', 'siteFilterDepth', 'siteFilterSurveyType', 'siteFilterHasCog'].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('change', applyFilters);
     });
@@ -359,17 +374,25 @@
     const region = document.getElementById('siteFilterRegion')?.value || '';
     const island = document.getElementById('siteFilterIsland')?.value || '';
     const depth = document.getElementById('siteFilterDepth')?.value || '';
+    const surveyType = document.getElementById('siteFilterSurveyType')?.value || '';
     const cogFilter = document.getElementById('siteFilterHasCog')?.value || '';
 
     let sites = allSites;
     if (region) sites = sites.filter((s) => s.region === region);
-    if (island) sites = sites.filter((s) => (s.visit?.island || '') === island);
+    if (island) sites = sites.filter((s) => siteVisits(s).some((v) => v.island === island));
     if (depth) sites = sites.filter((s) => s.depth_bin === depth);
+    if (surveyType) sites = sites.filter((s) => siteVisits(s).some((v) => v.survey_type === surveyType));
     if (cogFilter === 'with') sites = sites.filter((s) => s.has_cog);
     if (cogFilter === 'without') sites = sites.filter((s) => !s.has_cog);
 
     plotSites(sites);
     updateReadout(sites.length);
+  }
+
+  function siteVisits(site) {
+    return Array.isArray(site?.visits) && site.visits.length
+      ? site.visits
+      : (site?.visit ? [site.visit] : []);
   }
 
   function updateReadout(shownCount) {

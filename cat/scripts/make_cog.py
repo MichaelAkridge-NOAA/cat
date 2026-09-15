@@ -10,8 +10,8 @@ Examples (Windows CMD):
 
   # Default — lossless zstd, high quality:
   python -m cat.scripts.make_cog ^
-    --src "C:\\path\\to\\2025_GUA-2838_mos.tif" ^
-    --dst "C:\\path\\to\\2025_GUA-2838_mos_cog.tif"
+    --src "C:\\path\\to\\2026_PAL-5171_mos.tif" ^
+    --dst "C:\\path\\to\\2026_PAL-5171_mos_cog.tif"
 
   # JPEG at quality 95 (near-lossless, smaller file):
   python -m cat.scripts.make_cog ^

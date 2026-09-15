@@ -32,8 +32,8 @@ import warnings
 from typing import Any, Dict, List, Optional
 
 
-DEFAULT_SOURCE = "gs://nmfs_odp_pifsc/PIFSC/ESD/ARP/StRS_Sites_Products/dem/2025"
-DEFAULT_DEST = "gs://nmfs_odp_pifsc/PIFSC/ESD/ARP/StRS_Sites_Products/dem_cog/2025"
+DEFAULT_SOURCE = "gs://nmfs_odp_pifsc/PIFSC/ESD/ARP/StRS_Sites_Products/dem/2026"
+DEFAULT_DEST = "gs://nmfs_odp_pifsc/PIFSC/ESD/ARP/StRS_Sites_Products/dem_cog/2026"
 DEFAULT_PATTERN = "*dem*.tif"
 
 

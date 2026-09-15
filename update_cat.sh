@@ -12,8 +12,8 @@
 #   ./update_cat.sh --no-backup       # Skip the pre-update JSON export
 #   ./update_cat.sh --branch dev      # Override the target git branch
 # =============================================================================
-SCRIPT_VERSION="7.0.0"
-CAT_BRANCH="cat_db_v7"
+SCRIPT_VERSION="12.0.0"
+CAT_BRANCH="cat_db_v12"
 CAT_REPO_URL="https://github.com/MichaelAkridge-NOAA/cat.git"
 
 # ── Parse flags ──────────────────────────────────────────────────────────────

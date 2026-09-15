@@ -8,8 +8,8 @@ Workflow per file:
 
 Example:
     python -m cat.scripts.convert_gcs_mos_to_cog \
-      --source-prefix gs://nmfs_odp_pifsc/PIFSC/ESD/ARP/StRS_Sites_Products/orthomosaic/2025 \
-      --dest-prefix gs://nmfs_odp_pifsc/PIFSC/ESD/ARP/StRS_Sites_Products/orthomosaic_cog/2025 \
+    --source-prefix gs://nmfs_odp_pifsc/PIFSC/ESD/ARP/StRS_Sites_Products/orthomosaic/2026 \
+    --dest-prefix gs://nmfs_odp_pifsc/PIFSC/ESD/ARP/StRS_Sites_Products/orthomosaic_cog/2026 \
       --pattern "*mos*.tif" \
       --workers 2 \
       --dry-run
@@ -205,8 +205,8 @@ def _process_one(source_uri: str, source_prefix: str, dest_prefix: str, args: ar
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Convert GCS orthomosaics to COG and upload to GCS destination")
-    p.add_argument("--source-prefix", required=True, help="Source GCS prefix (gs://.../orthomosaic/2025)")
-    p.add_argument("--dest-prefix", required=True, help="Destination GCS prefix (gs://.../orthomosaic_cog/2025)")
+    p.add_argument("--source-prefix", required=True, help="Source GCS prefix (gs://.../orthomosaic/2026)")
+    p.add_argument("--dest-prefix", required=True, help="Destination GCS prefix (gs://.../orthomosaic_cog/2026)")
     p.add_argument("--pattern", default="*mos*.tif", help="Filename glob filter (default: *mos*.tif)")
     p.add_argument("--suffix", default="_cog", help="Suffix for output files (default: _cog)")
     p.add_argument("--workers", type=int, default=1, help="Parallel workers (default: 1)")
