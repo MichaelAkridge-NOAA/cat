@@ -43,6 +43,23 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  // Mirrors SITE_UTM_ZONES in data_prep/convert_gcs_mos_to_cog_v3.py /
+  // convert_gcs_dem_to_cog_v3.py -- keep these two in sync by hand if the
+  // 2026 region list changes. Purely informational here: lets a site's
+  // "expected" zone be compared at a glance against the COG's actual CRS.
+  var SITE_UTM_ZONES = {
+    TUT: 'UTM 2S \u00b7 EPSG:32702', OFU: 'UTM 2S \u00b7 EPSG:32702', TAU: 'UTM 2S \u00b7 EPSG:32702',
+    ROS: 'UTM 2S \u00b7 EPSG:32702', SWA: 'UTM 2S \u00b7 EPSG:32702',
+    HOW: 'UTM 1S \u00b7 EPSG:32701', BAK: 'UTM 1S \u00b7 EPSG:32701',
+    KIN: 'UTM 3N \u00b7 EPSG:32603', PAL: 'UTM 3N \u00b7 EPSG:32603',
+    JAR: 'UTM 4S \u00b7 EPSG:32704',
+  };
+
+  function expectedZoneForSite(site) {
+    var region = (site && (site.region || (site.site_name || '').split('-')[0]) || '').toUpperCase();
+    return SITE_UTM_ZONES[region] || null;
+  }
+
   function $(id) { return document.getElementById(id); }
 
   function setHtml(id, html) {
@@ -393,7 +410,7 @@
 
     assets.forEach(function (asset, i) {
       getJson('/info?url=' + encodeURIComponent(toGdalPath(asset.url)))
-        .then(function (info) { renderAssetFacts(i, info); })
+        .then(function (info) { renderAssetFacts(i, info, expectedZoneForSite(site)); })
         .catch(function () {
           setHtml('sdAssetFacts' + i,
             '<dt>Details</dt><dd>Could not read this COG — it may be missing or unreadable.</dd>');
@@ -401,15 +418,19 @@
     });
   }
 
-  function renderAssetFacts(index, info) {
+  function renderAssetFacts(index, info, expectedZone) {
     var rows = [];
     if (info.width && info.height) rows.push(['Size', fmtNum(info.width) + ' × ' + fmtNum(info.height) + ' px']);
     if (info.count) rows.push(['Bands', info.count + (info.dtype ? ' · ' + info.dtype : '')]);
     if (info.crs) {
-      // TiTiler returns an OGC URI; the EPSG code is the useful part.
+      // TiTiler returns an OGC URI; the EPSG code is the useful part. A
+      // LOCAL_CS/EngineeringCRS source (not yet reconverted with a real UTM
+      // zone) won't match this pattern -- flag that plainly instead of
+      // dumping the raw CRS JSON/WKT blob.
       var epsg = String(info.crs).match(/EPSG\/\d+\/(\d+)/);
-      rows.push(['CRS', epsg ? 'EPSG:' + epsg[1] : String(info.crs)]);
+      rows.push(['CRS', epsg ? 'EPSG:' + epsg[1] : 'LOCAL_CS / no EPSG (not georeferenced)']);
     }
+    if (expectedZone) rows.push(['Expected zone', expectedZone]);
     if (Array.isArray(info.overviews) && info.overviews.length) {
       rows.push(['Overviews', info.overviews.join(', ')]);
     } else {
