@@ -113,6 +113,21 @@
     return hay.indexOf('dem') !== -1;
   }
 
+  // Resolve a COG's tile base URL, swapping in the cached LOCAL_CS->EPSG:4326
+  // VRT override when needed (mirrors loadTifLayer() in
+  // annotation-runtime-project-layers.js) — without this, TiTiler 500s trying
+  // to reproject a raster with a non-standard local-metre CRS to WebMercator.
+  function resolveTileBaseUrl(cogUrl) {
+    var tpl = '/tiles/WebMercatorQuad/{z}/{x}/{y}.png?url=';
+    return fetch('/api/check-cog-crs?url=' + encodeURIComponent(cogUrl))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (crsData) {
+        var path = (crsData && crsData.is_local_cs && crsData.vrt_path) ? crsData.vrt_path : toGdalPath(cogUrl);
+        return tpl + encodeURIComponent(path);
+      })
+      .catch(function () { return tpl + encodeURIComponent(toGdalPath(cogUrl)); });
+  }
+
   function getJson(url) {
     return fetch(url, { credentials: 'same-origin' }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -440,29 +455,32 @@
     }
     shownRaster = asset;
     var switchId = ++_rasterSwitchId; // a stats response landing after a later switch is stale
-    var baseUrl = '/tiles/WebMercatorQuad/{z}/{x}/{y}.png?url=' + encodeURIComponent(toGdalPath(asset.cog_url));
 
-    if (!isDem(asset)) {
-      _mapTileLayer = L.tileLayer(baseUrl, { maxZoom: 30 }).addTo(map);
-      if (_mapAnnLayer && mapAnnotationsOn) _mapAnnLayer.bringToFront();
-      return;
-    }
+    resolveTileBaseUrl(asset.cog_url).then(function (baseUrl) {
+      if (!map || switchId !== _rasterSwitchId) return; // drawer closed / raster switched again
 
-    // Match the main annotator's own DEM rendering (loadTifLayer() in
-    // annotation-runtime-project-layers.js): viridis colormap with a
-    // rescale read from the raster's actual value distribution
-    // (2nd/98th percentile), not a fixed guess — a fixed range looks
-    // wrong (flat or blown out) on any DEM whose elevations don't happen
-    // to fall inside it.
-    getJson('/statistics?url=' + encodeURIComponent(toGdalPath(asset.cog_url)))
-      .then(function (stats) {
-        var band = (stats && (stats.b1 || stats['1'] || (stats.statistics && stats.statistics[0]))) || {};
-        var min = band.percentile_2 != null ? band.percentile_2 : band.min;
-        var max = band.percentile_98 != null ? band.percentile_98 : band.max;
-        if (min == null || max == null || isNaN(min) || isNaN(max)) { min = -10; max = 10; }
-        _addDemTileLayer(switchId, baseUrl, min, max);
-      })
-      .catch(function () { _addDemTileLayer(switchId, baseUrl, -10, 10); });
+      if (!isDem(asset)) {
+        _mapTileLayer = L.tileLayer(baseUrl, { maxZoom: 30 }).addTo(map);
+        if (_mapAnnLayer && mapAnnotationsOn) _mapAnnLayer.bringToFront();
+        return;
+      }
+
+      // Match the main annotator's own DEM rendering (loadTifLayer() in
+      // annotation-runtime-project-layers.js): viridis colormap with a
+      // rescale read from the raster's actual value distribution
+      // (2nd/98th percentile), not a fixed guess — a fixed range looks
+      // wrong (flat or blown out) on any DEM whose elevations don't happen
+      // to fall inside it.
+      getJson('/statistics?url=' + encodeURIComponent(toGdalPath(asset.cog_url)))
+        .then(function (stats) {
+          var band = (stats && (stats.b1 || stats['1'] || (stats.statistics && stats.statistics[0]))) || {};
+          var min = band.percentile_2 != null ? band.percentile_2 : band.min;
+          var max = band.percentile_98 != null ? band.percentile_98 : band.max;
+          if (min == null || max == null || isNaN(min) || isNaN(max)) { min = -10; max = 10; }
+          _addDemTileLayer(switchId, baseUrl, min, max);
+        })
+        .catch(function () { _addDemTileLayer(switchId, baseUrl, -10, 10); });
+    });
   }
 
   function _addDemTileLayer(switchId, baseUrl, min, max) {

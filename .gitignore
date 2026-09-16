@@ -136,3 +136,9 @@ backups/
 exports/
 .superpowers/
 run.txt
+/arcgis_scripts_v11
+cat/scripts/convert_gcs_mos_to_cog.py
+temp.txt
+update_how_to.md
+debug_readme.md
+/data_prep

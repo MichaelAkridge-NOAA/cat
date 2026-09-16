@@ -922,6 +922,11 @@
      * Show a persistent CRS warning banner above the map.
      */
     function showCrsWarning(reason) {
+      // LOCAL_CS underwater imagery is expected/normal, not an error — the
+      // brief showStatus() toast at the call site is enough, no need for a
+      // persistent banner the user has to dismiss every time.
+      if (reason === 'LOCAL_CS') return;
+
       // Avoid duplicates
       if (document.getElementById('crsWarningBanner')) return;
 
@@ -935,9 +940,7 @@
         box-shadow: 0 2px 8px rgba(0,0,0,0.25);
       `;
 
-      const msg = reason === 'LOCAL_CS'
-        ? '🔬  Underwater LOCAL_CS imagery — coordinates are in local metres (not geographic). Annotations work normally.'
-        : '⚠️  COG bounds could not be determined — map is centred on site metadata coordinates.';
+      const msg = '⚠️  COG bounds could not be determined — map is centred on site metadata coordinates.';
 
       banner.innerHTML = `
         <span>${msg}</span>

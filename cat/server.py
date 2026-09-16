@@ -438,6 +438,18 @@ app.include_router(cog.router, tags=["Cloud Optimized GeoTIFF"])
 async def overflow_tile_handler(request: Request, exc: OverflowError):
     return JSONResponse(status_code=404, content={"detail": "Tile out of bounds"})
 
+# A raw LOCAL_CS COG (no VRT override applied) can't be reprojected to
+# WebMercator — PROJ raises CRSError ("Cannot find coordinate operations
+# from LOCAL_CS[...] to EPSG:4326"). Any caller that skips the
+# /api/check-cog-crs -> ensure_local_cs_vrt step (see above) hits this
+# instead of a raw 500.
+@app.exception_handler(rasterio.errors.CRSError)
+async def crs_error_handler(request: Request, exc: rasterio.errors.CRSError):
+    return JSONResponse(
+        status_code=422,
+        content={"detail": f"Cannot render tile: unsupported/local coordinate system ({exc})"},
+    )
+
 # TiTiler/rio-tiler raises TileOutsideBounds for tile requests beyond the raster's
 # extent (e.g. world-zoom levels) — return a clean 404 instead of a 500 traceback
 @app.exception_handler(TileOutsideBounds)
