@@ -557,6 +557,12 @@ def get_config():
 
 
 # ---------- LOCAL_CS CRS check & VRT override endpoint ----------
+# A COG's CRS never changes, but this endpoint gets called on every tif-layer
+# load/reload (gamma/contrast/rescale changes, drawer previews, etc.) — cache
+# the result per URL so repeat calls skip the remote rasterio.open() entirely.
+_cog_crs_cache: Dict[str, dict] = {}
+
+
 @app.get("/api/check-cog-crs")
 def check_cog_crs(url: str = Query(..., description="COG URL (gs:// or /vsigs/)")):
     """
@@ -567,6 +573,10 @@ def check_cog_crs(url: str = Query(..., description="COG URL (gs:// or /vsigs/)"
     The frontend should use *vrt_path* for all TiTiler tile/info requests
     when is_local_cs is true.
     """
+    cached = _cog_crs_cache.get(url)
+    if cached is not None:
+        return cached
+
     gdal_p = _gdal_path(url)
     env = rasterio.Env(
         GS_NO_SIGN_REQUEST="YES",
@@ -584,13 +594,15 @@ def check_cog_crs(url: str = Query(..., description="COG URL (gs:// or /vsigs/)"
         if is_local:
             vrt_path = ensure_local_cs_vrt(url)
 
-        return {
+        result = {
             "url": url,
             "crs": crs_wkt[:120] + ("…" if len(crs_wkt) > 120 else ""),
             "is_local_cs": is_local,
             "vrt_path": vrt_path,
             "bounds_native": bounds,
         }
+        _cog_crs_cache[url] = result
+        return result
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"CRS check failed: {exc}")
 

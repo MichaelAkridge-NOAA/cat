@@ -1257,6 +1257,12 @@
       }
     }
 
+    // A COG's CRS never changes, but reloadCogWithSettings()/applyAutoStretch()
+    // re-run loadTifLayer() on every gamma/contrast/saturation/rescale tweak —
+    // without this cache each of those re-opened the remote COG via
+    // /api/check-cog-crs just to re-derive the same answer (see debug_readme.md).
+    const cogCrsCache = {};
+
     async function loadTifLayer(tif) {
       let cogPath = encodeURIComponent(toGdalPath(tif.cog_path));
       let isLocalCs = false;
@@ -1264,9 +1270,15 @@
 
       // --- Check CRS and get VRT override for LOCAL_CS files ---
       try {
-        const crsResp = await fetch(`${serverUrl}/api/check-cog-crs?url=${encodeURIComponent(tif.cog_path)}`);
-        if (crsResp.ok) {
-          const crsData = await crsResp.json();
+        let crsData = cogCrsCache[tif.cog_path];
+        if (!crsData) {
+          const crsResp = await fetch(`${serverUrl}/api/check-cog-crs?url=${encodeURIComponent(tif.cog_path)}`);
+          if (crsResp.ok) {
+            crsData = await crsResp.json();
+            cogCrsCache[tif.cog_path] = crsData;
+          }
+        }
+        if (crsData) {
           isLocalCs = crsData.is_local_cs;
           nativeBounds = crsData.bounds_native;
           if (isLocalCs && crsData.vrt_path) {
