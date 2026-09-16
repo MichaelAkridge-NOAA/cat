@@ -197,8 +197,14 @@
     if (sub) sub.textContent = bits.join(' · ') || site.site_name || '';
 
     var canOracle = site.has_cog && (typeof storageBackend === 'undefined' ? false : storageBackend === 'oracle');
+    var canManageAssets = typeof canManageSiteAssets !== 'undefined' && canManageSiteAssets;
     var siteJson = esc(JSON.stringify(site));
     setHtml('sdActions',
+      (canManageAssets
+        ? '<button class="cat-btn cat-btn--outline" style="font-size:12px; padding:6px 12px;" ' +
+          'onclick="openCogAssetManager(JSON.parse(this.dataset.site))" data-site=\'' + siteJson + '\'>' +
+          '<svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#cloud"/></svg> Manage COGs</button>'
+        : '') +
       '<button class="cat-btn cat-btn--primary" style="font-size:12px; padding:6px 12px;" ' +
         (canOracle ? 'onclick="openOracleModal(JSON.parse(this.dataset.site))" data-site=\'' + siteJson + '\'' : 'disabled title="No cloud COG matched yet, or Oracle mode is off"') +
         '>Create Oracle Project</button>'

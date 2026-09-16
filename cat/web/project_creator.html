@@ -925,6 +925,54 @@
         </details>
       </div>
 
+      <!-- Site COG Asset Manager -->
+      <div class="modal-overlay" id="cogAssetManagerModal">
+        <div class="modal-box" style="max-width:680px;">
+          <h3 style="display:flex; align-items:center; gap:8px;">
+            <svg class="cat-icon" style="width:16px;height:16px;"><use href="/vendor/feather/feather-sprite.svg#cloud"/></svg>
+            COG Assets — <span id="camSiteName"></span>
+          </h3>
+          <div class="modal-field">
+            <label for="camCogUri">Orthomosaic COG</label>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input type="text" id="camCogUri" placeholder="gs://bucket/path/site_mos_cog.tif" style="font-family:monospace; font-size:12px;">
+              <button type="button" class="cat-btn cat-btn--outline" onclick="validateCogAssetInput('cog')" title="Validate orthomosaic COG">
+                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#check-circle"/></svg>
+              </button>
+              <button type="button" class="cat-btn cat-btn--outline-danger" onclick="clearCogAssetInput('cog')" title="Clear orthomosaic COG">
+                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#x"/></svg>
+              </button>
+            </div>
+            <div id="camCogValidation" style="font-size:11px; margin-top:5px;"></div>
+          </div>
+          <div class="modal-field">
+            <label for="camDemUri">DEM COG</label>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input type="text" id="camDemUri" placeholder="gs://bucket/path/site_dem_cog.tif" style="font-family:monospace; font-size:12px;">
+              <button type="button" class="cat-btn cat-btn--outline" onclick="validateCogAssetInput('dem')" title="Validate DEM COG">
+                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#check-circle"/></svg>
+              </button>
+              <button type="button" class="cat-btn cat-btn--outline-danger" onclick="clearCogAssetInput('dem')" title="Clear DEM COG">
+                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#x"/></svg>
+              </button>
+            </div>
+            <div id="camDemValidation" style="font-size:11px; margin-top:5px;"></div>
+          </div>
+          <label style="display:flex; align-items:center; gap:8px; font-size:13px; margin-top:16px; cursor:pointer;">
+            <input type="checkbox" id="camUpdateProjects" style="width:auto;">
+            Apply replacements and clears to existing projects for this site
+          </label>
+          <div id="camStatus" style="font-size:13px; margin-top:12px;"></div>
+          <div class="modal-actions">
+            <button class="cat-btn cat-btn--outline" onclick="closeCogAssetManager()">Cancel</button>
+            <button class="cat-btn cat-btn--primary" onclick="saveCogAssets()" id="camSaveBtn">
+              <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#save"/></svg>
+              Save Assets
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Oracle Quick-Create Modal -->
       <div class="modal-overlay" id="oracleCreateModal">
         <div class="modal-box">
@@ -1145,6 +1193,7 @@
     let shapefileColumnMapping = {};
     let storageBackend = 'file';
     let dbApiAvailable = false;
+    let canManageSiteAssets = false;
     let dbProjects = [];
     let dbProjectSearchDebounce = null;
     let activeDbEditProjectId = null;
@@ -1165,6 +1214,14 @@
         const config = await response.json();
         storageBackend = config?.storage_backend || 'file';
         dbApiAvailable = !!config?.db_api_available;
+
+        if (storageBackend === 'oracle') {
+          const authResponse = await fetch('/api/auth/me');
+          if (authResponse.ok) {
+            const authData = await authResponse.json();
+            canManageSiteAssets = authData?.user?.role === 'admin';
+          }
+        }
 
         const subtitle = document.getElementById('projectManagerSubtitle');
         if (subtitle && storageBackend === 'oracle') {
@@ -1682,6 +1739,122 @@
     }
 
     // ========================================
+    // SITE COG ASSET MANAGER
+    // ========================================
+
+    let _camSite = null;
+
+    function openCogAssetManager(site) {
+      if (!canManageSiteAssets || storageBackend !== 'oracle') return;
+      _camSite = site;
+      document.getElementById('camSiteName').textContent = site.site_name || '';
+      document.getElementById('camCogUri').value = site.cog_uri || '';
+      document.getElementById('camDemUri').value = site.dem_uri || '';
+      document.getElementById('camCogValidation').textContent = '';
+      document.getElementById('camDemValidation').textContent = '';
+      document.getElementById('camUpdateProjects').checked = false;
+      document.getElementById('camStatus').textContent = '';
+      document.getElementById('camSaveBtn').disabled = false;
+      document.getElementById('cogAssetManagerModal').classList.add('open');
+    }
+
+    function closeCogAssetManager() {
+      document.getElementById('cogAssetManagerModal').classList.remove('open');
+      _camSite = null;
+    }
+
+    function clearCogAssetInput(kind) {
+      document.getElementById(kind === 'cog' ? 'camCogUri' : 'camDemUri').value = '';
+      const status = document.getElementById(kind === 'cog' ? 'camCogValidation' : 'camDemValidation');
+      status.textContent = 'Will be cleared when saved.';
+      status.style.color = '#9a3412';
+    }
+
+    function _camGdalPath(uri) {
+      return uri.indexOf('gs://') === 0 ? '/vsigs/' + uri.slice(5) : uri;
+    }
+
+    async function validateCogAssetInput(kind) {
+      const input = document.getElementById(kind === 'cog' ? 'camCogUri' : 'camDemUri');
+      const status = document.getElementById(kind === 'cog' ? 'camCogValidation' : 'camDemValidation');
+      const uri = input.value.trim();
+      if (!uri) {
+        status.textContent = 'No URI set.';
+        status.style.color = '#64748b';
+        return;
+      }
+
+      status.textContent = 'Validating…';
+      status.style.color = '#0c5460';
+      try {
+        const response = await fetch('/info?url=' + encodeURIComponent(_camGdalPath(uri)));
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const info = await response.json();
+        const dimensions = info.width && info.height ? ` · ${info.width} × ${info.height}` : '';
+        status.textContent = `COG is accessible${dimensions}`;
+        status.style.color = '#155724';
+      } catch (error) {
+        status.textContent = `Could not read COG: ${error.message}`;
+        status.style.color = '#721c24';
+      }
+    }
+
+    async function saveCogAssets() {
+      if (!_camSite) return;
+      const cogUri = document.getElementById('camCogUri').value.trim() || null;
+      const demUri = document.getElementById('camDemUri').value.trim() || null;
+      const updateProjects = document.getElementById('camUpdateProjects').checked;
+      const clearingAsset = (_camSite.cog_uri && !cogUri) || (_camSite.dem_uri && !demUri);
+      if (clearingAsset && !confirm('Clear the selected site asset? This removes the matching project asset too when project updates are enabled.')) return;
+
+      const saveButton = document.getElementById('camSaveBtn');
+      const status = document.getElementById('camStatus');
+      saveButton.disabled = true;
+      status.textContent = 'Saving assets…';
+      status.style.color = '#0c5460';
+
+      try {
+        const response = await fetch(`/api/sites/${encodeURIComponent(_camSite.site_name)}/assets`, {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            cog_uri: cogUri,
+            dem_uri: demUri,
+            update_projects: updateProjects,
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+
+        const updatedSite = data.site;
+        sbAllSites = sbAllSites.map(site => site.site_name === updatedSite.site_name ? updatedSite : site);
+        sbAssetMap[updatedSite.site_name] = {
+          cog_uri: updatedSite.cog_uri || null,
+          dem_uri: updatedSite.dem_uri || null,
+        };
+        if (updatedSite.cog_uri || updatedSite.dem_uri) {
+          sbCogMap[updatedSite.site_name] = updatedSite.cog_uri || updatedSite.dem_uri;
+        } else {
+          delete sbCogMap[updatedSite.site_name];
+        }
+        renderSiteBrowser();
+
+        status.textContent = updateProjects
+          ? `Saved and updated ${data.projects_updated} project${data.projects_updated === 1 ? '' : 's'}.`
+          : 'Saved site assets.';
+        status.style.color = '#155724';
+        setTimeout(() => {
+          closeCogAssetManager();
+          if (typeof closeSiteDrawer === 'function') closeSiteDrawer();
+        }, 650);
+      } catch (error) {
+        status.textContent = error.message;
+        status.style.color = '#721c24';
+        saveButton.disabled = false;
+      }
+    }
+
+    // ========================================
     // ORACLE QUICK-CREATE MODAL
     // ========================================
 
@@ -1803,6 +1976,9 @@
     document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('oracleCreateModal').addEventListener('click', function(e) {
         if (e.target === this) closeOracleModal();
+      });
+      document.getElementById('cogAssetManagerModal').addEventListener('click', function(e) {
+        if (e.target === this) closeCogAssetManager();
       });
       document.getElementById('dbEditModal').addEventListener('click', function(e) {
         if (e.target === this) closeDbEditModal();

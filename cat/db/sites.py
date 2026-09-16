@@ -29,7 +29,7 @@ _DEPTH_BIN_CODES = {
 }
 
 # Matches: 2025_WAK-2104_mos_cog.tif  or  WAK-2104_mos.tif
-_SITE_RE = re.compile(r"(?:^|[/_])(\d{4}_)?([A-Z]{2,4}-\d{3,5})(?:[_.]|$)")
+_SITE_RE = re.compile(r"(?:^|[/_])(\d{4}_)?([A-Z]{2,4}-\d{2,5})(?:[_.]|$)")
 
 
 # ---------------------------------------------------------------------------
@@ -341,9 +341,11 @@ def _group_site_rows(
         site_name = row["site_name"]
         site = grouped.get(site_name)
         if site is None:
+            has_asset_overlay = site_name in (gcs_asset_map or {})
             overlay = (gcs_asset_map or {}).get(site_name) or {}
-            cog_uri = overlay.get("cog_uri") or (gcs_cog_map or {}).get(site_name) or row.get("cog_uri")
-            dem_uri = overlay.get("dem_uri") or _guess_dem_uri_from_cog(cog_uri)
+            cog_uri = overlay.get("cog_uri") if has_asset_overlay else (gcs_cog_map or {}).get(site_name)
+            cog_uri = cog_uri or row.get("cog_uri")
+            dem_uri = overlay.get("dem_uri") or row.get("dem_uri") or _guess_dem_uri_from_cog(cog_uri)
             site = {
                 "site_name": site_name,
                 "depth_bin": row.get("site_depth_bin") or "",
@@ -403,6 +405,7 @@ def fetch_sites_from_db(
                s.depth_bin AS site_depth_bin,
                s.region AS site_region,
                s.cog_uri,
+             s.dem_uri,
                v.mission_id,
                v.occ_site_id,
                v.survey_date,
@@ -436,10 +439,10 @@ def fetch_sites_from_db(
 
 
 def update_cog_uris(cog_map: Dict[str, Any]) -> int:
-    """Persist orthomosaic URIs into cat_sites.cog_uri. Returns count updated.
+    """Persist raster URIs into cat_sites. Returns count updated.
 
     Accepts legacy {site: uri} and new {site: {cog_uri, dem_uri}} mappings.
-    DEM-only scans never overwrite an existing stored orthomosaic URI.
+    One-kind scans never overwrite the other stored raster URI.
     """
     if not cog_map:
         return 0
@@ -447,21 +450,106 @@ def update_cog_uris(cog_map: Dict[str, Any]) -> int:
     for site_name, value in cog_map.items():
         if isinstance(value, str):
             cog_uri = value
+            dem_uri = None
         elif isinstance(value, dict):
             cog_uri = value.get("cog_uri")
+            dem_uri = value.get("dem_uri")
         else:
             cog_uri = None
-        rows.append({"site_name": site_name, "cog_uri": cog_uri})
+            dem_uri = None
+        rows.append({"site_name": site_name, "cog_uri": cog_uri, "dem_uri": dem_uri})
 
     from cat.db.oracle import get_connection
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.executemany(
-                "UPDATE cat_sites SET cog_uri = NVL(:cog_uri, cog_uri) WHERE site_name = :site_name",
+                """
+                UPDATE cat_sites
+                SET cog_uri = NVL(:cog_uri, cog_uri),
+                    dem_uri = NVL(:dem_uri, dem_uri)
+                WHERE site_name = :site_name
+                """,
                 rows,
             )
         conn.commit()
     return len(rows)
+
+
+def replace_site_assets(
+    site_name: str,
+    cog_uri: Optional[str],
+    dem_uri: Optional[str],
+    update_projects: bool = False,
+) -> Dict[str, int]:
+    """Replace a site's stored raster URIs and optionally sync its projects."""
+    assets = (("COG", cog_uri), ("DEM", dem_uri))
+
+    from cat.db.oracle import get_connection
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE cat_sites
+                SET cog_uri = :cog_uri,
+                    dem_uri = :dem_uri
+                WHERE site_name = :site_name
+                """,
+                {"site_name": site_name, "cog_uri": cog_uri, "dem_uri": dem_uri},
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Site not found: {site_name}")
+
+            project_ids: List[int] = []
+            if update_projects:
+                cur.execute(
+                    "SELECT project_id FROM cat_projects WHERE site = :site_name",
+                    {"site_name": site_name},
+                )
+                project_ids = [row[0] for row in cur.fetchall()]
+
+                for project_id in project_ids:
+                    for asset_type, uri in assets:
+                        params = {"project_id": project_id, "asset_type": asset_type}
+                        if not uri:
+                            cur.execute(
+                                """
+                                DELETE FROM cat_project_assets
+                                WHERE project_id = :project_id
+                                  AND UPPER(asset_type) = :asset_type
+                                """,
+                                params,
+                            )
+                            continue
+
+                        asset_params = {
+                            **params,
+                            "asset_name": uri.rstrip("/").split("/")[-1],
+                            "cog_url": uri,
+                        }
+                        cur.execute(
+                            """
+                            UPDATE cat_project_assets
+                            SET asset_name = :asset_name,
+                                cog_url = :cog_url
+                            WHERE project_id = :project_id
+                              AND UPPER(asset_type) = :asset_type
+                            """,
+                            asset_params,
+                        )
+                        if cur.rowcount == 0:
+                            cur.execute(
+                                """
+                                INSERT INTO cat_project_assets (
+                                    project_id, asset_type, asset_name, cog_url
+                                ) VALUES (
+                                    :project_id, :asset_type, :asset_name, :cog_url
+                                )
+                                """,
+                                asset_params,
+                            )
+        conn.commit()
+
+    return {"projects_updated": len(project_ids)}
 
 
 # ---------------------------------------------------------------------------

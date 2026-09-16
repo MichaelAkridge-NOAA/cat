@@ -18,15 +18,17 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from cat.api.auth import require_admin
 from cat.db.config import is_oracle_backend_enabled
 from cat.db.sites import (
     build_gcs_asset_map,
     build_gcs_cog_map,
     count_db_sites,
     get_sites,
+    replace_site_assets,
     seed_sites_from_csv,
     site_name_from_uri,
     update_cog_uris,
@@ -219,6 +221,12 @@ class ScanGCSRequest(BaseModel):
     pattern: str = "*_cog*.tif"
 
 
+class SiteAssetsUpdate(BaseModel):
+    cog_uri: Optional[str] = None
+    dem_uri: Optional[str] = None
+    update_projects: bool = False
+
+
 def _list_gcs_public(gcs_prefix: str, pattern: str) -> list[str]:
     if not gcs_prefix.startswith("gs://"):
         raise ValueError(f"Expected gs:// prefix, got: {gcs_prefix}")
@@ -307,3 +315,51 @@ def scan_gcs(body: ScanGCSRequest):
         "unmatched_uris": [u for u in uris if not site_name_from_uri(u)],
         "sites": sites,
     }
+
+
+def _validated_asset_uri(site_name: str, uri: Optional[str], asset_key: str) -> Optional[str]:
+    value = (uri or "").strip()
+    if not value:
+        return None
+    if not value.startswith("gs://"):
+        raise HTTPException(status_code=422, detail=f"{asset_key} must be a gs:// URI")
+
+    matched_site = site_name_from_uri(value)
+    if not matched_site or matched_site.upper() != site_name.upper():
+        raise HTTPException(
+            status_code=422,
+            detail=f"{asset_key} filename must identify site {site_name}",
+        )
+
+    assets = build_gcs_asset_map([value]).get(matched_site) or {}
+    if not assets.get(asset_key):
+        label = "orthomosaic" if asset_key == "cog_uri" else "DEM"
+        raise HTTPException(status_code=422, detail=f"URI is not recognized as a {label} COG")
+    return value
+
+
+@router.put("/{site_name}/assets")
+def update_site_assets(
+    site_name: str,
+    payload: SiteAssetsUpdate,
+    _admin: dict = Depends(require_admin),
+):
+    if not _use_db():
+        raise HTTPException(status_code=400, detail="COG asset management requires Oracle mode")
+
+    cog_uri = _validated_asset_uri(site_name, payload.cog_uri, "cog_uri")
+    dem_uri = _validated_asset_uri(site_name, payload.dem_uri, "dem_uri")
+    try:
+        result = replace_site_assets(
+            site_name,
+            cog_uri=cog_uri,
+            dem_uri=dem_uri,
+            update_projects=payload.update_projects,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    site = next((item for item in get_sites(use_db=True) if item["site_name"] == site_name), None)
+    if not site:
+        raise HTTPException(status_code=404, detail=f"Site not found: {site_name}")
+    return {"success": True, "site": site, **result}

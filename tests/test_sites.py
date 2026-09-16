@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 import cat.api.sites as sites_api
 import cat.db.oracle as oracle
 from cat.db.sites import (
@@ -7,7 +9,9 @@ from cat.db.sites import (
     build_sites_from_csv,
     load_site_list_csv,
     load_visit_info_csv,
+    replace_site_assets,
     seed_sites_from_csv,
+    update_cog_uris,
 )
 
 
@@ -128,6 +132,22 @@ def test_database_rows_group_into_the_file_mode_contract():
     assert sites[0]["cog_uri"] == base["cog_uri"]
 
 
+def test_database_rows_preserve_a_persisted_dem_only_match():
+    dem_uri = "gs://test/dem_cog/2026_PAL-11_dem_cog.tif"
+    sites = _group_site_rows([{
+        "site_name": "PAL-11",
+        "site_depth_bin": "",
+        "site_region": "PAL",
+        "cog_uri": None,
+        "dem_uri": dem_uri,
+    }])
+
+    assert sites[0]["has_cog"] is True
+    assert sites[0]["has_dem"] is True
+    assert sites[0]["cog_uri"] is None
+    assert sites[0]["dem_uri"] == dem_uri
+
+
 class _FakeCursor:
     def __init__(self):
         self.calls = []
@@ -164,6 +184,169 @@ class _FakeConnection:
 
     def commit(self):
         self.commits += 1
+
+
+def test_update_cog_uris_persists_dem_without_clearing_orthomosaic(monkeypatch):
+    connection = _FakeConnection()
+    monkeypatch.setattr(oracle, "get_connection", lambda: connection)
+
+    updated = update_cog_uris({
+        "PAL-11": {
+            "cog_uri": None,
+            "dem_uri": "gs://test/dem_cog/2026_PAL-11_dem_cog.tif",
+        },
+        "GUA-2838": {
+            "cog_uri": "gs://test/orthomosaic_cog/2026_GUA-2838_mos_cog.tif",
+            "dem_uri": "gs://test/dem_cog/2026_GUA-2838_dem_cog.tif",
+        },
+    })
+
+    call = connection.cursor_instance.calls[0]
+    assert updated == 2
+    assert call[0] == "executemany"
+    assert "dem_uri = NVL(:dem_uri, dem_uri)" in call[1]
+    assert call[2] == [
+        {
+            "site_name": "PAL-11",
+            "cog_uri": None,
+            "dem_uri": "gs://test/dem_cog/2026_PAL-11_dem_cog.tif",
+        },
+        {
+            "site_name": "GUA-2838",
+            "cog_uri": "gs://test/orthomosaic_cog/2026_GUA-2838_mos_cog.tif",
+            "dem_uri": "gs://test/dem_cog/2026_GUA-2838_dem_cog.tif",
+        },
+    ]
+    assert connection.commits == 1
+
+
+class _AssetManagerCursor:
+    def __init__(self):
+        self.calls = []
+        self.rowcount = 0
+        self._rows = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(sql.lower().split())
+        self.calls.append((normalized, params or {}))
+        self._rows = []
+        if normalized.startswith("update cat_sites"):
+            self.rowcount = 1
+        elif normalized.startswith("select project_id from cat_projects"):
+            self._rows = [(41,), (42,)]
+            self.rowcount = 2
+        elif normalized.startswith("update cat_project_assets"):
+            self.rowcount = 1 if params["project_id"] == 41 else 0
+        elif normalized.startswith("delete from cat_project_assets"):
+            self.rowcount = 1
+        else:
+            self.rowcount = 1
+
+    def fetchall(self):
+        return self._rows
+
+
+class _AssetManagerConnection(_FakeConnection):
+    def __init__(self):
+        self.cursor_instance = _AssetManagerCursor()
+        self.commits = 0
+
+
+def test_replace_site_assets_can_propagate_and_clear_project_assets(monkeypatch):
+    connection = _AssetManagerConnection()
+    monkeypatch.setattr(oracle, "get_connection", lambda: connection)
+    cog_uri = "gs://test/orthomosaic_cog/2026_PAL-11_mos_cog_v2.tif"
+
+    result = replace_site_assets(
+        "PAL-11",
+        cog_uri=cog_uri,
+        dem_uri=None,
+        update_projects=True,
+    )
+
+    calls = connection.cursor_instance.calls
+    site_update = next(call for call in calls if call[0].startswith("update cat_sites"))
+    project_updates = [call for call in calls if call[0].startswith("update cat_project_assets")]
+    project_insert = next(call for call in calls if call[0].startswith("insert into cat_project_assets"))
+    project_deletes = [call for call in calls if call[0].startswith("delete from cat_project_assets")]
+
+    assert site_update[1] == {
+        "site_name": "PAL-11",
+        "cog_uri": cog_uri,
+        "dem_uri": None,
+    }
+    assert len(project_updates) == 2
+    assert project_insert[1]["project_id"] == 42
+    assert project_insert[1]["asset_type"] == "COG"
+    assert project_insert[1]["cog_url"] == cog_uri
+    assert len(project_deletes) == 2
+    assert all(call[1]["asset_type"] == "DEM" for call in project_deletes)
+    assert result == {"projects_updated": 2}
+    assert connection.commits == 1
+
+
+def test_site_asset_api_validates_site_and_asset_kind(monkeypatch):
+    monkeypatch.setattr(sites_api, "_use_db", lambda: True)
+
+    with pytest.raises(sites_api.HTTPException) as exc_info:
+        sites_api.update_site_assets(
+            "PAL-11",
+            sites_api.SiteAssetsUpdate(
+                cog_uri="gs://test/dem_cog/2026_GUA-2838_dem_cog.tif",
+            ),
+            {"role": "admin"},
+        )
+
+    assert exc_info.value.status_code == 422
+
+
+def test_site_asset_api_returns_refreshed_persistent_site(monkeypatch):
+    cog_uri = "gs://test/orthomosaic_cog/2026_PAL-11_mos_cog_v2.tif"
+    captured = {}
+
+    def fake_replace(site_name, cog_uri, dem_uri, update_projects):
+        captured.update({
+            "site_name": site_name,
+            "cog_uri": cog_uri,
+            "dem_uri": dem_uri,
+            "update_projects": update_projects,
+        })
+        return {"projects_updated": 2}
+
+    monkeypatch.setattr(sites_api, "_use_db", lambda: True)
+    monkeypatch.setattr(sites_api, "replace_site_assets", fake_replace)
+    monkeypatch.setattr(sites_api, "get_sites", lambda use_db: [{
+        "site_name": "PAL-11",
+        "cog_uri": cog_uri,
+        "dem_uri": None,
+        "has_cog": True,
+        "has_dem": False,
+    }])
+
+    result = sites_api.update_site_assets(
+        "PAL-11",
+        sites_api.SiteAssetsUpdate(
+            cog_uri=cog_uri,
+            dem_uri=None,
+            update_projects=True,
+        ),
+        {"role": "admin"},
+    )
+
+    assert captured == {
+        "site_name": "PAL-11",
+        "cog_uri": cog_uri,
+        "dem_uri": None,
+        "update_projects": True,
+    }
+    assert result["site"]["cog_uri"] == cog_uri
+    assert result["projects_updated"] == 2
 
 
 def test_oracle_sync_replaces_only_reference_data(monkeypatch):

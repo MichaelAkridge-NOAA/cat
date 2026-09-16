@@ -891,6 +891,24 @@ DDL_BLOCKS: List[str] = [
     ON (dst.migration_id = src.mid)
     WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
     """,
+    # -----------------------------------------------------------------
+    # Persist DEM matches independently from orthomosaic matches so a
+    # DEM-only site survives reloads and project deletion.
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_sites ADD (dem_uri VARCHAR2(4000))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0014' AS mid, 'Persist DEM COG URIs independently on cat_sites' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
 ]
 
 
