@@ -475,16 +475,26 @@ def update_cog_uris(cog_map: Dict[str, Any]) -> int:
     return len(rows)
 
 
-def sync_cog_uris(asset_map: Dict[str, Any]) -> int:
-    """Replace (not merge) every site's raster URIs to match *asset_map*.
+def sync_cog_uris(asset_map: Dict[str, Any], fields: Optional[List[str]] = None) -> int:
+    """Replace (not merge) every site's raster URIs to match *asset_map*,
+    for only the given *fields* ("cog_uri", "dem_uri", or both).
 
     Unlike update_cog_uris (NVL-based: only fills a NULL, never clears a
     stale value), this is a full reconcile against the current contents of
-    a GCS scan: every site in cat_sites gets set to whatever asset_map has
-    for it, and any site NOT in asset_map is cleared to NULL. Use this after
-    removing/replacing COGs in GCS so cat_sites reflects what's actually
-    there now instead of accumulating stale references to deleted files.
+    a GCS scan: every site in cat_sites gets *fields* set to whatever
+    asset_map has for it, and any site NOT in asset_map has those fields
+    cleared to NULL. Use this after removing/replacing COGs in GCS so
+    cat_sites reflects what's actually there now instead of accumulating
+    stale references to deleted files.
+
+    *fields* defaults to both columns, but a scan of a single GCS prefix
+    (e.g. only "dem_cog/2026") only ever produces values for ONE asset
+    kind -- syncing both columns from that scan would wipe out every
+    site's cog_uri (it's absent from a dem-only asset_map, so it reads as
+    "not found" and gets cleared). Callers should pass just the one field
+    that matches the prefix they actually scanned.
     """
+    fields = fields or ["cog_uri", "dem_uri"]
     from cat.db.oracle import fetch_all, get_connection
 
     all_site_names = [r["site_name"] for r in fetch_all("SELECT site_name FROM cat_sites")]
@@ -500,15 +510,20 @@ def sync_cog_uris(asset_map: Dict[str, Any]) -> int:
             cog_uri, dem_uri = value.get("cog_uri"), value.get("dem_uri")
         else:
             cog_uri, dem_uri = None, None
-        rows.append({"site_name": site_name, "cog_uri": cog_uri, "dem_uri": dem_uri})
+        row = {"site_name": site_name}
+        if "cog_uri" in fields:
+            row["cog_uri"] = cog_uri
+        if "dem_uri" in fields:
+            row["dem_uri"] = dem_uri
+        rows.append(row)
 
+    set_clause = ", ".join(f"{f} = :{f}" for f in fields)
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.executemany(
-                """
+                f"""
                 UPDATE cat_sites
-                SET cog_uri = :cog_uri,
-                    dem_uri = :dem_uri
+                SET {set_clause}
                 WHERE site_name = :site_name
                 """,
                 rows,

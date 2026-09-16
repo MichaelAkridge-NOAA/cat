@@ -832,7 +832,7 @@
           </select>
           <select id="sbCogFilter" onchange="renderSiteBrowser()">
             <option value="">All Sites</option>
-            <option value="with">With COG</option>
+            <option value="with" selected>With COG</option>
             <option value="without">No COG</option>
           </select>
           <input type="text" id="sbSearchInput" placeholder="Search site, cruise, island…"
@@ -922,7 +922,7 @@
             </div>
             <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#374151; margin-top:8px; cursor:pointer;">
               <input type="checkbox" id="gcsSyncCheckbox" style="width:auto;">
-              Full sync (admin) — clear COGs for sites no longer found in this scan/report, instead of only adding new ones
+              Full sync (admin) — clears the matching channel (orthomosaic or DEM, based on the prefix/report scanned) for sites no longer found, instead of only adding new ones. Run once per channel if you need to sync both.
             </label>
             <div id="gcsScanStatus" style="font-size:13px; color:#0c5460; margin-top:6px;"></div>
           </div>

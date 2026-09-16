@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from cat.api.auth import get_current_user, require_admin
 from cat.db.config import is_oracle_backend_enabled
 from cat.db.sites import (
+    _asset_kind_from_uri,
     build_gcs_asset_map,
     build_gcs_cog_map,
     count_db_sites,
@@ -199,7 +200,15 @@ def load_gcs_report(body: LoadReportRequest, _user: Optional[dict] = Depends(get
     db_updated = 0
     if use_db and (body.sync or asset_map):
         try:
-            db_updated = sync_cog_uris(asset_map) if body.sync else update_cog_uris(asset_map)
+            if body.sync:
+                # Same channel-isolation as scan-gcs: a report written by the
+                # mos converter only covers orthomosaics, a DEM report only
+                # DEMs -- infer from the report's own dest_prefix so syncing
+                # one never clears the other.
+                sync_field = "dem_uri" if _asset_kind_from_uri(report.get("dest_prefix") or "") == "dem" else "cog_uri"
+                db_updated = sync_cog_uris(asset_map, fields=[sync_field])
+            else:
+                db_updated = update_cog_uris(asset_map)
         except Exception as exc:
             logger.warning("Could not persist COG URIs to DB: %s", exc)
 
@@ -310,7 +319,14 @@ def scan_gcs(body: ScanGCSRequest, _user: Optional[dict] = Depends(get_current_u
     db_updated = 0
     if use_db and (body.sync or asset_map):
         try:
-            db_updated = sync_cog_uris(asset_map) if body.sync else update_cog_uris(asset_map)
+            if body.sync:
+                # A single scanned prefix only ever yields one asset kind --
+                # reconcile just that column so a DEM-prefix sync can't wipe
+                # out every site's orthomosaic URI (and vice versa).
+                sync_field = "dem_uri" if _asset_kind_from_uri(prefix) == "dem" else "cog_uri"
+                db_updated = sync_cog_uris(asset_map, fields=[sync_field])
+            else:
+                db_updated = update_cog_uris(asset_map)
         except Exception as exc:
             logger.warning("Could not persist COG URIs to DB: %s", exc)
 
