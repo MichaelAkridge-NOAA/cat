@@ -920,6 +920,10 @@
                 Scan GCS
               </button>
             </div>
+            <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#374151; margin-top:8px; cursor:pointer;">
+              <input type="checkbox" id="gcsSyncCheckbox" style="width:auto;">
+              Full sync (admin) — clear COGs for sites no longer found in this scan/report, instead of only adding new ones
+            </label>
             <div id="gcsScanStatus" style="font-size:13px; color:#0c5460; margin-top:6px;"></div>
           </div>
         </details>
@@ -1679,12 +1683,13 @@
 
     async function loadLatestGcsReport() {
       const statusEl = document.getElementById('gcsScanStatus');
+      const sync = document.getElementById('gcsSyncCheckbox').checked;
       statusEl.textContent = '⏳ Loading latest COG conversion report…';
       try {
         const resp = await fetch('/api/sites/load-gcs-report', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({})
+          body: JSON.stringify({ sync })
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
@@ -1696,7 +1701,8 @@
         statusEl.innerHTML = `✅ Loaded report: <strong>${data.report_file?.split(/[\\/]/).pop()}</strong> &nbsp;·&nbsp; `
           + `${data.total_converted} converted &nbsp;·&nbsp; `
           + `<strong>${data.sites_matched}</strong> sites matched &nbsp;·&nbsp; `
-          + `${data.sites_unmatched} unmatched`;
+          + `${data.sites_unmatched} unmatched`
+          + (sync ? ` &nbsp;·&nbsp; 🔄 synced (${data.db_uris_updated} sites reconciled)` : '');
         statusEl.style.color = '#155724';
         renderSiteBrowser();
       } catch (err) {
@@ -1709,6 +1715,7 @@
       const prefix = document.getElementById('gcsPrefixInput').value.trim();
       if (!prefix) { alert('Enter a GCS prefix first'); return; }
       const pattern = document.getElementById('gcsPatternSelect').value;
+      const sync = document.getElementById('gcsSyncCheckbox').checked;
       const btn = document.getElementById('scanGcsBtn');
       const statusEl = document.getElementById('gcsScanStatus');
       btn.disabled = true;
@@ -1718,7 +1725,7 @@
         const resp = await fetch('/api/sites/scan-gcs', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ gcs_prefix: prefix, pattern })
+          body: JSON.stringify({ gcs_prefix: prefix, pattern, sync })
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
@@ -1727,7 +1734,8 @@
         if (data.sites && data.sites.length) sbAllSites = data.sites;
         statusEl.innerHTML = `✅ Found <strong>${data.total_files_found}</strong> files &nbsp;·&nbsp; `
           + `<strong>${data.sites_matched}</strong> sites matched &nbsp;·&nbsp; `
-          + `${data.sites_unmatched} unmatched`;
+          + `${data.sites_unmatched} unmatched`
+          + (sync ? ` &nbsp;·&nbsp; 🔄 synced (${data.db_uris_updated} sites reconciled)` : '');
         statusEl.style.color = '#155724';
         renderSiteBrowser();
       } catch (err) {

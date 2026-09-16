@@ -475,6 +475,48 @@ def update_cog_uris(cog_map: Dict[str, Any]) -> int:
     return len(rows)
 
 
+def sync_cog_uris(asset_map: Dict[str, Any]) -> int:
+    """Replace (not merge) every site's raster URIs to match *asset_map*.
+
+    Unlike update_cog_uris (NVL-based: only fills a NULL, never clears a
+    stale value), this is a full reconcile against the current contents of
+    a GCS scan: every site in cat_sites gets set to whatever asset_map has
+    for it, and any site NOT in asset_map is cleared to NULL. Use this after
+    removing/replacing COGs in GCS so cat_sites reflects what's actually
+    there now instead of accumulating stale references to deleted files.
+    """
+    from cat.db.oracle import fetch_all, get_connection
+
+    all_site_names = [r["site_name"] for r in fetch_all("SELECT site_name FROM cat_sites")]
+    if not all_site_names:
+        return 0
+
+    rows = []
+    for site_name in all_site_names:
+        value = asset_map.get(site_name)
+        if isinstance(value, str):
+            cog_uri, dem_uri = value, None
+        elif isinstance(value, dict):
+            cog_uri, dem_uri = value.get("cog_uri"), value.get("dem_uri")
+        else:
+            cog_uri, dem_uri = None, None
+        rows.append({"site_name": site_name, "cog_uri": cog_uri, "dem_uri": dem_uri})
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                UPDATE cat_sites
+                SET cog_uri = :cog_uri,
+                    dem_uri = :dem_uri
+                WHERE site_name = :site_name
+                """,
+                rows,
+            )
+        conn.commit()
+    return len(rows)
+
+
 def replace_site_assets(
     site_name: str,
     cog_uri: Optional[str],

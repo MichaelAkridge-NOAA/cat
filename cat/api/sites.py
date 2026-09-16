@@ -6,6 +6,11 @@ GET  /api/sites/status          -- DB vs CSV mode info and row counts
 POST /api/sites/seed            -- seed Oracle tables from bundled CSVs (Oracle only)
 POST /api/sites/load-gcs-report -- load a COG conversion JSON report; persist URIs to DB
 POST /api/sites/scan-gcs        -- list GCS COG URIs and persist orthomosaic URIs to DB
+
+Both load-gcs-report and scan-gcs default to an additive merge (NVL: fills a
+missing URI, never clears a stale one). Pass "sync": true (admin only) to
+instead fully reconcile cat_sites against the scan -- any site not found
+gets its cog_uri/dem_uri cleared, matching what's actually in GCS now.
 """
 
 import fnmatch
@@ -21,7 +26,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from cat.api.auth import require_admin
+from cat.api.auth import get_current_user, require_admin
 from cat.db.config import is_oracle_backend_enabled
 from cat.db.sites import (
     build_gcs_asset_map,
@@ -31,6 +36,7 @@ from cat.db.sites import (
     replace_site_assets,
     seed_sites_from_csv,
     site_name_from_uri,
+    sync_cog_uris,
     update_cog_uris,
 )
 
@@ -149,10 +155,13 @@ def seed_sites():
 
 class LoadReportRequest(BaseModel):
     report_path: Optional[str] = None
+    sync: bool = False
 
 
 @router.post("/load-gcs-report")
-def load_gcs_report(body: LoadReportRequest):
+def load_gcs_report(body: LoadReportRequest, _user: Optional[dict] = Depends(get_current_user)):
+    if body.sync and (not _user or _user.get("role") != "admin"):
+        raise HTTPException(status_code=403, detail="Admin role required for sync mode")
     report_path_str = (body.report_path or "").strip()
     if report_path_str:
         candidates = sorted(glob.glob(report_path_str))
@@ -188,9 +197,9 @@ def load_gcs_report(body: LoadReportRequest):
 
     use_db = _use_db()
     db_updated = 0
-    if use_db and asset_map:
+    if use_db and (body.sync or asset_map):
         try:
-            db_updated = update_cog_uris(asset_map)
+            db_updated = sync_cog_uris(asset_map) if body.sync else update_cog_uris(asset_map)
         except Exception as exc:
             logger.warning("Could not persist COG URIs to DB: %s", exc)
 
@@ -219,6 +228,7 @@ def load_gcs_report(body: LoadReportRequest):
 class ScanGCSRequest(BaseModel):
     gcs_prefix: str
     pattern: str = "*_cog*.tif"
+    sync: bool = False
 
 
 class SiteAssetsUpdate(BaseModel):
@@ -267,7 +277,10 @@ def _list_gcs_public(gcs_prefix: str, pattern: str) -> list[str]:
 
 
 @router.post("/scan-gcs")
-def scan_gcs(body: ScanGCSRequest):
+def scan_gcs(body: ScanGCSRequest, _user: Optional[dict] = Depends(get_current_user)):
+    if body.sync and (not _user or _user.get("role") != "admin"):
+        raise HTTPException(status_code=403, detail="Admin role required for sync mode")
+
     prefix = body.gcs_prefix.rstrip("/")
     try:
         uris = _list_gcs_public(prefix, body.pattern)
@@ -295,9 +308,9 @@ def scan_gcs(body: ScanGCSRequest):
 
     use_db = _use_db()
     db_updated = 0
-    if use_db and asset_map:
+    if use_db and (body.sync or asset_map):
         try:
-            db_updated = update_cog_uris(asset_map)
+            db_updated = sync_cog_uris(asset_map) if body.sync else update_cog_uris(asset_map)
         except Exception as exc:
             logger.warning("Could not persist COG URIs to DB: %s", exc)
 
