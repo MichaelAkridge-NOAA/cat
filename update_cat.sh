@@ -38,6 +38,7 @@ ACTUAL_HOME=$(eval echo ~"$ACTUAL_USER")
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CAT_INSTALL_DIR="$ACTUAL_HOME/cat_deployment"
+CAT_HTTP_PORT=""
 
 echo "=============================================="
 echo "CAT Updater v${SCRIPT_VERSION}"
@@ -124,8 +125,15 @@ if [ ! -f "$CAT_INSTALL_DIR/.env" ]; then
     echo "           Continuing, but some env vars may be missing."
 fi
 
+if [ -f "$CAT_INSTALL_DIR/.env" ]; then
+    CAT_HTTP_PORT=$(grep -E '^CAT_HOST_PORT=' "$CAT_INSTALL_DIR/.env" 2>/dev/null \
+        | tail -1 | cut -d= -f2- | tr -d '"[:space:]' || true)
+fi
+CAT_HTTP_PORT="${CAT_HTTP_PORT:-8000}"
+
 echo "  ✓ Install directory: $CAT_INSTALL_DIR"
 echo "  ✓ Docker available"
+echo "  ✓ Host HTTP port: $CAT_HTTP_PORT"
 
 # =============================================================================
 # Step 2: Pre-update backup (export annotations as JSON)
@@ -137,11 +145,12 @@ if [ "$SKIP_BACKUP" = false ]; then
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
     BACKUP_FILE="$BACKUP_DIR/pre-update_${TIMESTAMP}.json"
 
-    sudo -u "$ACTUAL_USER" mkdir -p "$BACKUP_DIR"
+    sudo mkdir -p "$BACKUP_DIR"
+    sudo chown "$ACTUAL_USER:$(id -gn "$ACTUAL_USER")" "$BACKUP_DIR"
 
-    HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8000/health 2>/dev/null || echo "000")
+    HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:${CAT_HTTP_PORT}/health" 2>/dev/null || echo "000")
     if echo "$HTTP_CODE" | grep -qE '^2'; then
-        if curl -sf "http://localhost:8000/api/annotations/export" -o "$BACKUP_FILE" 2>/dev/null; then
+        if curl -sf "http://localhost:${CAT_HTTP_PORT}/api/annotations/export" -o "$BACKUP_FILE" 2>/dev/null; then
             echo "  ✓ Backup saved: $BACKUP_FILE"
         else
             echo "  ⚠️  Export endpoint not available — skipping file backup (data is safe in Oracle)"
@@ -189,7 +198,21 @@ if [ "$SCRIPT_DIR" = "$CAT_INSTALL_DIR" ]; then
         sudo -u "$ACTUAL_USER" git -C "$CAT_INSTALL_DIR" pull origin "$CAT_BRANCH"
         echo "  ✓ Pulled latest from origin/$CAT_BRANCH"
     else
-        echo "  Running in-place (no .git) — skipping git pull (code already current)"
+        echo "  In-place deployment has no .git metadata; cloning current source..."
+        TMP_CLONE_DIR=$(mktemp -d)
+        trap 'rm -rf "$TMP_CLONE_DIR"' EXIT
+        sudo -u "$ACTUAL_USER" git clone --depth 1 -b "$CAT_BRANCH" "$CAT_REPO_URL" "$TMP_CLONE_DIR/cat" || {
+            echo "  ERROR: Failed to clone origin/$CAT_BRANCH"
+            exit 1
+        }
+        echo "  Syncing cloned source into $CAT_INSTALL_DIR"
+        copy_cat_source "$TMP_CLONE_DIR/cat" "$CAT_INSTALL_DIR" || {
+            echo "  ERROR: Failed to sync cloned source"
+            exit 1
+        }
+        rm -rf "$TMP_CLONE_DIR"
+        trap - EXIT
+        echo "  ✓ Deployed latest origin/$CAT_BRANCH"
     fi
 elif [ -f "$SCRIPT_DIR/docker-compose.cat.yml" ]; then
     # Running the updater from a local checkout — rsync to install dir
@@ -278,7 +301,7 @@ fi
 # HTTP-level health check
 APP_READY=false
 for i in {1..30}; do
-    if curl -sf "http://localhost:8000/health" >/dev/null 2>&1; then
+    if curl -sf "http://localhost:${CAT_HTTP_PORT}/health" >/dev/null 2>&1; then
         APP_READY=true
         break
     fi
@@ -286,9 +309,9 @@ for i in {1..30}; do
 done
 
 if [ "$APP_READY" = true ]; then
-    echo "  ✓ CAT app is responding on http://localhost:8000"
+    echo "  ✓ CAT app is responding on http://localhost:${CAT_HTTP_PORT}"
     # Fetch and display version info
-    VERSION_JSON=$(curl -sf http://localhost:8000/api/version 2>/dev/null || echo "")
+    VERSION_JSON=$(curl -sf "http://localhost:${CAT_HTTP_PORT}/api/version" 2>/dev/null || echo "")
     if [ -n "$VERSION_JSON" ]; then
         APP_VER=$(echo "$VERSION_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('app_version','?'))" 2>/dev/null || echo "?")
         SCHEMA_VER=$(echo "$VERSION_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('schema_version','?'))" 2>/dev/null || echo "?")
@@ -316,7 +339,7 @@ echo ""
 echo "  Container status:"
 docker compose -f docker-compose.cat.yml ps
 echo ""
-echo "  Access CAT at: http://localhost:8000"
+echo "  Access CAT at: http://localhost:${CAT_HTTP_PORT}"
 echo ""
 echo "  Management scripts:"
 echo "    Logs:        $CAT_INSTALL_DIR/cat-logs.sh"
