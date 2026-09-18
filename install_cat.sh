@@ -7,8 +7,8 @@
 # Handles auto-start on reboot and management commands
 # Auto-bootstrap: Creates CAT schema and ingests reference data on startup
 # =============================================================================
-SCRIPT_VERSION="12.0.0"
-CAT_BRANCH="cat_db_v12"
+SCRIPT_VERSION="13.0.0"
+CAT_BRANCH="cat_db_v13"
 CAT_INSTALL_VARIANT="${CAT_INSTALL_VARIANT:-base}"
 
 case "$CAT_INSTALL_VARIANT" in

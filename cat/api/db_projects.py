@@ -109,6 +109,7 @@ class OverlayClipRequest(BaseModel):
 
 class OverlayFeatureResizeRequest(BaseModel):
     width_m: float
+    length_m: Optional[float] = None
 
 
 class LatLng(BaseModel):
@@ -3050,21 +3051,25 @@ def resize_overlay_feature_width(
     payload: OverlayFeatureResizeRequest,
     current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
-    """Recompute a segment's rectangle at a new width, keeping its centerline
-    (the transect chord it was buffered from) fixed in place. This is the
-    "resize" affordance for segments — hand-dragging the buffer polygon's own
-    vertices (there can be 100+) is what used to crash the tab, and a
-    vertex was never individually meaningful anyway since it's mechanically
-    derived from the transect line + a width. Only supported for features
-    carrying a Width_m property (segments produced by generate-transect) —
-    the corner order is relied on to identify the width edges (corners[0]-
-    corners[3] and corners[1]-corners[2], per _build_transect_geometry's
-    construction order, which our own move/rotate code preserves)."""
+    """Recompute a segment's rectangle at a new width and/or length, keeping
+    its centerpoint fixed in place. This is the "resize" affordance for
+    segments — hand-dragging the buffer polygon's own vertices (there can be
+    100+) is what used to crash the tab, and a vertex was never individually
+    meaningful anyway since it's mechanically derived from the transect line
+    + a width/length. Only supported for features carrying a Width_m
+    property (segments produced by generate-transect) — the corner order is
+    relied on to identify the width edges (corners[0]-corners[3] and
+    corners[1]-corners[2], per _build_transect_geometry's construction
+    order, which our own move/rotate code preserves). length_m is optional
+    and defaults to the segment's current Length_m, so existing callers that
+    only ever sent width_m keep working unchanged."""
     _ensure_oracle_mode()
     _require_project_role(project_id, current_user, "editor")
 
     if payload.width_m <= 0:
         raise HTTPException(status_code=400, detail="Width must be greater than 0")
+    if payload.length_m is not None and payload.length_m <= 0:
+        raise HTTPException(status_code=400, detail="Length must be greater than 0")
 
     row = fetch_one(
         """
@@ -3113,6 +3118,15 @@ def resize_overlay_feature_width(
     ux, uy = dx / chord_len, dy / chord_len
     px, py = -uy, ux  # perpendicular unit vector
 
+    # Length resize keeps the segment's centerpoint fixed and extends/shrinks
+    # symmetrically along the chord direction, mirroring how width already
+    # keeps the centerline fixed and extends/shrinks perpendicular to it.
+    new_length = payload.length_m if payload.length_m is not None else chord_len
+    center = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+    half_l = new_length / 2.0
+    start = (center[0] - ux * half_l, center[1] - uy * half_l)
+    end = (center[0] + ux * half_l, center[1] + uy * half_l)
+
     half_w = payload.width_m / 2.0
     new_corners_utm = [
         (start[0] + px * half_w, start[1] + py * half_w),
@@ -3123,7 +3137,9 @@ def resize_overlay_feature_width(
     new_corners_wgs = [to_wgs84.transform(cx, cy) for cx, cy in new_corners_utm]
     polygon = Polygon(new_corners_wgs + [new_corners_wgs[0]])
 
-    new_props = {**props, "Width_m": payload.width_m, "Area_m2": round(chord_len * payload.width_m, 3)}
+    new_props = {**props, "Width_m": payload.width_m, "Area_m2": round(new_length * payload.width_m, 3)}
+    if payload.length_m is not None:
+        new_props["Length_m"] = new_length
     new_feature_geojson = {"type": "Feature", "geometry": mapping(polygon), "properties": new_props}
 
     execute(

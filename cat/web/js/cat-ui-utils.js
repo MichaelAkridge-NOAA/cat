@@ -345,20 +345,31 @@ window.catFetch = catFetch;
   window.catInitMinimap = function (mainMap) {
     if (!mainMap || !L) return;
 
-    // Create container
-    const container = document.createElement('div');
-    container.id = 'catMinimap';
-    container.style.cssText = `
-      position:absolute; bottom:28px; left:8px; z-index:800;
-      width:150px; height:120px; border:2px solid rgba(102,126,234,0.6);
-      border-radius:6px; overflow:hidden; background:#e5e7eb;
-      box-shadow:0 2px 8px rgba(0,0,0,0.2); opacity:0.9;
-      transition: opacity 0.2s;
-    `;
-    container.onmouseenter = () => { container.style.opacity = '1'; };
-    container.onmouseleave = () => { container.style.opacity = '0.7'; };
-    container.style.opacity = '0.7';
-    document.getElementById('map').appendChild(container);
+    // Experiment (annotation-layout-experiment branch): this used to float
+    // over the map's bottom-left corner, which is exactly where the
+    // float-mode annotation form sits most of the time -- and raising its
+    // z-index above the form to compensate still risked covering a form
+    // field. It now lives inside the Map Layers panel's own "Overview"
+    // section (annotation.html) instead, so it only ever competes for
+    // space the user opened on purpose, not a corner of the map itself.
+    const container = document.getElementById('catMinimapContainer');
+    if (!container) return;
+
+    // The panel starts hidden/collapsed, so this container can be 0x0 when
+    // the Leaflet map below is created -- Leaflet bakes in whatever size it
+    // measures at construction time. Re-measure whenever the container's
+    // actual size changes (panel opened, section expanded, sidebar
+    // resized). Debounced since the CSS collapse is a 0.3s max-height
+    // transition, not an instant flip -- no need to invalidate every frame.
+    if (window.ResizeObserver) {
+      let debounce = null;
+      new ResizeObserver(function () {
+        clearTimeout(debounce);
+        debounce = setTimeout(function () {
+          if (miniMap) miniMap.invalidateSize();
+        }, 200);
+      }).observe(container);
+    }
 
     // Create mini Leaflet map (no controls)
     miniMap = L.map(container, {

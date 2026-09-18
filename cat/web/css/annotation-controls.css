@@ -319,6 +319,42 @@
   max-height: 260px;
   overflow-y: auto;
   max-width: 200px;
+  cursor: pointer;
+}
+
+/* Collapsed (default) state: a single-row chip -- name + a few preview
+   dots -- instead of the full per-value list. Experiment
+   (annotation-layout-experiment branch): this is the "check occasionally"
+   widget, so it shouldn't cost permanent bottom-right space the way the
+   always-glanced-at minimap does. */
+.cat-symbology-legend.collapsed {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+  white-space: nowrap;
+  padding: 5px 8px;
+}
+
+.cat-symbology-legend-chip-label {
+  font-weight: 700;
+  color: #333;
+  margin-right: 2px;
+}
+
+.cat-symbology-legend-more {
+  font-size: 10px;
+  color: #666;
+  margin-left: 2px;
+}
+
+.cat-symbology-legend-count {
+  margin-left: auto;
+  padding-left: 8px;
+  color: #888;
+  font-variant-numeric: tabular-nums;
 }
 
 .cat-symbology-legend-title {

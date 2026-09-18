@@ -254,6 +254,42 @@
     
     </div> <!-- End section-content -->
     </div> <!-- End Layer Controls Section -->
+
+      <!-- Overview Section -->
+      <!-- Moved here from a floating map-corner chip (annotation-layout-experiment
+           branch): the corner it lived in is exactly where the float-mode
+           annotation form covers most of the time, and raising its z-index
+           above the form still risked colliding with a form field. Living
+           inside a panel the user opens on purpose sidesteps the whole
+           layout conflict instead of fighting for corner space. Placed last
+           in the panel per feedback -- it's the least-consulted section. -->
+      <div class="layer-section" id="overviewMapSection">
+        <div class="section-title section-title-row" onclick="toggleSection('overviewMapSection')">
+          <span>🗺️ Overview</span>
+          <span class="section-collapse-icon">▼</span>
+        </div>
+        <div class="section-content">
+          <div id="catMinimapContainer"></div>
+        </div>
+      </div>
+
+      <!-- Symbology Legend Section -->
+      <!-- Same reasoning and same fix as Overview above: this was a Leaflet
+           'bottomright' map control (annotation-runtime-symbology.js), which
+           put it in the exact corner the float-mode form covers -- shrinking
+           it to a collapsed chip never fixed that, since chip or full list,
+           it was still positioned under the form the whole time. Empty
+           (display:none) until a color-by mode is turned on and there's at
+           least one annotation to build a legend from. -->
+      <div class="layer-section" id="legendSection" style="display:none;">
+        <div class="section-title section-title-row" onclick="toggleSection('legendSection')">
+          <span>🎨 Legend</span>
+          <span class="section-collapse-icon">▼</span>
+        </div>
+        <div class="section-content">
+          <div id="catSymbologyLegendContainer"></div>
+        </div>
+      </div>
     </div> <!-- End panel-content -->
   </div> <!-- End Map Layers Panel -->
   

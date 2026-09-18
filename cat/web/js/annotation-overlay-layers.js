@@ -83,9 +83,16 @@ async function toggleFeatureSelection(layer) {
     // whatever remains selected is unaffected.
     _selectedFeatures.delete(key);
     _setFeatureSelectedStyle(layer, false);
+    // A live vertex-edit session holds handles bound to the pre-restore
+    // latlngs array — disable it before swapping geometry out from under it,
+    // same as cancelOverlayEdit does.
+    if (layer.editing && layer.editing.enabled()) {
+      layer.editing.disable();
+      _removeStaleEditHandles(layer);
+    }
     const snap = _overlayEditSession && _overlayEditSession.snapshots[featureId];
     if (snap) _restoreLayerFromGeoJSON(layer, snap);
-    layer.setStyle({ color: overlayLayers[layerId]?.color, weight: 2, dashArray: null });
+    layer.setStyle({ color: overlayLayers[layerId]?.color, weight: overlayLayers[layerId]?.borderWidth || 2, dashArray: null });
     layer._catLocked = true;
     layer.setPopupContent(_overlayFeaturePopupHtml(layer.feature, layer, overlayLayers[layerId]?.color));
     fetch(
@@ -512,7 +519,7 @@ async function loadExistingOverlays(projectId) {
       
       for (const layer of activeLayers) {
         const style = layer.style || {};
-        await loadOverlayLayer(layer.layer_id, layer.layer_name, style.color || '#00ff00', layer.layer_type || null, !!layer.is_locked);
+        await loadOverlayLayer(layer.layer_id, layer.layer_name, style.color || '#00ff00', layer.layer_type || null, !!layer.is_locked, style.weight || null);
       }
     }
   } catch (error) {
@@ -524,7 +531,7 @@ async function loadExistingOverlays(projectId) {
 /**
  * Load overlay layer features and render on map
  */
-async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', layerType = null, layerLocked = true) {
+async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', layerType = null, layerLocked = true, savedWeight = null) {
   try {
     const response = await fetch(
       `${window.location.origin}/api/db/projects/${currentProjectId}/overlay-layers/${layerId}/features`
@@ -544,7 +551,10 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
     const stylePrefs = await _getOverlayStylePrefs();
     const typePrefs = (layerType === 'segment' || layerType === 'transect') ? (stylePrefs[layerType] || {}) : {};
     if (typePrefs.colorOverride) layerColor = typePrefs.colorOverride;
-    const borderWidth = typePrefs.borderWidth || 2;
+    // A per-layer saved weight (set via the Map Layers sidebar's own line-width
+    // control, persisted in style_json) wins over the type-wide preference
+    // default — it's a more specific, more recent choice about this exact layer.
+    const borderWidth = savedWeight || typePrefs.borderWidth || 2;
     const fillOpacity = typePrefs.borderOnly ? 0 : 0.2;
     const showCentroids = !!stylePrefs.showCentroids;
 
@@ -655,6 +665,7 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
             if (layer.editing && layer.editing.enabled()) {
               layer.editing.disable();
               _removeStaleEditHandles(layer);
+              _closeResizePopupDom();
               // Still selected/mid-session — keep the dashed "armed" outline,
               // don't clear it (that only happens for real on Save/Cancel).
               layer.setStyle({ color: layerColor, dashArray: '3,3' });
@@ -665,6 +676,14 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
             } else if (layer.editing) {
               layer.editing.enable();
               layer.setStyle({ color: '#ff9800', dashArray: '6,4' });
+              // Show current width/length as editable numbers right alongside
+              // hand-dragging — answers "what size is this, right now" without
+              // a separate click, and typing an exact number is often faster
+              // than eyeballing a vertex drag anyway. Segments only (needs
+              // Width_m); a plain transect line has neither.
+              if (feature && feature.properties && 'Width_m' in feature.properties) {
+                _openResizePopup(layer, feature, layerColor);
+              }
               // Leaflet's synthetic 'dblclick' event never reaches a vector layer
               // while leaflet-draw's vertex-editing overlay is active on it, so
               // this handler's own disable-branch above can't fire from a literal
@@ -682,6 +701,7 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
                 if (layer.editing && layer.editing.enabled()) {
                   layer.editing.disable();
                   _removeStaleEditHandles(layer);
+                  _closeResizePopupDom();
                   layer.setStyle({ color: layerColor, dashArray: '3,3' });
                   // Consume this Escape so the global bubble-phase handler in
                   // annotation-runtime-shell-init.js (which cancels the active
@@ -714,6 +734,10 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
           layer.on('edit', () => {
             layer.editing.disable();
             _removeStaleEditHandles(layer);
+            // A hand-dragged vertex can make the shape no longer match its
+            // stored Width_m/Length_m — close the type-in tool rather than
+            // leave it showing numbers that no longer describe the shape.
+            _closeResizePopupDom();
             layer.setStyle({ color: layerColor, dashArray: '3,3' });
             _updateCentroidMarkerPosition(layer);
             if (layer._catExitEdit) {
@@ -749,7 +773,7 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
     };
 
     // Add to layer list UI with feature count & color
-    addOverlayLayerToUI(layerId, layerName, data.features.length, layerColor, layerType);
+    addOverlayLayerToUI(layerId, layerName, data.features.length, layerColor, layerType, layerLocked, borderWidth);
 
   } catch (error) {
     console.error(`Error loading overlay layer ${layerId}:`, error);
@@ -760,7 +784,7 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
 /**
  * Add overlay layer to UI list
  */
-function addOverlayLayerToUI(layerId, layerName, featureCount = 0, color = '#00ff00', layerType = null, layerLocked = true) {
+function addOverlayLayerToUI(layerId, layerName, featureCount = 0, color = '#00ff00', layerType = null, layerLocked = true, borderWidth = 2) {
   const listContainer = document.getElementById('overlayLayersList');
   if (!listContainer) return;
 
@@ -794,6 +818,12 @@ function addOverlayLayerToUI(layerId, layerName, featureCount = 0, color = '#00f
           </label>
           <label style="font-size:11px; color:#666; display:flex; align-items:center; gap:3px; cursor:pointer;">
             <input type="checkbox" id="${safeId}_borderOnly" onchange="toggleOverlayBorderOnly(${layerId})"> Border only
+          </label>
+          <label style="font-size:11px; color:#666; display:flex; align-items:center; gap:4px;" title="Line/border thickness for this layer">
+            Width:
+            <input type="range" id="${safeId}_borderWidth" min="1" max="10" step="1" value="${borderWidth}"
+                   oninput="setOverlayBorderWidth(${layerId}, this.value)" style="width:60px;">
+            <span id="${safeId}_borderWidthValue" style="min-width:14px;display:inline-block;">${borderWidth}</span>
           </label>
           <button class="btn btn-secondary" onclick="zoomToOverlayLayer(${layerId})"
                   style="font-size:11px;padding:3px 9px;" title="Zoom to layer extent">
@@ -980,6 +1010,37 @@ function setOverlayOpacity(layerId, value) {
 }
 
 /**
+ * Set line/border width (weight) for an overlay layer's features.
+ * Persisted per-layer in style_json, independent of the type-wide
+ * Preferences → Overlay layers default — this is the live, in-place
+ * control for "just this layer, right now."
+ */
+async function setOverlayBorderWidth(layerId, value) {
+  const layerData = overlayLayers[layerId];
+  if (!layerData) return;
+
+  const weight = parseInt(value, 10) || 2;
+  const valueEl = document.getElementById(`overlay_${layerId}_borderWidthValue`);
+  if (valueEl) valueEl.textContent = weight;
+
+  layerData.layerGroup.setStyle({ weight });
+  layerData.borderWidth = weight;
+
+  try {
+    await fetch(
+      `${window.location.origin}/api/db/projects/${currentProjectId}/overlay-layers/${layerId}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ style_json: { color: layerData.color, weight, opacity: 0.7 } })
+      }
+    );
+  } catch (e) {
+    console.warn('Failed to save border width:', e);
+  }
+}
+
+/**
  * Toggle border-only mode for an overlay layer (hide fill, keep stroke)
  */
 function toggleOverlayBorderOnly(layerId) {
@@ -1133,7 +1194,7 @@ async function changeOverlayColor(layerId, newColor) {
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ style_json: { color: newColor, weight: 2, opacity: 0.7 } })
+        body: JSON.stringify({ style_json: { color: newColor, weight: layerData.borderWidth || 2, opacity: 0.7 } })
       }
     );
   } catch (e) {
@@ -1405,7 +1466,6 @@ function _onTransformEnd() {
       const totalAngle = finalAngle - startAngle;
       if (totalAngle !== 0) targets.forEach(t => _rotateLayer(t, centroid, totalAngle));
     }
-    _clearTargetsCssTransform(targets);
 
     // Reset styles — keep the persistent dashed "armed" outline (each
     // selected feature stays mid-session until Save/Cancel), just restore
@@ -1430,6 +1490,13 @@ function _onTransformEnd() {
     console.error('Error finishing feature transform:', err);
     if (typeof showStatus === 'function') showStatus('❌ Error saving move/rotate — see console', 'error');
   } finally {
+    // Always clear the preview transform, even if committing the real
+    // geometry above threw — otherwise the path stays visually displaced
+    // by the last CSS translate/rotate forever (setStyle never touches
+    // style.transform), while any newly-created vertex handles are placed
+    // at the real, un-displaced lat/lngs. That mismatch is what makes
+    // vertices look like they're "in the wrong place" on a later edit.
+    _clearTargetsCssTransform(targets);
     _transformState = null;
   }
 }
@@ -1459,10 +1526,27 @@ function _removeStaleEditHandles(layer) {
 
 // ── Geometry helpers ──
 
+// Leaflet.Draw's L.Edit.Poly caches its own `latlngs` reference at
+// construction time (when the layer first gets a `.editing`), and only
+// re-reads the layer's real _latlngs when it hears a 'revert-edited' event
+// (see leaflet.draw.js's _updateLatLngs). Every setLatLngs() we do from
+// outside the vertex-edit flow itself -- move, rotate, cancel/restore,
+// resize -- swaps the layer's _latlngs array for a new one, which leaves
+// that cached reference pointing at the OLD array. The next time the user
+// double-clicks to vertex-edit, Leaflet.Draw builds its corner handles from
+// the stale reference, so they appear at the pre-move position even though
+// the shape itself is drawn in the right place. Firing this event after any
+// setLatLngs resyncs the cache, exactly the way Leaflet.Draw's own revert
+// flow does internally.
+function _resyncEditingLatLngs(layer) {
+  if (layer.editing) layer.fire('revert-edited', { layer: layer });
+}
+
 function _offsetLayer(layer, dLat, dLng) {
   if (layer.getLatLngs) {
     const shifted = _offsetLatLngs(layer.getLatLngs(), dLat, dLng);
     layer.setLatLngs(shifted);
+    _resyncEditingLatLngs(layer);
   } else if (layer.getLatLng) {
     const ll = layer.getLatLng();
     layer.setLatLng(L.latLng(ll.lat + dLat, ll.lng + dLng));
@@ -1480,6 +1564,7 @@ function _rotateLayer(layer, centroid, angle) {
   if (!layer.getLatLngs) return;
   const rotated = _rotateLatLngs(layer.getLatLngs(), centroid, angle);
   layer.setLatLngs(rotated);
+  _resyncEditingLatLngs(layer);
 }
 
 function _rotateLatLngs(latlngs, center, angle) {
@@ -1635,6 +1720,7 @@ function _restoreLayerFromGeoJSON(layer, geojson) {
   if (!tempLayer) return;
   if (layer.setLatLngs && tempLayer.getLatLngs) {
     layer.setLatLngs(tempLayer.getLatLngs());
+    _resyncEditingLatLngs(layer);
   } else if (layer.setLatLng && tempLayer.getLatLng) {
     layer.setLatLng(tempLayer.getLatLng());
   }
@@ -1694,7 +1780,7 @@ async function cancelOverlayEdit() {
       }
       const snap = session.snapshots[featureId];
       if (snap) _restoreLayerFromGeoJSON(l, snap);
-      l.setStyle({ color: overlayLayers[layerId]?.color, weight: 2, dashArray: null });
+      l.setStyle({ color: overlayLayers[layerId]?.color, weight: overlayLayers[layerId]?.borderWidth || 2, dashArray: null });
       l._catLocked = true;
       const layerColor = overlayLayers[layerId]?.color;
       l.setPopupContent(_overlayFeaturePopupHtml(l.feature, l, layerColor));
@@ -1733,14 +1819,20 @@ function _openResizePopup(layer, feature, layerColor) {
     }
     return;
   }
+  const hasLength = 'Length_m' in props;
   _closeResizePopupDom();
   document.body.insertAdjacentHTML('beforeend', `
-    <div id="overlayResizePopup" style="position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+    <div id="overlayResizePopup" style="position:fixed; bottom:70px; left:50%; transform:translateX(-50%);
       z-index:10000; background:#232323; border:1px solid #444; border-radius:6px; padding:10px 14px;
       color:#eee; box-shadow:0 4px 16px rgba(0,0,0,0.4); font-size:12px; display:flex; align-items:center; gap:8px;">
-      <span>📏 Segment width (m):</span>
+      <span>📏 Width (m):</span>
       <input type="number" id="overlayResizeWidthInput" value="${props.Width_m}" min="0.1" step="0.1"
              style="width:70px; font-size:12px; padding:2px 4px;">
+      ${hasLength ? `
+      <span>Length (m):</span>
+      <input type="number" id="overlayResizeLengthInput" value="${props.Length_m}" min="0.1" step="0.1"
+             style="width:70px; font-size:12px; padding:2px 4px;">
+      ` : ''}
       <button class="btn btn-primary btn-sm" onclick="_applyOverlayResize(${layer._overlayLayerId}, ${layer._overlayFeatureId})">✅ Apply</button>
       <button class="btn btn-secondary btn-sm" onclick="_closeResizePopupDom()">✖ Cancel</button>
     </div>
@@ -1755,18 +1847,29 @@ function _closeResizePopupDom() {
 }
 
 async function _applyOverlayResize(layerId, featureId) {
-  const input = document.getElementById('overlayResizeWidthInput');
-  const widthM = input ? parseFloat(input.value) : NaN;
+  const widthInput = document.getElementById('overlayResizeWidthInput');
+  const lengthInput = document.getElementById('overlayResizeLengthInput');
+  const widthM = widthInput ? parseFloat(widthInput.value) : NaN;
   if (!isFinite(widthM) || widthM <= 0) {
     if (typeof showStatus === 'function') showStatus('⚠️ Enter a width greater than 0', 'warning');
     return;
   }
+  let lengthM = null;
+  if (lengthInput) {
+    lengthM = parseFloat(lengthInput.value);
+    if (!isFinite(lengthM) || lengthM <= 0) {
+      if (typeof showStatus === 'function') showStatus('⚠️ Enter a length greater than 0', 'warning');
+      return;
+    }
+  }
   const layer = _findOverlayFeatureLayer(layerId, featureId);
   if (!layer) { _closeResizePopupDom(); return; }
   try {
+    const body = { width_m: widthM };
+    if (lengthM !== null) body.length_m = lengthM;
     const resp = await fetch(
       `${window.location.origin}/api/db/projects/${currentProjectId}/overlay-layers/${layerId}/features/${featureId}/width`,
-      { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ width_m: widthM }) }
+      { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
     );
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
@@ -1774,6 +1877,21 @@ async function _applyOverlayResize(layerId, featureId) {
     }
     const data = await resp.json();
     if (data.feature && data.feature.feature) {
+      // The resize popup can now be opened while vertex-editing is still
+      // live (it auto-opens on double-click). Its handles were built from
+      // the pre-resize corners and _resyncEditingLatLngs only swaps the
+      // cached array reference, it doesn't move markers that already
+      // exist on screen — end the vertex-edit session outright rather
+      // than leave dangling handles at the old rectangle's corners.
+      if (layer.editing && layer.editing.enabled()) {
+        layer.editing.disable();
+        _removeStaleEditHandles(layer);
+        layer.setStyle({ color: overlayLayers[layerId]?.color, dashArray: '3,3' });
+        if (layer._catExitEdit) {
+          document.removeEventListener('keydown', layer._catExitEdit, true);
+          layer._catExitEdit = null;
+        }
+      }
       _restoreLayerFromGeoJSON(layer, data.feature.feature);
       layer.feature = data.feature.feature;
       // If this feature is mid-session, its snapshot must move forward too —
@@ -2028,6 +2146,7 @@ if (typeof window !== 'undefined') {
   window.handleOverlayFileSelect = handleOverlayFileSelect;
   window.toggleOverlayLayer = toggleOverlayLayer;
   window.setOverlayOpacity = setOverlayOpacity;
+  window.setOverlayBorderWidth = setOverlayBorderWidth;
   window.removeOverlayLayer = removeOverlayLayer;
   window.zoomToOverlayLayer = zoomToOverlayLayer;
   window.changeOverlayColor = changeOverlayColor;
