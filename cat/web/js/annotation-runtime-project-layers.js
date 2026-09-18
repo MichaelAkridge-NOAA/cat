@@ -954,8 +954,11 @@
 
     // TiTiler URL params per tif.id — gamma, saturation, contrast, rescale
     let cogVisualSettings = {};
-    // CSS pane filter settings per tif.id — sharpness, noiseReduction, grayscale, hueRotate
+    // CSS layer filter settings per tif.id — sharpness and hue rotation
     let cogPaneSettings = {};
+    let cogOpacitySettings = {};
+    let cogReloadTimers = {};
+    let cogLoadVersions = {};
     // Registry: tif.id → tif object, so the drawer can look up any layer
     let cogTifRegistry = {};
 
@@ -1009,6 +1012,7 @@
       const ps = cogPaneSettings[tif.id] || {};
       const v  = (key, def) => vs[key] ?? def;
       const p  = (key, def) => ps[key] ?? def;
+      const opacity = cogOpacitySettings[tif.id] ?? tifLayers[tif.id]?.options?.opacity ?? 1;
 
       drawer.innerHTML = `
         <div style="position:sticky;top:0;background:#fff;z-index:1;padding:14px 14px 10px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;">
@@ -1020,8 +1024,8 @@
         <div class="cog-drawer-section">
           <div class="cog-drawer-section-title">Opacity</div>
           <div class="cog-drawer-row">
-            <label>Opacity <span id="d_opacityValue">${Math.round((tifLayers[tif.id]?.options?.opacity ?? 1) * 100)}</span>%</label>
-            <input type="range" id="d_opacity" min="0" max="100" value="${Math.round((tifLayers[tif.id]?.options?.opacity ?? 1) * 100)}">
+            <label>Opacity <span id="d_opacityValue">${Math.round(opacity * 100)}</span>%</label>
+            <input type="range" id="d_opacity" min="0" max="100" value="${Math.round(opacity * 100)}">
           </div>
         </div>
 
@@ -1065,7 +1069,7 @@
           </div>
 <div style="display:flex;align-items:center;gap:12px;margin-top:6px;">
             <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;">
-              <input type="checkbox" id="d_grayscale" ${p('grayscale', false) ? 'checked' : ''}> Grayscale
+              <input type="checkbox" id="d_grayscale" ${v('saturation', 1) === 0 ? 'checked' : ''}> Grayscale
             </label>
             <label style="display:flex;align-items:center;gap:4px;font-size:11px;flex:1;">
               Hue <span id="d_hueValue">${p('hueRotate', 0)}</span>°
@@ -1099,7 +1103,7 @@
       const setVis = (key, val) => {
         if (!cogVisualSettings[tif.id]) cogVisualSettings[tif.id] = {};
         cogVisualSettings[tif.id][key] = val;
-        if (tifLayers[tif.id]) reloadCogWithSettings(tif);
+        if (isTifLayerEnabled(tif.id)) scheduleCogReload(tif);
       };
       const setPane = (key, val) => {
         if (!cogPaneSettings[tif.id]) cogPaneSettings[tif.id] = {};
@@ -1111,24 +1115,25 @@
       // Opacity
       q('d_opacity').addEventListener('input', e => {
         q('d_opacityValue').textContent = e.target.value;
+        cogOpacitySettings[tif.id] = e.target.value / 100;
         const layer = tifLayers[tif.id];
-        if (layer) layer.setOpacity(e.target.value / 100);
+        if (layer) layer.setOpacity(cogOpacitySettings[tif.id]);
       });
 
       // Image Tone
-      q('d_gamma').addEventListener('change', e => { const v = e.target.value/100; q('d_gammaValue').textContent = v.toFixed(1); setVis('gamma', v); });
-      q('d_saturation').addEventListener('change', e => {
+      q('d_gamma').addEventListener('input', e => { const v = e.target.value/100; q('d_gammaValue').textContent = v.toFixed(1); setVis('gamma', v); });
+      q('d_saturation').addEventListener('input', e => {
         const v = e.target.value / 100;
         q('d_saturationValue').textContent = v.toFixed(1);
         q('d_grayscale').checked = (v === 0);
         setVis('saturation', v);
       });
-      q('d_contrast').addEventListener('change', e => { const v = parseInt(e.target.value); q('d_contrastValue').textContent = v; setVis('contrast', v); });
+      q('d_contrast').addEventListener('input', e => { const v = parseInt(e.target.value); q('d_contrastValue').textContent = v; setVis('contrast', v); });
 
       // Color Balance
-      q('d_gammaR').addEventListener('change', e => { const v = e.target.value/100; q('d_gammaRValue').textContent = v.toFixed(1); setVis('gammaR', v); });
-      q('d_gammaG').addEventListener('change', e => { const v = e.target.value/100; q('d_gammaGValue').textContent = v.toFixed(1); setVis('gammaG', v); });
-      q('d_gammaB').addEventListener('change', e => { const v = e.target.value/100; q('d_gammaBValue').textContent = v.toFixed(1); setVis('gammaB', v); });
+      q('d_gammaR').addEventListener('input', e => { const v = e.target.value/100; q('d_gammaRValue').textContent = v.toFixed(1); setVis('gammaR', v); });
+      q('d_gammaG').addEventListener('input', e => { const v = e.target.value/100; q('d_gammaGValue').textContent = v.toFixed(1); setVis('gammaG', v); });
+      q('d_gammaB').addEventListener('input', e => { const v = e.target.value/100; q('d_gammaBValue').textContent = v.toFixed(1); setVis('gammaB', v); });
 
       // Display Effects
       q('d_sharpness').addEventListener('input', e => { const v = parseInt(e.target.value); q('d_sharpnessValue').textContent = v; setPane('sharpness', v); });
@@ -1139,7 +1144,7 @@
         cogVisualSettings[tif.id].saturation = sat;
         q('d_saturation').value = sat * 100;
         q('d_saturationValue').textContent = sat.toFixed(1);
-        if (tifLayers[tif.id]) reloadCogWithSettings(tif);
+        if (tifLayers[tif.id]) scheduleCogReload(tif, 0);
       });
       q('d_hue').addEventListener('input', e => { const v = parseInt(e.target.value); q('d_hueValue').textContent = v; setPane('hueRotate', v); });
 
@@ -1157,7 +1162,7 @@
         q('d_gammaB').value = Math.round(vv('gammaB',1)*100);   q('d_gammaBValue').textContent    = vv('gammaB',1).toFixed(1);
         q('d_sharpness').value = pp('sharpness',0);             q('d_sharpnessValue').textContent = pp('sharpness',0);
         q('d_hue').value = pp('hueRotate',0);                   q('d_hueValue').textContent       = pp('hueRotate',0);
-        q('d_grayscale').checked = !!pp('grayscale',false);
+        q('d_grayscale').checked = vv('saturation',1) === 0;
       };
 
       const applyPreset = (visS, paneS) => {
@@ -1176,11 +1181,10 @@
       q('d_autoLevels').addEventListener('click', () => { if (tifLayers[tif.id]) applyAutoStretch(tif); });
 
       q('d_reset').addEventListener('click', () => {
+        cogOpacitySettings[tif.id] = 1;
         applyPreset({}, {});
         const layer = tifLayers[tif.id];
         if (layer) { layer.setOpacity(1.0); q('d_opacity').value = 100; q('d_opacityValue').textContent = '100'; }
-        const pane = map.getPane('cogPane');
-        if (pane) pane.style.filter = '';
       });
 
       drawer.classList.add('cog-drawer-open');
@@ -1205,10 +1209,6 @@
       const layer = tifLayers[tifId];
       if (layer && layer._container) {
         layer._container.style.filter = filterStr;
-      } else {
-        // Fallback: apply to pane so it's ready when layer loads
-        const pane = map.getPane('cogPane');
-        if (pane) pane.style.filter = filterStr;
       }
     }
 
@@ -1227,17 +1227,35 @@
       if (gR !== 1.0)    parts.push(`gamma R ${gR.toFixed(2)}`);
       if (gG !== 1.0)    parts.push(`gamma G ${gG.toFixed(2)}`);
       if (gB !== 1.0)    parts.push(`gamma B ${gB.toFixed(2)}`);
-      return parts.length ? parts.join(' ') : null;
+      return parts.length ? parts.join(', ') : null;
     }
 
-    function reloadCogWithSettings(tif) {
+    function scheduleCogReload(tif, delay = 180) {
+      clearTimeout(cogReloadTimers[tif.id]);
+      cogReloadTimers[tif.id] = setTimeout(() => {
+        delete cogReloadTimers[tif.id];
+        reloadCogWithSettings(tif);
+      }, delay);
+    }
+
+    function isTifLayerEnabled(tifId) {
+      return Array.from(document.querySelectorAll('.tif-layer-checkbox'))
+        .some(checkbox => String(checkbox.dataset.tifId) === String(tifId) && checkbox.checked);
+    }
+
+    async function reloadCogWithSettings(tif) {
+      clearTimeout(cogReloadTimers[tif.id]);
+      delete cogReloadTimers[tif.id];
       const center = map.getCenter();
       const zoom   = map.getZoom();
-      removeTifLayer(tif.id);
-      loadTifLayer(tif).then(() => {
+      const version = (cogLoadVersions[tif.id] || 0) + 1;
+      cogLoadVersions[tif.id] = version;
+      removeTifLayer(tif.id, false);
+      const layer = await loadTifLayer(tif, version);
+      if (layer && cogLoadVersions[tif.id] === version) {
         map.setView(center, zoom, { animate: false });
         applyPaneFilter(tif.id); // re-apply CSS filters to the new layer container
-      });
+      }
     }
 
     async function applyAutoStretch(tif) {
@@ -1245,15 +1263,20 @@
       const statsUrl = `${serverUrl}/statistics?url=${cogPath}`;
       try {
         const res   = await fetch(statsUrl);
+        if (!res.ok) throw new Error(`Statistics request failed (HTTP ${res.status})`);
         const stats = await res.json();
         const b1    = stats.b1 || stats['1'] || {};
         const p2    = b1.percentile_2  ?? 0;
         const p98   = b1.percentile_98 ?? 255;
+        if (!Number.isFinite(Number(p2)) || !Number.isFinite(Number(p98)) || Number(p2) >= Number(p98)) {
+          throw new Error('Statistics response did not contain a valid p2-p98 range');
+        }
         if (!cogVisualSettings[tif.id]) cogVisualSettings[tif.id] = {};
         cogVisualSettings[tif.id].rescale = `${p2},${p98}`;
-        reloadCogWithSettings(tif);
+        await reloadCogWithSettings(tif);
       } catch (e) {
         console.warn('Auto-stretch failed:', e);
+        if (typeof showStatus === 'function') showStatus(`Auto Levels failed: ${e.message}`, 'error');
       }
     }
 
@@ -1263,7 +1286,9 @@
     // /api/check-cog-crs just to re-derive the same answer (see debug_readme.md).
     const cogCrsCache = {};
 
-    async function loadTifLayer(tif) {
+    async function loadTifLayer(tif, requestedVersion = null) {
+      const version = requestedVersion ?? ((cogLoadVersions[tif.id] || 0) + 1);
+      cogLoadVersions[tif.id] = version;
       let cogPath = encodeURIComponent(toGdalPath(tif.cog_path));
       let isLocalCs = false;
       let nativeBounds = null; // bounds in the file's native CRS (metres for LOCAL_CS)
@@ -1356,6 +1381,7 @@
       
       // Use full opacity for orthomosaics (1.0), lower for DEMs (0.7) to show underlying layers
       const defaultOpacity = isDEM ? 0.7 : 1.0;
+      const layerOpacity = cogOpacitySettings[tif.id] ?? defaultOpacity;
 
       // Constrain tile requests to known raster bounds when possible (avoids out-of-range 500s)
       let rasterBounds = null;
@@ -1374,7 +1400,7 @@
       
       const layer = L.tileLayer(tileUrl, {
         tms: false,
-        opacity: defaultOpacity,
+        opacity: layerOpacity,
         attribution: tif.name,
         maxZoom: 2000,  // Match basic viewer setting
         minZoom: 0,
@@ -1384,9 +1410,12 @@
         noWrap: true,
         bounds: rasterBounds || undefined
       });
+
+      if (cogLoadVersions[tif.id] !== version) return null;
       
       layer.addTo(map);
       tifLayers[tif.id] = layer;
+      applyPaneFilter(tif.id);
 
       const applyResolvedBoundsToLayer = (minLng, minLat, maxLng, maxLat) => {
         const resolvedBounds = L.latLngBounds([minLat, minLng], [maxLat, maxLng]);
@@ -1409,6 +1438,9 @@
         tileErrorCount++;
         if (tileErrorCount <= 3) {
           console.error('❌ Tile load error #' + tileErrorCount + ':', error.tile.src);
+        }
+        if (tileErrorCount === 1 && typeof showStatus === 'function') {
+          showStatus(`Could not render COG settings for ${tif.name}`, 'error');
         }
         if (tileErrorCount === 10) {
           console.error('⚠️ Suppressing further tile error messages...');
@@ -1464,6 +1496,8 @@
           console.warn('Could not fetch bounds from /info:', e);
         }
       }
+
+      if (cogLoadVersions[tif.id] !== version) return null;
 
       // --- LOCAL_CS with VRT: zoom to native bounds (metres as degrees) ---
       if (isLocalCs && boundsToUse && boundsToUse.length === 4) {
@@ -1539,9 +1573,13 @@
       }
       
       console.log('✅ Loaded layer:', tif.name);
+      return layer;
     }
     
-    function removeTifLayer(tifId) {
+    function removeTifLayer(tifId, invalidatePending = true) {
+      clearTimeout(cogReloadTimers[tifId]);
+      delete cogReloadTimers[tifId];
+      if (invalidatePending) cogLoadVersions[tifId] = (cogLoadVersions[tifId] || 0) + 1;
       if (tifLayers[tifId]) {
         map.removeLayer(tifLayers[tifId]);
         

@@ -130,9 +130,12 @@
       }
       
       // Update layer opacity
-      const tifData = tifLayers[tifId];
-      if (tifData && tifData.layer) {
-        tifData.layer.setOpacity(value / 100);
+      const tifLayer = tifLayers[tifId];
+      if (tifLayer) {
+        tifLayer.setOpacity(value / 100);
+        if (typeof cogOpacitySettings !== 'undefined') {
+          cogOpacitySettings[tifId] = value / 100;
+        }
         console.log(`Updated TIF ${tifId} opacity to ${value}%`);
       }
     }
@@ -180,8 +183,7 @@
       
       // Remove existing layer
       if (tifLayers[tif.id]) {
-        map.removeLayer(tifLayers[tif.id].layer);
-        delete tifLayers[tif.id];
+        removeTifLayer(tif.id);
       }
       
       // Reload with new colormap (loadTifLayer will read the selector value)
