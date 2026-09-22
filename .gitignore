@@ -1,146 +1,33 @@
-# Python
+# MkDocs output
+/site/
+
+# Python environments and caches
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# PyInstaller
-*.manifest
-*.spec
-
-# Virtual Environment
+.venv/
 venv/
 env/
-ENV/
-env.bak/
-venv.bak/
+*.egg-info/
 
-# IDE
+# Editor and OS files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 .DS_Store
-
-# Project Data Files
-data/*.tif
-data/*.tiff
-data/*_cog.tif
-data/*.json
-!data/reference/
-!data/.gitkeep
-
-# User data directory (created at ~/.cat/ when installed)
-.cat/
-
-# User Projects
-*.json
-!example*.json
-
-# Logs
-*.log
-logs/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.nox/
-
-# Environment
-.env
-.env.local
-
-# Temporary files
-*.tmp
-*.temp
-*.bak
-
-# OS
 Thumbs.db
-.DS_Store
 
-# Jupyter Notebooks
-.ipynb_checkpoints/
-*.ipynb
+# Local CAT runtime state inherited from application worktrees
+/.env
+/.env.*
+/cat/
+/data/
+/exports/
+/oracle-data/
+/scripts/
+/tests/
+/debug_readme*.md
 
-# Machine Learning / Model files
-models/
-checkpoints/
-*.pt
-*.pth
-*.ckpt
-*.safetensors
-wandb/
-mlruns/
-
-# Annotations and outputs
-annotations/
-outputs/
-results/
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-
-# Package building
-*.whl
-*.tar.gz
-
-# Large data files
-*.hdf5
-*.h5
-*.parquet
-
-# Secrets and credentials
-secrets.yaml
-credentials.json
-*.pem
-*.key
-
-# Reference folder (old_app backup, not part of main codebase) - top-level only
-/reference*/
-
-# Explicitly track app reference data CSVs
-!cat/data/reference/*.csv
-
-# Local Oracle data volumes
-oracle-data/
-
-# Backup staging directory
-backups/
-
-# Exports directory
-exports/
-.superpowers/
-run.txt
-/arcgis_scripts_v11
-cat/scripts/convert_gcs_mos_to_cog.py
-temp.txt
-update_how_to.md
-debug_readme.md
-/data_prep
-debug_readme_cog_georeference.md
-docs/team-lead-config-plan.md
+# Internal planning notes are not part of the public SOP
+/docs/team-lead-config-plan.md

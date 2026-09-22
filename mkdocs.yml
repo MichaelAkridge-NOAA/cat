@@ -1,0 +1,66 @@
+site_name: CAT Database Edition User Guide
+site_description: Standard operating procedures for the database-backed Coral Annotation Tool
+site_url: https://michaelakridge-noaa.github.io/cat/
+repo_url: https://github.com/MichaelAkridge-NOAA/cat
+repo_name: MichaelAkridge-NOAA/cat
+docs_dir: docs
+exclude_docs: |
+  team-lead-config-plan.md
+  desktop_shortcut.png
+  example_*.png
+  icon.ico
+  logo2.png
+  logo_wide.png
+
+theme:
+  name: material
+  logo: logo.png
+  favicon: icon.png
+  features:
+    - navigation.footer
+    - navigation.indexes
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - search.suggest
+  palette:
+    primary: blue
+    accent: cyan
+
+nav:
+  - Home: index.md
+  - Get Started:
+      - First login: getting-started.md
+      - Roles and access: roles-and-access.md
+  - Projects: projects.md
+  - Annotate:
+      - Annotation basics: annotation-basics.md
+      - Tables, defaults, and layers: annotation-tools.md
+  - Review and export: review-and-export.md
+  - Preferences: preferences.md
+  - Team lead guide: team-lead.md
+  - Administrator guide: admin.md
+  - Troubleshooting: troubleshooting.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+validation:
+  links:
+    absolute_links: relative_to_docs
+    anchors: warn
+    unrecognized_links: warn
+  nav:
+    omitted_files: info
+    not_found: warn
+
+copyright: CAT is provided as a scientific product under the terms in the project repository.
