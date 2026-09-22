@@ -327,15 +327,22 @@
     if (sub) sub.textContent = bits.join(' · ') || ('#' + id);
 
     var safeName = String(project.project_name || '').replace(/'/g, "\\'");
+    var myRole = project.my_role || 'viewer';
+    var canEdit = myRole === 'owner' || myRole === 'editor';
     setHtml('pdActions',
       '<button class="cat-btn cat-btn--primary" style="font-size:12px; padding:6px 12px;" ' +
         'onclick="openDbProject(' + id + ')">Open in annotator</button>' +
       '<button class="cat-btn cat-btn--outline" style="font-size:12px; padding:6px 12px;" ' +
         'onclick="window.open(\'/report?project_id=' + id + '\',\'_blank\')">Report</button>' +
+      (canEdit
+        ? '<button class="cat-btn cat-btn--outline" style="font-size:12px; padding:6px 12px;" ' +
+            'onclick="editDbProject(' + id + ')">Edit</button>'
+        : '') +
       '<button class="cat-btn cat-btn--outline" style="font-size:12px; padding:6px 12px;" ' +
-        'onclick="editDbProject(' + id + ')">Edit</button>' +
+        'onclick="openCollaboratorsModal(' + id + ', \'' + esc(safeName) + '\')">' + (myRole === 'owner' ? 'Share' : 'Access') + '</button>' +
       '<button class="cat-btn cat-btn--outline" style="font-size:12px; padding:6px 12px;" ' +
-        'onclick="openCollaboratorsModal(' + id + ', \'' + esc(safeName) + '\')">Share</button>'
+        'title="Make your own editable copy under My Projects" ' +
+        'onclick="duplicateDbProject(' + id + ', \'' + esc(safeName) + '\')">Duplicate</button>'
     );
 
     if (project.notes) {

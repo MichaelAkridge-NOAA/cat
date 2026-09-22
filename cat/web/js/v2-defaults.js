@@ -66,10 +66,14 @@
     default_morphology: 'morph_code'
   };
 
+  // Returns a promise that always resolves (never rejects) once this tier
+  // has had its chance to fill gaps — seedDefaultsFromTeam() below chains
+  // onto it so the lowest-precedence tier can never win a race against this
+  // one by having its own fetch simply resolve first.
   function seedDefaultsFromAccount() {
-    if (!window.CatAuth || typeof CatAuth.fetchCurrentUser !== 'function') return;
+    if (!window.CatAuth || typeof CatAuth.fetchCurrentUser !== 'function') return Promise.resolve();
 
-    CatAuth.fetchCurrentUser().then(function (data) {
+    return CatAuth.fetchCurrentUser().then(function (data) {
       const prefs = (data && data.preferences) || {};
       let changed = false;
 
@@ -86,6 +90,31 @@
     }).catch(function () {
       // Not signed in, or auth disabled (file mode) — local defaults still work.
     });
+  }
+
+  // Seed from the team-lead-configured deployment-wide floor (Phase 4
+  // candidate, docs/team-lead-config-plan.md). Runs AFTER the account tier
+  // (below), so it only fills fields that are still empty once both the
+  // session ("Set Defaults") and account (Preferences) tiers have had their
+  // turn — same "only fill empty" pattern as seedDefaultsFromAccount, and
+  // running strictly after it is what makes it the lowest-precedence tier.
+  function seedDefaultsFromTeam() {
+    fetch('/api/config/field-defaults', { credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (data) {
+        const defaults = (data && data.defaults) || {};
+        let changed = false;
+        Object.keys(defaults).forEach(function (fieldId) {
+          const value = defaults[fieldId];
+          if (!value || fieldDefaults[fieldId]) return; // session or account default wins
+          fieldDefaults[fieldId] = String(value).trim();
+          changed = true;
+        });
+        if (changed) applyDefaultsToForm();
+      })
+      .catch(function () {
+        // Config unavailable — no team-wide floor, nothing else changes.
+      });
   }
 
   function applyDefaultsToForm() {
@@ -290,7 +319,12 @@
   // ===================================================================
   function init() {
     loadDefaults();
-    seedDefaultsFromAccount();
+    // Chained, not fired independently: both are async fetches, and racing
+    // them would let the team tier's fetch resolve first on a slow network,
+    // seed a field the account tier would otherwise have filled, and then
+    // have the account tier's own "only fill empty" guard wrongly treat
+    // that as already spoken for.
+    seedDefaultsFromAccount().then(seedDefaultsFromTeam);
     initAllCaps();
     injectDefaultsBar();
     // Delay hookIntoSave to ensure v1 functions are defined

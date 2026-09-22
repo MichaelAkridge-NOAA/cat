@@ -386,16 +386,40 @@ window.catFetch = catFetch;
 
     // Offline-safe minimap background: mirror same-origin COG tile layers
     // from the main map instead of an external basemap (gov networks).
-    const _miniBaseUrls = new Set();
+    // url -> mirrored layer, so a mirror can be removed when its main-map layer
+    // is removed. Without that, every COG settings change (each one a new tile
+    // URL) left the previous mirror stacked on the minimap forever.
+    const _miniMirrors = new Map();
+    const _miniBaseUrls = { has: (u) => _miniMirrors.has(u), add: () => {} };
+    function _unmirrorTileLayer(lyr) {
+      if (!(lyr instanceof L.TileLayer) || !lyr._url) return;
+      const mirror = _miniMirrors.get(lyr._url);
+      if (mirror) {
+        try { miniMap.removeLayer(mirror); } catch (err) { /* already gone */ }
+        _miniMirrors.delete(lyr._url);
+      }
+    }
     function _mirrorTileLayer(lyr) {
       if (lyr instanceof L.TileLayer && lyr._url && lyr._url.indexOf('/tiles/') !== -1
           && !_miniBaseUrls.has(lyr._url)) {
-        _miniBaseUrls.add(lyr._url);
-        L.tileLayer(lyr._url, Object.assign({}, lyr.options, { attribution: '' })).addTo(miniMap);
+        // The main map's custom panes (cogProjectPane, demPane, ...) don't
+        // exist on the minimap; a layer pointing at a missing pane throws in
+        // onAdd. That throw happens inside the main map's 'layeradd' event, so
+        // it also aborted the main layer's own load. Use the default pane here,
+        // and never let a minimap failure break the main map.
+        const opts = Object.assign({}, lyr.options, { attribution: '' });
+        delete opts.pane;
+        try {
+          const mirror = L.tileLayer(lyr._url, opts).addTo(miniMap);
+          _miniMirrors.set(lyr._url, mirror);
+        } catch (err) {
+          console.warn('Minimap could not mirror tile layer:', err);
+        }
       }
     }
     mainMap.eachLayer(_mirrorTileLayer);
     mainMap.on('layeradd', function (e) { _mirrorTileLayer(e.layer); });
+    mainMap.on('layerremove', function (e) { _unmirrorTileLayer(e.layer); });
 
     // Viewport rectangle
     viewRect = L.rectangle(mainMap.getBounds(), {

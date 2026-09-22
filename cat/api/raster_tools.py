@@ -21,8 +21,9 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Dict
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from cat.api.auth import require_auth
 from cat.db.oracle import fetch_one
 
 router = APIRouter(prefix="/api/raster", tags=["raster-tools"])
@@ -116,6 +117,7 @@ def get_hillshade(
     azimuth: float = Query(315.0, ge=0, le=360),
     altitude: float = Query(45.0, ge=0, le=90),
     z_factor: float = Query(1.0, gt=0),
+    _current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
     return _generate_derivative(
         src, "hillshade", {"azimuth": azimuth, "altitude": altitude, "z_factor": z_factor}, _compute_hillshade
@@ -126,6 +128,7 @@ def get_hillshade(
 def get_slope(
     src: str = Query(..., description="Raster path/URL — the same value already used as the tile layer's 'url' param"),
     units: str = Query("degrees", pattern="^(degrees|percent)$"),
+    _current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
     return _generate_derivative(src, "slope", {"units": units}, _compute_slope)
 
@@ -135,6 +138,7 @@ def get_zonal_stats(
     src: str = Query(..., description="DEM/COG raster path or URL to sample"),
     project_id: int = Query(...),
     annotation_id: int = Query(...),
+    _current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
     """Pixel statistics (min/max/mean/std/count) of `src` within one
     annotation's polygon. Reuses the same feature_geojson column every other

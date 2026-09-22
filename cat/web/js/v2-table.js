@@ -800,36 +800,27 @@
 
   let currentBatchField = null;
 
+  // Fields with team-lead-configured option lists (docs/team-lead-config-plan.md,
+  // Phase 3). No "current value" to preserve here — batch-fill sets a NEW
+  // value onto every selected row, so only enabled options are ever offered
+  // (unlike editing a single existing annotation, where a disabled value the
+  // row already has must still be selectable/visible).
+  const CONFIGURED_DROPDOWN_FIELDS = ['morph_code', 'transect', 'segment', 'juvenile', 'no_colony', 'remnant', 'ex_bound'];
+  const BLANK_FIRST_FIELDS = { morph_code: true, transect: true, segment: true };
+
+  function _configuredDropdownOptionsHtml(field) {
+    const opts = (window.CatFieldOptions ? window.CatFieldOptions.get(field) : []) || [];
+    const blank = BLANK_FIRST_FIELDS[field] ? '<option value="">- Select -</option>' : '';
+    return blank + opts.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
+  }
+
   function openBatchFillModal(field, label) {
     currentBatchField = field;
     document.getElementById('batchFillColName').textContent = label;
     const container = document.getElementById('batchFillInputContainer');
 
-    // Build the appropriate input
-    const dropdownFields = {
-      morph_code: [
-        { v: '', l: '- Select -' },
-        { v: 'BR', l: 'BR - Branching' }, { v: 'CO', l: 'CO - Columnar' },
-        { v: 'EN', l: 'EN - Encrusting' }, { v: 'FO', l: 'FO - Foliaceous' },
-        { v: 'FL', l: 'FL - Free-living' }, { v: 'LA', l: 'LA - Laminar' },
-        { v: 'MD', l: 'MD - Mounding' }, { v: 'MA', l: 'MA - Massive' },
-        { v: 'PL', l: 'PL - Plating' }, { v: 'SM', l: 'SM - Submassive' },
-        { v: 'SO', l: 'SO - Solitary' }, { v: 'TB', l: 'TB - Tabular' }
-      ],
-      transect: [
-        { v: '', l: '- Select -' }, { v: 'A', l: 'A' }, { v: 'B', l: 'B' }
-      ],
-      segment: [
-        { v: '', l: '- Select -' }, { v: '0', l: '0' }, { v: '5', l: '5' }, { v: '10', l: '10' }, { v: '15', l: '15' }
-      ],
-      juvenile: [
-        { v: '0', l: 'No (0)' }, { v: '-1', l: 'Yes (-1)' }
-      ]
-    };
-
-    if (dropdownFields[field]) {
-      const options = dropdownFields[field].map(o => `<option value="${o.v}">${o.l}</option>`).join('');
-      container.innerHTML = `<select id="batchFillValue" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;">${options}</select>`;
+    if (CONFIGURED_DROPDOWN_FIELDS.includes(field)) {
+      container.innerHTML = `<select id="batchFillValue" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;">${_configuredDropdownOptionsHtml(field)}</select>`;
     } else {
       container.innerHTML = `<input type="text" id="batchFillValue" placeholder="Enter value for all rows" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;">`;
     }
@@ -1071,7 +1062,21 @@
       const idx = idxByData.get(layer.annotationData);
       const selected = idx !== undefined && selectedRows.has(idx);
       const el = layer._path || layer._icon;
-      if (el) el.style.filter = selected ? 'drop-shadow(0 0 3px #3b82f6) drop-shadow(0 0 3px #3b82f6)' : '';
+      // Class (stroke recolour), not a double drop-shadow filter: filters are
+      // repainted per frame and hang the tab when many are selected. The
+      // rule lives in annotation-overlay-layers.js (#catSelHighlightStyle);
+      // add it here too if that script isn't loaded.
+      if (el) {
+        if (!document.getElementById('catSelHighlightStyle')) {
+          const s = document.createElement('style');
+          s.id = 'catSelHighlightStyle';
+          s.textContent = 'path.cat-annotation-selected { stroke: #3b82f6 !important; stroke-opacity: 1 !important; }' +
+            'img.cat-annotation-selected { outline: 2px solid #3b82f6; outline-offset: 1px; border-radius: 50%; }';
+          document.head.appendChild(s);
+        }
+        el.classList.toggle('cat-annotation-selected', selected);
+        el.style.filter = ''; // clear any glow left from an older build
+      }
     });
   }
 
@@ -1195,34 +1200,13 @@
     setTimeout(() => document.getElementById('bulkUpdateValue')?.focus(), 100);
   }
 
-  // ── Dropdown options shared with batch fill ──
-  const _bulkDropdowns = {
-    morph_code: [
-      { v: '', l: '- Select -' },
-      { v: 'BR', l: 'BR - Branching' }, { v: 'CO', l: 'CO - Columnar' },
-      { v: 'EN', l: 'EN - Encrusting' }, { v: 'FO', l: 'FO - Foliaceous' },
-      { v: 'FL', l: 'FL - Free-living' }, { v: 'LA', l: 'LA - Laminar' },
-      { v: 'MD', l: 'MD - Mounding' }, { v: 'MA', l: 'MA - Massive' },
-      { v: 'PL', l: 'PL - Plating' }, { v: 'SM', l: 'SM - Submassive' },
-      { v: 'SO', l: 'SO - Solitary' }, { v: 'TB', l: 'TB - Tabular' }
-    ],
-    transect:  [{ v: '', l: '- Select -' }, { v: 'A', l: 'A' }, { v: 'B', l: 'B' }],
-    segment:   [{ v: '', l: '- Select -' }, { v: '0', l: '0' }, { v: '5', l: '5' }, { v: '10', l: '10' }, { v: '15', l: '15' }],
-    juvenile:  [{ v: '0', l: 'No (0)' }, { v: '-1', l: 'Yes (-1)' }],
-    remnant:   [{ v: '0', l: 'No (0)' }, { v: '-1', l: 'Yes (-1)' }],
-    ex_bound:  [{ v: '0', l: 'No (0)' }, { v: '-1', l: 'Yes (-1)' }],
-    no_colony: [{ v: '0', l: 'No (0)' }, { v: '-1', l: 'Yes (-1)' }]
-  };
-
   function buildBulkUpdateInput() {
     const field = document.getElementById('bulkUpdateField').value;
     const container = document.getElementById('bulkUpdateInputContainer');
     const inputStyle = 'width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;';
 
-    if (_bulkDropdowns[field]) {
-      container.innerHTML = `<select id="bulkUpdateValue" style="${inputStyle}">${
-        _bulkDropdowns[field].map(o => `<option value="${o.v}">${o.l}</option>`).join('')
-      }</select>`;
+    if (CONFIGURED_DROPDOWN_FIELDS.includes(field)) {
+      container.innerHTML = `<select id="bulkUpdateValue" style="${inputStyle}">${_configuredDropdownOptionsHtml(field)}</select>`;
     } else if (field === 'spcode') {
       container.innerHTML = `
         <div style="position:relative;">

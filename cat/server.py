@@ -33,6 +33,8 @@ import warnings
 
 # Import coral species API
 from cat.api.coral_species import router as coral_router
+from cat.api.field_options import router as field_options_router
+from cat.api.field_options import router_defaults as field_defaults_router
 
 # Import file-based project API
 from cat.api.file_projects import router as file_projects_router
@@ -307,6 +309,14 @@ app = FastAPI(title=CONFIG['viewer']['title'], lifespan=lifespan)
 
 # Include coral species routes
 app.include_router(coral_router)
+
+# Include annotation-form field-options config (team-lead Phase 3)
+app.include_router(field_options_router)
+print("✅ Field-options config API enabled at /api/config/field-options/*")
+
+# Include annotation-form field-defaults config (team-lead Phase 4 candidate)
+app.include_router(field_defaults_router)
+print("✅ Field-defaults config API enabled at /api/config/field-defaults/*")
 
 # Include sites reference routes
 app.include_router(sites_router)
@@ -728,6 +738,14 @@ def read_user_preferences():
     if preferences_file.exists():
         return preferences_file.read_text(encoding="utf-8")
     return "<h1>Preferences page not found</h1>"
+
+
+@app.get("/species_config.html", response_class=HTMLResponse)
+def read_species_config():
+    species_config_file = BASE_DIR / "web" / "species_config.html"
+    if species_config_file.exists():
+        return species_config_file.read_text(encoding="utf-8")
+    return "<h1>Species configuration page not found</h1>"
 
 
 @app.get("/debug_stats.html", response_class=HTMLResponse)

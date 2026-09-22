@@ -44,6 +44,13 @@
           // sync (runAutoSave) depends on. Manual Save now drives the exact
           // same differential POST-new/PUT-changed path as auto-save, so the
           // two save flows can't disagree about what "saved" means.
+          // If an auto-save is mid-flight, runAutoSave() below would return
+          // immediately with changes still flagged and this click would report
+          // a bogus "Save failed". Wait for it to finish first (bounded).
+          const waitStart = Date.now();
+          while (window._catAutoSaveInFlight && Date.now() - waitStart < 15000) {
+            await new Promise(resolve => setTimeout(resolve, 150));
+          }
           hasUnsavedChanges = true;
           await runAutoSave();
           if (hasUnsavedChanges) {
@@ -277,18 +284,34 @@
       // outright. The known cost: ids/versions of already-synced rows churn
       // on unload, which can 404 a stale reference held by another open
       // window/popout (it self-heals via Task 7's 404-recovery re-POST).
-      if (isOracleProjectMode() && hasUnsavedChanges && currentProject?.project_id) {
+      if (isOracleProjectMode() && !window.catReadOnly && hasUnsavedChanges && currentProject?.project_id) {
         const annotationsToSave = [];
         drawnItems.eachLayer(layer => {
           if (layer.annotationData) annotationsToSave.push(layer.annotationData);
         });
-        const projectId = currentProject.project_id;
-        const payload = JSON.stringify({ annotations: annotationsToSave.map(normalizeAnnotationForDb) });
-        navigator.sendBeacon(
-          `${serverUrl}/api/db/projects/${projectId}/annotations/bulk-replace`,
-          new Blob([payload], { type: 'application/json' })
-        );
-        console.log('📤 Final save beacon sent on page unload');
+        // bulk-replace DELETEs every existing annotation for this project
+        // before inserting the payload, unconditionally — a fire-and-forget
+        // beacon with an accidentally-empty list (drawnItems not yet
+        // populated, a timing bug, anything short of the user genuinely
+        // having deleted their last annotation) would silently wipe every
+        // annotation already saved for this project with nothing to
+        // reinsert. There's no way here to tell that apart from a real
+        // "deleted my last annotation" case, so the safe default is: never
+        // let an unload beacon delete everything. That one legitimate edge
+        // case (closing the tab right after deleting the last annotation)
+        // simply doesn't get its deletion persisted on hard close — a far
+        // smaller cost than risking the whole project's annotations.
+        if (annotationsToSave.length === 0) {
+          console.warn('⚠️ Skipping unload save beacon: annotationsToSave is empty (would delete all annotations)');
+        } else {
+          const projectId = currentProject.project_id;
+          const payload = JSON.stringify({ annotations: annotationsToSave.map(normalizeAnnotationForDb) });
+          navigator.sendBeacon(
+            `${serverUrl}/api/db/projects/${projectId}/annotations/bulk-replace`,
+            new Blob([payload], { type: 'application/json' })
+          );
+          console.log('📤 Final save beacon sent on page unload');
+        }
       }
 
       // Save timer state to localStorage for file mode
@@ -302,7 +325,11 @@
       }
       
       // Show warning if project is loaded and there are unsaved changes
-      if (currentProject && hasUnsavedChanges) {
+      // Overlay move/rotate/vertex edits live in an edit session until Save is
+      // clicked on the edit bar — closing the tab used to lose them silently.
+      const overlayEditsPending = typeof _overlayEditSession !== 'undefined' &&
+        _overlayEditSession && _overlayEditSession.dirty;
+      if (currentProject && (hasUnsavedChanges || overlayEditsPending)) {
         // Set returnValue to trigger browser warning
         e.preventDefault();
         e.returnValue = ''; // Chrome requires returnValue to be set
@@ -589,6 +616,9 @@
     // ── Handle draw:created — the NORMAL (non-bulk) drawing handler ──
     // In bulk mode v2-bulk.js handles this event; we skip here.
     map.on(L.Draw.Event.CREATED, function(event) {
+      // View-only project: the draw toolbar is hidden, but a stray shortcut
+      // must never turn a shape into an (unsaveable) annotation.
+      if (window.catReadOnly) return;
       // Skip in bulk mode — v2-bulk.js handles it
       if (window.v2BulkMode && window.v2BulkMode.enabled) return;
       // Skip while the standalone measure tool is active — annotation-runtime-measure.js
@@ -732,6 +762,25 @@
       }
     }, 500); // Delay to ensure toolbar is rendered
     
+    // Shared by Backspace (below) and Ctrl+Z (annotation-undo.js): the
+    // Leaflet.Draw handler for whatever shape is currently mid-draw
+    // (polyline/polygon/rectangle with at least one vertex placed), or null.
+    // Exported so annotation-undo.js's Ctrl+Z handler — which has no
+    // visibility into drawControl — can tell "still placing points" apart
+    // from "nothing active, undo my last saved annotation instead."
+    function _getActiveDrawVertexHandler() {
+      const activeMode = drawControl && drawControl._toolbars && drawControl._toolbars.draw
+        ? drawControl._toolbars.draw._activeMode
+        : null;
+      const handler = activeMode && activeMode.handler;
+      if (handler && typeof handler.deleteLastVertex === 'function' &&
+          Array.isArray(handler._markers) && handler._markers.length > 0) {
+        return handler;
+      }
+      return null;
+    }
+    window.catGetActiveDrawVertexHandler = _getActiveDrawVertexHandler;
+
     // Backspace mid-draw removes the last placed vertex (Task 7 fix: the drawing
     // hints bar advertises "Backspace undo vertex" but nothing bound the key —
     // leaflet-draw only exposes deleteLastVertex() via its "Delete last point" link).
@@ -740,11 +789,8 @@
       // Never hijack Backspace while typing in a form control
       const tag = document.activeElement?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || document.activeElement?.isContentEditable) return;
-      const activeMode = drawControl && drawControl._toolbars && drawControl._toolbars.draw
-        ? drawControl._toolbars.draw._activeMode
-        : null;
-      const handler = activeMode && activeMode.handler;
-      if (handler && typeof handler.deleteLastVertex === 'function') {
+      const handler = _getActiveDrawVertexHandler();
+      if (handler) {
         e.preventDefault();
         handler.deleteLastVertex();
       }
@@ -771,6 +817,19 @@
       // Close any open autocomplete dropdown (but keep going — single-press discard)
       const openDropdown = document.querySelector('.species-autocomplete-dropdown.active');
       if (openDropdown) openDropdown.classList.remove('active');
+
+      // Typing in a form field (species search, analyst/site/mission text,
+      // an inline table-cell edit) and pressing Escape to clear or blur it is
+      // ordinary browser behavior — it must not ALSO cancel the active
+      // drawing tool and discard the unsaved annotation underneath it. Only
+      // suppress the cascade while there's actually something to lose.
+      const active = document.activeElement;
+      const isTyping = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' ||
+        active.tagName === 'SELECT' || active.isContentEditable);
+      if (isTyping && (lastDrawingTool || (currentAnnotation && currentAnnotation.layer && !currentAnnotation.layer.annotationData))) {
+        active.blur();
+        return;
+      }
 
       // If a drawing tool is active mid-draw, cancel it
       if (lastDrawingTool) {

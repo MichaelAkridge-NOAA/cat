@@ -251,7 +251,7 @@
                 ? getMetadataFallbackCenter()
                 : null;
               if (fallback) {
-                map.setView([fallback.lat, fallback.lon], 18, { animate: true });
+                map.flyTo([fallback.lat, fallback.lon], 18, { duration: 1 });
                 if (typeof showCrsWarning === 'function') showCrsWarning(boundsCheck.reason || 'global fallback bounds');
                 showStatus('⚠️ COG bounds invalid — centred on site metadata', 'warning');
               } else {
@@ -263,10 +263,10 @@
               const leafletBounds = [[b[1], b[0]], [b[3], b[2]]];
 
               console.log('Geographic bounds from TileJSON:', b);
-              map.fitBounds(leafletBounds, { 
+              map.flyToBounds(leafletBounds, {
                 padding: [50, 50],
                 maxZoom: 24,
-                animate: true
+                duration: 1
               });
               console.log('🎯 Auto-zoomed to COG bounds');
               showStatus('COG loaded - zoomed to imagery', 'success');

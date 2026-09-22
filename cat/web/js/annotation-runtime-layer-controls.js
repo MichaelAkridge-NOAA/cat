@@ -20,7 +20,7 @@
     function zoomToSite() {
       // File-based mode: Use project bounds first
       if (currentProject && projectBounds) {
-        map.fitBounds(projectBounds, { padding: [50, 50] });
+        map.flyToBounds(projectBounds, { padding: [50, 50], duration: 1 });
         showStatus('✅ Zoomed to project extent', 'success');
         return;
       }
@@ -41,8 +41,11 @@
           const combinedBounds = allBounds.reduce((acc, bounds) => acc.extend(bounds), allBounds[0]);
           const center = combinedBounds.getCenter();
           
-          // For underwater imagery, zoom directly to high zoom level (40)
-          map.setView(center, 24, { animate: true });
+          // For underwater imagery, zoom directly to high zoom level (40).
+          // flyTo, not setView: Leaflet's own zoom animation gives up and
+          // snaps instantly once the zoom delta is big enough, which this
+          // (starting from wherever the map happened to be) usually is.
+          map.flyTo(center, 24, { duration: 1 });
           showStatus('✅ Zoomed to site extent', 'success');
         } else {
           showStatus('⚠️ No shapefile bounds available', 'warning');
@@ -54,7 +57,7 @@
         const center = bounds.getCenter();
         
         // For underwater imagery, zoom directly to high zoom level (24)
-        map.setView(center, 24, { animate: true });
+        map.flyTo(center, 24, { duration: 1 });
         showStatus('✅ Zoomed to site', 'success');
       } else if (cogBounds && cogBounds.length === 4) {
         // COG bounds fallback: validate before using
@@ -82,11 +85,11 @@
           // Create Leaflet bounds
           const leafletBounds = [[minLat, minLng], [maxLat, maxLng]];
 
-          // Use fitBounds for better automatic zooming
-          map.fitBounds(leafletBounds, { 
+          // flyToBounds for a smooth zoom regardless of how far this jumps
+          map.flyToBounds(leafletBounds, {
             padding: [50, 50],
             maxZoom: 24,
-            animate: true
+            duration: 1
           });
           console.log('✅ Zoomed to COG imagery');
           showStatus('✅ Zoomed to imagery', 'success');
@@ -99,7 +102,7 @@
         ? getMetadataFallbackCenter()
         : null;
       if (fallback) {
-        map.setView([fallback.lat, fallback.lon], 18, { animate: true });
+        map.flyTo([fallback.lat, fallback.lon], 18, { duration: 1 });
         console.log('📍 Zoomed to metadata site location:', fallback);
         showStatus('📍 Zoomed to site (from metadata coordinates)', 'success');
       } else {
@@ -187,9 +190,13 @@
       }
       
       // Reload with new colormap (loadTifLayer will read the selector value)
-      await loadTifLayer(tif);
-      
-      console.log(`✅ TIF ${tif.id} colormap updated to ${colormap}`);
+      try {
+        await loadTifLayer(tif);
+        console.log(`✅ TIF ${tif.id} colormap updated to ${colormap}`);
+      } catch (err) {
+        console.error('Colormap update failed:', err);
+        if (typeof showStatus === 'function') showStatus(`Could not apply colormap: ${err.message || err}`, 'error');
+      }
     }
     
     // ===== SHAPEFILE EDITOR FUNCTIONS =====

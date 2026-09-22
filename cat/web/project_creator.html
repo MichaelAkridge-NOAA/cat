@@ -2295,7 +2295,17 @@
         const overlayCount = Number(project.overlay_count) || 0;
         const collabCount = Number(project.collaborator_count) || 0;
 
+        // Everyone can view every project; edit/delete/share need a role.
+        // my_role comes from GET /api/db/projects (owner | editor | viewer).
+        const myRole = project.my_role || 'viewer';
+        const canEdit = myRole === 'owner' || myRole === 'editor';
+        const isOwner = myRole === 'owner';
+
         const chips = [];
+        if (!isOwner) {
+          chips.push(chip(myRole === 'editor' ? 'Editor' : 'View only', myRole === 'editor' ? '' : 'muted',
+                          myRole === 'editor' ? 'You can edit this project' : 'You can view this project. Duplicate it to make your own editable copy.'));
+        }
         chips.push(chip(`${annCount.toLocaleString()} annotation${annCount === 1 ? '' : 's'}`,
                         annCount ? '' : 'muted'));
         if (assetCount) chips.push(chip(`${assetCount} asset${assetCount === 1 ? '' : 's'}`));
@@ -2360,21 +2370,24 @@
                  first and separated by a divider, so a misclick on the way
                  to Open can't destroy a project. -->
             <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;" onclick="event.stopPropagation();">
-              <button class="cat-btn cat-btn--outline-danger" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="deleteDbProject(${project.project_id}, '${safeName}')">
+              ${isOwner ? `<button class="cat-btn cat-btn--outline-danger" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="deleteDbProject(${project.project_id}, '${safeName}')">
                 <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#trash-2"/></svg> Delete
               </button>
-              <span aria-hidden="true" style="width:1px; align-self:stretch; background:#e2e8f0; margin:0 2px;"></span>
+              <span aria-hidden="true" style="width:1px; align-self:stretch; background:#e2e8f0; margin:0 2px;"></span>` : ''}
               <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="showProjectDetails(${project.project_id})" title="Imagery, annotations, access and activity">
                 <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#info"/></svg> Details
               </button>
-              <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="editDbProject(${project.project_id})">
+              ${canEdit ? `<button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="editDbProject(${project.project_id})">
                 <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#edit-3"/></svg> Edit
               </button>
               <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="openLayerManager(${project.project_id}, '${safeName}')">
                 <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#layers"/></svg> Layers
-              </button>
+              </button>` : ''}
               <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="openCollaboratorsModal(${project.project_id}, '${safeName}')">
-                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#users"/></svg> Share
+                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#users"/></svg> ${isOwner ? 'Share' : 'Access'}
+              </button>
+              <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="duplicateDbProject(${project.project_id}, '${safeName}')" title="Make your own editable copy (imagery, annotations and layers) under My Projects">
+                <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#copy"/></svg> Duplicate
               </button>
               <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="window.open('/report?project_id=${project.project_id}', '_blank')">
                 <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#bar-chart-2"/></svg> Report
@@ -2620,6 +2633,45 @@
         alert(`Failed to delete project: ${error.message}`);
       }
     }
+
+    // Copy a project (imagery links, annotations, overlay layers + features)
+    // into a new project owned by the current user. Any viewer may do this.
+    async function duplicateDbProject(projectId, projectName) {
+      if (!projectId) return;
+      const base = (projectName || `Project ${projectId}`).replace(/&#39;/g, "'");
+      const defaultName = `${base} (copy)`;
+      const entered = prompt(
+        `Duplicate "${base}" into your projects.\n\nName for the copy:`,
+        defaultName
+      );
+      if (entered === null) return;
+      // Send a name only if the user changed it. Leaving the default lets the
+      // server pick the first free "(copy)", "(copy 2)", ... so duplicating the
+      // same project twice doesn't collide.
+      const chosen = entered.trim();
+      const newName = chosen && chosen !== defaultName ? chosen : null;
+      try {
+        const response = await fetch(`/api/db/projects/${projectId}/duplicate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ new_name: newName })
+        });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.detail || `HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        const scopeSel = document.getElementById('dbProjectScope');
+        if (scopeSel && scopeSel.value !== 'mine') scopeSel.value = 'mine';
+        await fetchDbProjects();
+        if (confirm(`Created "${data.project.project_name}" (ID: ${data.project.project_id}).\n\nOpen it now?`)) {
+          openDbProject(data.project.project_id);
+        }
+      } catch (error) {
+        alert(`Failed to duplicate project: ${error.message}`);
+      }
+    }
+    window.duplicateDbProject = duplicateDbProject;
 
     function openDbProject(projectId) {
       if (!projectId) return;

@@ -240,52 +240,15 @@
       // Create input element based on field type
       let inputElement;
       
-      if (field === 'segment') {
-        // Dropdown for segment
+      if (field === 'segment' || field === 'transect' || field === 'morph_code' || field === 'juvenile') {
+        // Team-lead-configured options (docs/team-lead-config-plan.md, Phase
+        // 3) — buildOptionsHtml always keeps currentValue as a real,
+        // selected option even if since disabled, so editing an old
+        // annotation never silently drops its saved value.
         inputElement = document.createElement('select');
-        inputElement.innerHTML = `
-          <option value="">-</option>
-          <option value="0">0</option>
-          <option value="5">5</option>
-          <option value="10">10</option>
-          <option value="15">15</option>
-        `;
-        inputElement.value = currentValue;
-      } else if (field === 'transect') {
-        // Dropdown for transect
-        inputElement = document.createElement('select');
-        inputElement.innerHTML = `
-          <option value="">-</option>
-          <option value="A">A</option>
-          <option value="B">B</option>
-        `;
-        inputElement.value = currentValue;
-      } else if (field === 'juvenile') {
-        // Dropdown for juvenile
-        inputElement = document.createElement('select');
-        inputElement.innerHTML = `
-          <option value="0">0 (No)</option>
-          <option value="-1">-1 (Yes)</option>
-        `;
-        inputElement.value = currentValue;
-      } else if (field === 'morph_code') {
-        // Dropdown for morphology code
-        inputElement = document.createElement('select');
-        inputElement.innerHTML = `
-          <option value="">-</option>
-          <option value="BR">BR - Branching</option>
-          <option value="CO">CO - Columnar</option>
-          <option value="EN">EN - Encrusting</option>
-          <option value="FO">FO - Foliaceous</option>
-          <option value="FL">FL - Free-living</option>
-          <option value="LA">LA - Laminar</option>
-          <option value="MD">MD - Mounding</option>
-          <option value="MA">MA - Massive</option>
-          <option value="PL">PL - Plating</option>
-          <option value="SM">SM - Submassive</option>
-          <option value="SO">SO - Solitary</option>
-          <option value="TB">TB - Tabular</option>
-        `;
+        inputElement.innerHTML = window.CatFieldOptions
+          ? window.CatFieldOptions.buildOptionsHtml(field, currentValue)
+          : `<option value="${currentValue}">${currentValue}</option>`;
         inputElement.value = currentValue;
       } else if (field === 'obs_year') {
         // Number input for year
@@ -315,8 +278,18 @@
         inputElement.type = 'number';
         inputElement.step = '0.1';
         inputElement.value = currentValue;
-      } else if (field === 'remnant' || field === 'fragment' || field === 'ex_bound' || field === 'no_colony') {
-        // Yes/No dropdown for boolean fields (0 = No, -1 = Yes)
+      } else if (field === 'remnant' || field === 'ex_bound' || field === 'no_colony') {
+        // Team-lead-configured Yes/No options — see the segment/transect/
+        // morph_code/juvenile branch above for why buildOptionsHtml is used.
+        inputElement = document.createElement('select');
+        inputElement.innerHTML = window.CatFieldOptions
+          ? window.CatFieldOptions.buildOptionsHtml(field, currentValue)
+          : `<option value="${currentValue}">${currentValue}</option>`;
+        inputElement.value = currentValue;
+      } else if (field === 'fragment') {
+        // No config field for 'fragment' — it's an orphaned column (the main
+        // form's Fragment field is commented out; only this inline editor
+        // and the edit modal still expose it). Kept as a plain static Yes/No.
         inputElement = document.createElement('select');
         inputElement.innerHTML = `
           <option value="0">0 (No)</option>
@@ -456,7 +429,11 @@
     
     // Create autocomplete for table cell editing (species and juv_substrate)
     function createTableAutocomplete(cell, field, currentValue, index, annotation) {
-      const JUV_SUBSTRATE_OPTIONS = ['CCAH', 'CCAR', 'TURFH', 'TURFR', 'EMA', 'PESP', 'LOBO', 'HARD', 'CORAL', 'RUB', 'HALI'];
+      // Team-lead-configured (docs/team-lead-config-plan.md, Phase 3); falls
+      // back to today's hardcoded list if the config hasn't loaded.
+      const JUV_SUBSTRATE_OPTIONS = window.CatFieldOptions
+        ? window.CatFieldOptions.getValues('juv_substrate')
+        : ['CCAH', 'CCAR', 'TURFH', 'TURFR', 'EMA', 'PESP', 'LOBO', 'HARD', 'CORAL', 'RUB', 'HALI'];
       
       // Create wrapper
       const wrapper = document.createElement('div');
@@ -752,12 +729,20 @@
             ${options.map(o => `<option value="${o.v}" ${String(val) === String(o.v) ? 'selected' : ''}>${o.l}</option>`).join('')}
           </select>
         </div>`;
-      const boolOpts = [{v:'0',l:'No'},{v:'-1',l:'Yes'}];
-      const segOpts = [{v:'',l:'-'},{v:'0',l:'0'},{v:'5',l:'5'},{v:'10',l:'10'},{v:'15',l:'15'}];
-      const transOpts = [{v:'',l:'-'},{v:'A',l:'A'},{v:'B',l:'B'}];
-      const morphOpts = [{v:'',l:'-'},{v:'BR',l:'BR - Branching'},{v:'CO',l:'CO - Columnar'},{v:'EN',l:'EN - Encrusting'},
-        {v:'FO',l:'FO - Foliaceous'},{v:'FL',l:'FL - Free-living'},{v:'LA',l:'LA - Laminar'},{v:'MD',l:'MD - Mounding'},
-        {v:'MA',l:'MA - Massive'},{v:'PL',l:'PL - Plating'},{v:'SM',l:'SM - Submassive'},{v:'SO',l:'SO - Solitary'},{v:'TB',l:'TB - Tabular'}];
+      // Team-lead-configured option lists (docs/team-lead-config-plan.md,
+      // Phase 3) — CatFieldOptions.buildOptionsHtml always keeps `val` as a
+      // real option even if a team lead has since disabled it, labeled
+      // "(retired)", so editing an old annotation never silently drops its
+      // saved value. Falls back to CatFieldOptions' own bundled defaults
+      // (matching today's hardcoded lists) if the config hasn't loaded yet.
+      const selCfg = (id, label, val, field) =>
+        `<div class="modal-form-field">
+          <label style="font-weight:600;display:block;margin-bottom:4px;font-size:12px;">${label}</label>
+          <select id="${id}" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+            ${window.CatFieldOptions ? window.CatFieldOptions.buildOptionsHtml(field, val) : ''}
+          </select>
+        </div>`;
+      const boolOpts = [{v:'0',l:'No'},{v:'-1',l:'Yes'}]; // 'fragment' below has no config field — kept static
 
       // Build the form HTML
       const formHTML = `
@@ -776,17 +761,17 @@
               <input type="text" id="edit_spcode" value="${esc(a.spcode)}" maxlength="10" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;" autocomplete="off" />
               <div id="edit-species-autocomplete" class="species-autocomplete-dropdown" style="position:absolute;z-index:10000;display:none;background:white;border:1px solid #ddd;border-radius:4px;max-height:200px;overflow-y:auto;width:100%;box-shadow:0 2px 8px rgba(0,0,0,0.15);"></div>
             </div>
-            ${sel('edit_morph_code','Morphology',a.morph_code,morphOpts)}
-            ${sel('edit_transect','Transect',a.transect,transOpts)}
-            ${sel('edit_segment','Segment',a.segment,segOpts)}
+            ${selCfg('edit_morph_code','Morphology',a.morph_code,'morph_code')}
+            ${selCfg('edit_transect','Transect',a.transect,'transect')}
+            ${selCfg('edit_segment','Segment',a.segment,'segment')}
             ${inp('edit_seglength','Seg Length',a.seglength,'number','step="0.1"')}
             ${inp('edit_segwidth','Seg Width',a.segwidth,'number','step="0.1"')}
-            ${sel('edit_juvenile','Juvenile',a.juvenile || 0,boolOpts)}
+            ${selCfg('edit_juvenile','Juvenile',a.juvenile || 0,'juvenile')}
             ${inp('edit_juv_substrate','JUV_SUBSTRATE',a.juv_substrate)}
-            ${sel('edit_no_colony','No Colony',a.no_colony || 0,boolOpts)}
-            ${sel('edit_remnant','Remnant',a.remnant || 0,boolOpts)}
+            ${selCfg('edit_no_colony','No Colony',a.no_colony || 0,'no_colony')}
+            ${selCfg('edit_remnant','Remnant',a.remnant || 0,'remnant')}
             ${sel('edit_fragment','Fragment',a.fragment || 0,boolOpts)}
-            ${sel('edit_ex_bound','Ex. Bound',a.ex_bound || 0,boolOpts)}
+            ${selCfg('edit_ex_bound','Ex. Bound',a.ex_bound || 0,'ex_bound')}
             ${inp('edit_old_dead','Old Dead %',a.old_dead,'number','min="0" max="100"')}
           </div>
           <div style="font-size:11px;font-weight:600;color:#667eea;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Recent Dead</div>

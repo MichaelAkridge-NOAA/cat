@@ -57,13 +57,30 @@ function _getOverlayStylePrefs() {
   return _overlayStylePrefsPromise;
 }
 
+// Selection highlight is a CSS class that recolours the stroke — NOT a
+// `filter: drop-shadow(...)`. A double drop-shadow on a live SVG <path> is
+// re-rasterized on every paint, and a dragged feature repaints every frame
+// (the ghost-drag CSS transform), so moving a selected segment quickly — or
+// selecting a dozen of them — could hang and then crash the tab.
+(function injectSelectionHighlightStyle() {
+  if (document.getElementById('catSelHighlightStyle')) return;
+  const s = document.createElement('style');
+  s.id = 'catSelHighlightStyle';
+  s.textContent =
+    'path.cat-feature-selected { stroke: #ffeb3b !important; stroke-opacity: 1 !important; }' +
+    'path.cat-annotation-selected { stroke: #3b82f6 !important; stroke-opacity: 1 !important; }' +
+    'img.cat-feature-selected { outline: 2px solid #ffeb3b; outline-offset: 1px; border-radius: 50%; }' +
+    'img.cat-annotation-selected { outline: 2px solid #3b82f6; outline-offset: 1px; border-radius: 50%; }';
+  document.head.appendChild(s);
+})();
+
 function _setFeatureSelectedStyle(layer, selected) {
   const el = layer._path || layer._icon;
   // DOM-level, not layer.setStyle — same reasoning as the contributor-
   // visibility toggle and map selection highlight elsewhere: setStyle here
   // would fight the opacity/line-width sliders, which unconditionally
   // restyle every layer.
-  if (el) el.style.filter = selected ? 'drop-shadow(0 0 4px #ffeb3b) drop-shadow(0 0 4px #ffeb3b)' : '';
+  if (el) el.classList.toggle('cat-feature-selected', !!selected);
 }
 
 // Selecting a feature both unlocks it AND enrolls it in _overlayEditSession
@@ -73,6 +90,9 @@ function _setFeatureSelectedStyle(layer, selected) {
 // correct pre-edit snapshot no matter whether the user ends up
 // dragging/rotating/vertex-editing/resizing it, or does nothing at all.
 async function toggleFeatureSelection(layer) {
+  // View-only project: selecting a feature unlocks it server-side, which a
+  // viewer isn't allowed to do — don't even start an edit session.
+  if (window.catReadOnly) return;
   const key = _featureSelKey(layer);
   const layerId = layer._overlayLayerId;
   const featureId = layer._overlayFeatureId;
@@ -473,7 +493,13 @@ async function uploadOverlayFiles(fileList) {
 /**
  * Load existing overlay layers from database
  */
+// Bumped on every load so an older, still-awaiting load can tell it has been
+// superseded (initial load + saveLayerManagement can overlap) and stop adding
+// layers to a map that was already reset under it.
+let _overlayLoadSeq = 0;
+
 async function loadExistingOverlays(projectId) {
+  const loadSeq = ++_overlayLoadSeq;
   // Discard (no save) any in-progress unlock/edit session — this is a
   // wholesale teardown of every overlayLayers entry (called on project load
   // and after saveLayerManagement()), so a session left pointing at a
@@ -505,10 +531,13 @@ async function loadExistingOverlays(projectId) {
       `${window.location.origin}/api/db/projects/${projectId}/overlay-layers`
     );
 
-    if (!response.ok) return;
+    if (!response.ok) {
+      if (typeof showStatus === 'function') showStatus(`⚠️ Could not load overlay layers (HTTP ${response.status})`, 'warning');
+      return;
+    }
 
     const data = await response.json();
-    
+
     // Filter to only active layers and sort by display_order
     const activeLayers = (data.layers || [])
       .filter(layer => layer.is_active)
@@ -518,8 +547,9 @@ async function loadExistingOverlays(projectId) {
       console.log(`📂 Loading ${activeLayers.length} active overlay layers...`);
       
       for (const layer of activeLayers) {
+        if (loadSeq !== _overlayLoadSeq) return; // a newer load took over
         const style = layer.style || {};
-        await loadOverlayLayer(layer.layer_id, layer.layer_name, style.color || '#00ff00', layer.layer_type || null, !!layer.is_locked, style.weight || null);
+        await loadOverlayLayer(layer.layer_id, layer.layer_name, style.color || '#00ff00', layer.layer_type || null, !!layer.is_locked, style.weight || null, loadSeq);
       }
     }
   } catch (error) {
@@ -531,7 +561,7 @@ async function loadExistingOverlays(projectId) {
 /**
  * Load overlay layer features and render on map
  */
-async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', layerType = null, layerLocked = true, savedWeight = null) {
+async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', layerType = null, layerLocked = true, savedWeight = null, loadSeq = null) {
   try {
     const response = await fetch(
       `${window.location.origin}/api/db/projects/${currentProjectId}/overlay-layers/${layerId}/features`
@@ -550,6 +580,10 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
     // project's layer record already says.
     const stylePrefs = await _getOverlayStylePrefs();
     const typePrefs = (layerType === 'segment' || layerType === 'transect') ? (stylePrefs[layerType] || {}) : {};
+    // Keep the project's own saved color: layerColor below may be this
+    // viewer's personal override, which must never be written back to the
+    // shared project style (setOverlayBorderWidth used to do exactly that).
+    const projectColor = layerColor;
     if (typePrefs.colorOverride) layerColor = typePrefs.colorOverride;
     // A per-layer saved weight (set via the Map Layers sidebar's own line-width
     // control, persisted in style_json) wins over the type-wide preference
@@ -572,17 +606,13 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
           weight: borderWidth,
           opacity: 0.8,
           fillOpacity: fillOpacity,
-          interactive: true,
-          // Thin (weight:2) lines are hard to click precisely — Leaflet's
-          // hit-tolerance for a Path scales with its visible weight, so a
-          // 2px transect/segment line has almost no forgiveness. This adds
-          // an invisible wider hit-stroke for click/mousedown detection —
-          // popup-open, shift-click-select, and the drag/rotate handler
-          // below all benefit — without changing how thick the line
-          // actually looks. Bumped from 8 to 18: real-mouse testing showed
-          // 8px still missed thin diagonal transect lines routinely on a
-          // normal display/pointer.
-          clickTolerance: 18
+          interactive: true
+          // NOTE: a `clickTolerance` option used to be set here to widen the
+          // hit area of thin lines. Leaflet has no such *path* option (hit
+          // tolerance exists only as a renderer option, and only for canvas),
+          // so it never did anything. A real fix would need a transparent
+          // wider hit-stroke; the ghost-drag code keys on each layer's own
+          // SVG <path>, so that is left as a separate change.
         },
         onEachFeature: (feature, layer) => {
           // Store the feature_id and layer_id on the Leaflet layer
@@ -666,6 +696,7 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
               layer.editing.disable();
               _removeStaleEditHandles(layer);
               _closeResizePopupDom();
+              _hideLiveSize();
               // Still selected/mid-session — keep the dashed "armed" outline,
               // don't clear it (that only happens for real on Save/Cancel).
               layer.setStyle({ color: layerColor, dashArray: '3,3' });
@@ -684,6 +715,9 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
               if (feature && feature.properties && 'Width_m' in feature.properties) {
                 _openResizePopup(layer, feature, layerColor);
               }
+              // Live size readout (updates on every vertex drag via the
+              // 'editdrag' handler below) — for any feature type.
+              _updateLiveSize(layer);
               // Leaflet's synthetic 'dblclick' event never reaches a vector layer
               // while leaflet-draw's vertex-editing overlay is active on it, so
               // this handler's own disable-branch above can't fire from a literal
@@ -702,6 +736,7 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
                   layer.editing.disable();
                   _removeStaleEditHandles(layer);
                   _closeResizePopupDom();
+                  _hideLiveSize();
                   layer.setStyle({ color: layerColor, dashArray: '3,3' });
                   // Consume this Escape so the global bubble-phase handler in
                   // annotation-runtime-shell-init.js (which cancels the active
@@ -731,14 +766,24 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
           // only marks the active edit session dirty — persistence happens
           // when the user clicks Save on the edit bar, so Cancel has real
           // meaning.
+          // Fires continuously while a vertex handle is being dragged.
+          layer.on('editdrag', () => _updateLiveSize(layer));
+
           layer.on('edit', () => {
             layer.editing.disable();
             _removeStaleEditHandles(layer);
-            // A hand-dragged vertex can make the shape no longer match its
-            // stored Width_m/Length_m — close the type-in tool rather than
-            // leave it showing numbers that no longer describe the shape.
+            // A hand-dragged vertex changes the shape, so bring its stored
+            // Width_m / Length_m / Area_m2 in line with the new geometry (they
+            // used to keep their pre-edit values). Save then persists them.
             _closeResizePopupDom();
+            _refreshSizePropsFromGeometry(layer);
             layer.setStyle({ color: layerColor, dashArray: '3,3' });
+            // Leave the final size on screen (with the type-in boxes reopened
+            // for segments, now showing the measured values) until Save/Cancel.
+            if (feature && feature.properties && 'Width_m' in feature.properties) {
+              _openResizePopup(layer, layer.feature, layerColor);
+            }
+            _updateLiveSize(layer);
             _updateCentroidMarkerPosition(layer);
             if (layer._catExitEdit) {
               document.removeEventListener('keydown', layer._catExitEdit, true);
@@ -761,12 +806,21 @@ async function loadOverlayLayer(layerId, layerName, layerColor = '#00ff00', laye
     layerGroup.addTo(map);
 
     // Store layer reference
+    // A newer loadExistingOverlays() reset the map while this one was awaiting
+    // (features fetch / style prefs): registering now would orphan this group
+    // and duplicate the row, so drop it instead.
+    if (loadSeq !== null && loadSeq !== _overlayLoadSeq) {
+      try { map.removeLayer(layerGroup); } catch (e) { /* not on map yet */ }
+      return;
+    }
+
     overlayLayers[layerId] = {
       name: layerName,
       layerGroup: layerGroup,
       visible: true,
       opacity: 80,
       color: layerColor,
+      projectColor: projectColor,
       borderWidth: borderWidth,
       layerType: layerType,
       featureCount: data.features.length
@@ -977,10 +1031,14 @@ function toggleOverlayLayer(layerId) {
     layerData.layerGroup.addTo(map);
   } else {
     // Hiding a layer with an in-progress unlock/edit session would strand
-    // the edit bar pointing at a detached layer — discard it (no save).
+    // the edit bar pointing at a detached layer. Cancel it properly — revert
+    // geometry, relock the features on the server and clear the selection —
+    // rather than just dropping the session, which used to leave those
+    // features selected, unlocked and un-draggable. Its synchronous part
+    // (restoring geometry) runs before the layer is detached below.
     if (_sessionTouchesLayer(layerId)) {
-      _overlayEditSession = null;
-      _closeOverlayEditBarDom();
+      cancelOverlayEdit();
+      if (typeof showStatus === 'function') showStatus('↩️ Unsaved edits on the hidden layer were discarded', 'info');
     }
     map.removeLayer(layerData.layerGroup);
   }
@@ -1026,17 +1084,21 @@ async function setOverlayBorderWidth(layerId, value) {
   layerData.layerGroup.setStyle({ weight });
   layerData.borderWidth = weight;
 
+  // View-only users get the live change but it stays in their browser.
+  if (window.catReadOnly) return;
   try {
-    await fetch(
+    const resp = await fetch(
       `${window.location.origin}/api/db/projects/${currentProjectId}/overlay-layers/${layerId}`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ style_json: { color: layerData.color, weight, opacity: 0.7 } })
+        body: JSON.stringify({ style_json: { color: layerData.projectColor || layerData.color, weight, opacity: 0.7 } })
       }
     );
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   } catch (e) {
     console.warn('Failed to save border width:', e);
+    if (typeof showStatus === 'function') showStatus('⚠️ Line width changed on screen but could not be saved', 'warning');
   }
 }
 
@@ -1068,9 +1130,16 @@ async function removeOverlayLayer(layerId) {
 
   // Discard (no save) any in-progress unlock/edit session on this layer —
   // it's about to be deleted.
-  if (_sessionTouchesLayer(layerId)) {
-    _overlayEditSession = null;
-    _closeOverlayEditBarDom();
+  // Only drop this layer's items; features selected on other layers must stay
+  // in the session (they remain unlocked and still need Save/Cancel).
+  if (_overlayEditSession) {
+    _overlayEditSession.items = _overlayEditSession.items.filter(it => it.layerId !== layerId);
+    if (_overlayEditSession.items.length === 0) {
+      _overlayEditSession = null;
+      _closeOverlayEditBarDom();
+    } else {
+      _refreshOverlayEditBar();
+    }
   }
   Array.from(_selectedFeatures.entries()).forEach(([key, it]) => {
     if (it.layerId === layerId) _selectedFeatures.delete(key);
@@ -1187,9 +1256,11 @@ async function changeOverlayColor(layerId, newColor) {
     if (swatch) swatch.style.background = newColor;
   }
 
-  // Persist to database
+  // View-only users get the live change but it stays in their browser.
+  if (window.catReadOnly) return;
+  // Persist to database (an explicit color pick becomes the project's color)
   try {
-    await fetch(
+    const resp = await fetch(
       `${window.location.origin}/api/db/projects/${currentProjectId}/overlay-layers/${layerId}`,
       {
         method: 'PUT',
@@ -1197,8 +1268,11 @@ async function changeOverlayColor(layerId, newColor) {
         body: JSON.stringify({ style_json: { color: newColor, weight: layerData.borderWidth || 2, opacity: 0.7 } })
       }
     );
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    layerData.projectColor = newColor;
   } catch (e) {
     console.warn('Failed to save color:', e);
+    if (typeof showStatus === 'function') showStatus('⚠️ Color changed on screen but could not be saved', 'warning');
   }
 }
 
@@ -1233,6 +1307,9 @@ function enableLayerTranslateDrag(layer, layerGroup, layerId, layerColor) {
     // (L.DomEvent.stop below), which is what breaks a lasso drag that
     // happens to start on top of it.
     if (window.v2Lasso && window.v2Lasso.active) return;
+
+    // Left button only — a right/middle click must not start a drag.
+    if (e.originalEvent && e.originalEvent.button !== 0) return;
 
     // A feature is draggable exactly when it's selected — selecting it is
     // the one deliberate "I mean to edit this" gesture (shift-click, the
@@ -1273,23 +1350,27 @@ function enableLayerTranslateDrag(layer, layerGroup, layerId, layerColor) {
     const downPoint = map.mouseEventToContainerPoint(e.originalEvent);
     const DRAG_THRESHOLD_PX = 4;
 
+    // mouseup is listened for on `document` (capture), not on the map: a
+    // release outside the map container (easy with the docked sidebar) never
+    // reaches a Leaflet 'mouseup' handler, which used to strand these
+    // listeners and leave the feature following the cursor.
     function armedMove(moveEvt) {
       const p = map.mouseEventToContainerPoint(moveEvt.originalEvent);
       if (downPoint.distanceTo(p) < DRAG_THRESHOLD_PX) return;
       map.off('mousemove', armedMove);
-      map.off('mouseup', armedUp);
+      document.removeEventListener('mouseup', armedUp, true);
       _beginTransform(mode, layer, layerGroup, layerId, layerColor, e.latlng);
     }
     function armedUp() {
       map.off('mousemove', armedMove);
-      map.off('mouseup', armedUp);
+      document.removeEventListener('mouseup', armedUp, true);
       // Released without moving past the threshold — a plain click, not a
       // drag. Leave it alone; the layer's own click/dblclick handlers
       // (popup, vertex-edit toggle) already fire independently of this.
     }
 
     map.on('mousemove', armedMove);
-    map.on('mouseup', armedUp);
+    document.addEventListener('mouseup', armedUp, true);
   });
 }
 
@@ -1355,9 +1436,13 @@ function _beginTransform(mode, layer, layerGroup, layerId, layerColor, startLatL
       : 0
   };
 
+  // Remember whether panning was on, so ending the drag restores that rather
+  // than blindly enabling it (another tool may have had it deliberately off).
+  _transformState.draggingWasEnabled = map.dragging.enabled();
   map.dragging.disable();
   map.on('mousemove', _onTransformMove);
-  map.on('mouseup', _onTransformEnd);
+  // On document (capture) so releasing outside the map still ends the drag.
+  document.addEventListener('mouseup', _onTransformEnd, true);
 
   const hint = mode === 'rotateSelection'
     ? '🔄 Rotating selected feature(s) around their shared center. Release to apply.'
@@ -1415,7 +1500,9 @@ function _applyTransformMove(latlng) {
     // Never leave the map stuck (dragging disabled, stale state) if a
     // mid-drag update throws — end the transform cleanly instead.
     console.error('Error during feature transform:', err);
-    _onTransformEnd();
+    // If we are already inside _onTransformEnd (its final in-flight frame),
+    // let it finish its own cleanup — re-entering nulled the state under it.
+    if (_transformState && !_transformState.ending) _onTransformEnd();
     return;
   }
 
@@ -1431,14 +1518,16 @@ function _applyTransformMove(latlng) {
 
 function _onTransformEnd() {
   if (!_transformState) return;
-  const { mode, items, targets, startLatLng, centroid, startAngle } = _transformState;
+  const st = _transformState;
+  st.ending = true; // stops _applyTransformMove's error path re-entering us
+  const { mode, items, targets, startLatLng, centroid } = st;
 
   // Cleanup that must always happen, even if persistence below throws —
   // this is what previously could leave the map stuck with dragging
   // disabled ("crashed") if something in the save/style-reset step failed.
   map.off('mousemove', _onTransformMove);
-  map.off('mouseup', _onTransformEnd);
-  map.dragging.enable();
+  document.removeEventListener('mouseup', _onTransformEnd, true);
+  if (st.draggingWasEnabled !== false) map.dragging.enable();
   if (_transformRafId !== null) {
     cancelAnimationFrame(_transformRafId);
     _transformRafId = null;
@@ -1456,14 +1545,19 @@ function _onTransformEnd() {
     // frame did, but it only happens once per drag instead of once per
     // mousemove/frame.
     if (mode === 'moveSelection') {
-      const dLat = _transformState.lastLatLng.lat - startLatLng.lat;
-      const dLng = _transformState.lastLatLng.lng - startLatLng.lng;
+      const dLat = st.lastLatLng.lat - startLatLng.lat;
+      const dLng = st.lastLatLng.lng - startLatLng.lng;
       if (dLat !== 0 || dLng !== 0) {
         targets.forEach(t => _offsetLayer(t, dLat, dLng));
       }
     } else if (mode === 'rotateSelection' && centroid) {
-      const finalAngle = Math.atan2(_transformState.lastLatLng.lng - centroid.lng, _transformState.lastLatLng.lat - centroid.lat);
-      const totalAngle = finalAngle - startAngle;
+      // Use the same on-screen angle the drag preview showed. Web Mercator is
+      // conformal, so a screen angle IS the true angle on the ground; the old
+      // lat/lng-degree angle disagreed with the preview by cos(latitude).
+      const { centroidLayerPoint, startAnglePx } = st;
+      const endPoint = map.latLngToLayerPoint(st.lastLatLng);
+      const finalAnglePx = Math.atan2(endPoint.y - centroidLayerPoint.y, endPoint.x - centroidLayerPoint.x);
+      const totalAngle = finalAnglePx - startAnglePx; // clockwise on screen == clockwise bearing
       if (totalAngle !== 0) targets.forEach(t => _rotateLayer(t, centroid, totalAngle));
     }
 
@@ -1571,15 +1665,20 @@ function _rotateLatLngs(latlngs, center, angle) {
   if (Array.isArray(latlngs[0])) {
     return latlngs.map(ring => _rotateLatLngs(ring, center, angle));
   }
+  // `angle` is clockwise (radians), matching the on-screen drag preview.
+  // Rotate in metres, not degrees: a degree of longitude is only
+  // cos(latitude) as long as a degree of latitude, so rotating the raw
+  // (lat, lng) offsets sheared every shape (a few percent at Pacific sites)
+  // and turned rectangles into parallelograms.
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
+  const kx = Math.cos(center.lat * Math.PI / 180); // metres-per-degree ratio, lng vs lat
   return latlngs.map(ll => {
-    const dLat = ll.lat - center.lat;
-    const dLng = ll.lng - center.lng;
-    return L.latLng(
-      center.lat + dLat * cos - dLng * sin,
-      center.lng + dLat * sin + dLng * cos
-    );
+    const x = (ll.lng - center.lng) * kx; // east
+    const y = ll.lat - center.lat;        // north
+    const xr = x * cos + y * sin;
+    const yr = -x * sin + y * cos;
+    return L.latLng(center.lat + yr, center.lng + xr / kx);
   });
 }
 
@@ -1703,6 +1802,9 @@ function _openOverlayEditBarDom(labelText) {
 function _closeOverlayEditBarDom() {
   const el = document.getElementById('overlayEditBar');
   if (el) el.remove();
+  // The edit bar closing means Save/Cancel/teardown — the readout goes with it.
+  _hideLiveSize();
+  _closeResizePopupDom();
 }
 
 function _refreshOverlayEditBar() {
@@ -1713,9 +1815,125 @@ function _refreshOverlayEditBar() {
   label.textContent = `✏️ Editing ${n} feature${n > 1 ? 's' : ''} — geometry changed, click Save or Cancel`;
 }
 
+// ── Live size (width / length / area) ──────────────────────────────────────
+// Measures a feature's current on-screen geometry in metres so the numbers can
+// be shown while a vertex is being dragged, and written back into the
+// feature's Width_m / Length_m / Area_m2 once the edit ends (they used to keep
+// the values from before the edit, so a reshaped segment still claimed its old
+// size).
+function _firstLatLngPath(latlngs) {
+  let ll = latlngs;
+  while (Array.isArray(ll) && Array.isArray(ll[0])) ll = ll[0];
+  return Array.isArray(ll) ? ll : null;
+}
+
+function _pathAreaM2(pts) {
+  // Local equirectangular projection around the first point — plenty accurate
+  // at segment scale (metres to a few hundred metres).
+  const R = 6371008.8, rad = Math.PI / 180;
+  const lat0 = pts[0].lat, lng0 = pts[0].lng, k = Math.cos(lat0 * rad);
+  const xy = pts.map(p => [(p.lng - lng0) * rad * R * k, (p.lat - lat0) * rad * R]);
+  let s = 0;
+  for (let i = 0; i < xy.length; i++) {
+    const [x1, y1] = xy[i], [x2, y2] = xy[(i + 1) % xy.length];
+    s += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(s) / 2;
+}
+
+function _overlaySizeMetrics(layer) {
+  if (!layer || !layer.getLatLngs) return null;
+  const pts = _firstLatLngPath(layer.getLatLngs());
+  if (!pts || pts.length < 2) return null;
+  const d = (a, b) => map.distance(a, b);
+  const mid = (a, b) => L.latLng((a.lat + b.lat) / 2, (a.lng + b.lng) / 2);
+
+  if (layer instanceof L.Polygon) {
+    if (pts.length === 4) {
+      // Segment rectangle, corner order as built server-side: the width edges
+      // are c0-c3 and c1-c2; length runs between their midpoints.
+      const [c0, c1, c2, c3] = pts;
+      return {
+        kind: 'rect',
+        width: (d(c0, c3) + d(c1, c2)) / 2,
+        length: d(mid(c0, c3), mid(c1, c2)),
+        area: _pathAreaM2(pts)
+      };
+    }
+    let perimeter = 0;
+    for (let i = 0; i < pts.length; i++) perimeter += d(pts[i], pts[(i + 1) % pts.length]);
+    return { kind: 'poly', perimeter, area: _pathAreaM2(pts) };
+  }
+  let length = 0;
+  for (let i = 1; i < pts.length; i++) length += d(pts[i - 1], pts[i]);
+  return { kind: 'line', length };
+}
+
+function _formatOverlaySize(m) {
+  if (!m) return '';
+  const f = (n) => `${n.toFixed(2)} m`;
+  if (m.kind === 'rect') return `Width ${f(m.width)} · Length ${f(m.length)} · Area ${m.area.toFixed(2)} m²`;
+  if (m.kind === 'poly') return `Perimeter ${f(m.perimeter)} · Area ${m.area.toFixed(2)} m²`;
+  return `Length ${f(m.length)}`;
+}
+
+function _updateLiveSize(layer) {
+  const m = _overlaySizeMetrics(layer);
+  if (!m) return;
+  let el = document.getElementById('overlayLiveSize');
+  if (!el) {
+    document.body.insertAdjacentHTML('beforeend', `
+      <div id="overlayLiveSize" role="status" style="position:fixed; bottom:122px; left:50%; transform:translateX(-50%);
+        z-index:10000; background:#111; border:1px solid #ff9800; border-radius:16px; padding:5px 14px;
+        color:#ffcc80; font-size:13px; font-weight:600; font-variant-numeric:tabular-nums;
+        box-shadow:0 2px 10px rgba(0,0,0,0.4); pointer-events:none; white-space:nowrap;"></div>`);
+    el = document.getElementById('overlayLiveSize');
+  }
+  el.textContent = `📐 ${_formatOverlaySize(m)}`;
+  // Keep the type-in Width/Length boxes in step too (unless being typed in).
+  if (m.kind === 'rect') {
+    const w = document.getElementById('overlayResizeWidthInput');
+    const l = document.getElementById('overlayResizeLengthInput');
+    if (w && document.activeElement !== w) w.value = m.width.toFixed(2);
+    if (l && document.activeElement !== l) l.value = m.length.toFixed(2);
+  }
+}
+
+function _hideLiveSize() {
+  const el = document.getElementById('overlayLiveSize');
+  if (el) el.remove();
+}
+
+// Write the measured size back into the feature's own properties so the popup,
+// the saved GeoJSON and later exports all agree with the reshaped geometry.
+// Replaces the properties object rather than editing it in place: the pre-edit
+// snapshot (used by Cancel) shares the old object and must keep the old values.
+function _refreshSizePropsFromGeometry(layer) {
+  const m = _overlaySizeMetrics(layer);
+  if (!m || !layer.feature || !layer.feature.properties) return;
+  const r3 = (n) => Math.round(n * 1000) / 1000;
+  const p = { ...layer.feature.properties };
+  if (m.kind === 'rect' && 'Width_m' in p) {
+    p.Width_m = r3(m.width);
+    if ('Length_m' in p) p.Length_m = r3(m.length);
+    if ('Area_m2' in p) p.Area_m2 = r3(m.area);
+  } else if (m.kind === 'line' && 'Length_m' in p) {
+    p.Length_m = r3(m.length);
+  } else {
+    return;
+  }
+  layer.feature.properties = p;
+  const layerId = layer._overlayLayerId;
+  layer.setPopupContent(_overlayFeaturePopupHtml(layer.feature, layer, overlayLayers[layerId]?.color));
+}
+
 function _restoreLayerFromGeoJSON(layer, geojson) {
   const geom = geojson && geojson.geometry ? geojson.geometry : geojson;
   if (!geom) return;
+  // Cancel / revert must also bring back the pre-edit size properties.
+  if (geojson && geojson.properties && layer.feature) {
+    layer.feature.properties = { ...geojson.properties };
+  }
   const tempLayer = L.geoJSON(geom).getLayers()[0];
   if (!tempLayer) return;
   if (layer.setLatLngs && tempLayer.getLatLngs) {
@@ -1745,7 +1963,12 @@ async function saveOverlayEdit() {
         l._catExitEdit = null;
       }
     });
-    await Promise.all(session.items.map(({ layerId, featureId, layer: l }) =>
+    // allSettled, not all: with several features selected, one failed PUT
+    // used to reject the batch after the others had already saved + relocked,
+    // and the finally below then threw away the session — leaving the failed
+    // features selected and unlocked with edited geometry, no snapshot and no
+    // edit bar, so the user could neither retry Save nor Cancel.
+    const results = await Promise.allSettled(session.items.map(({ layerId, featureId, layer: l }) =>
       saveFeatureGeometry(featureId, layerId, l.toGeoJSON(), { relock: true, silent: true }).then(() => {
         l._catLocked = true;
         l.setStyle({ dashArray: null });
@@ -1753,14 +1976,38 @@ async function saveOverlayEdit() {
         l.setPopupContent(_overlayFeaturePopupHtml(l.feature, l, layerColor));
       })
     ));
-    clearFeatureSelection();
-    if (typeof showStatus === 'function') showStatus('✅ Changes saved', 'success');
+    const failed = session.items.filter((_, i) => results[i].status === 'rejected');
+    if (failed.length === 0) {
+      clearFeatureSelection();
+      _overlayEditSession = null;
+      _closeOverlayEditBarDom();
+      if (typeof showStatus === 'function') showStatus('✅ Changes saved', 'success');
+    } else {
+      // Drop only the features that did save; keep the failed ones selected,
+      // unlocked and in the session (with their snapshots) so Save can be
+      // retried or Cancel can revert them.
+      session.items.forEach((it, i) => {
+        if (results[i].status !== 'fulfilled') return;
+        const sel = _selectedFeatures.get(`${it.layerId}:${it.featureId}`);
+        if (sel) _setFeatureSelectedStyle(sel.layer, false);
+        _selectedFeatures.delete(`${it.layerId}:${it.featureId}`);
+        delete session.snapshots[it.featureId];
+      });
+      session.items = failed;
+      _overlayEditSession = session;
+      _refreshSelectionToolbar();
+      _refreshOverlayEditBar();
+      const firstErr = results.find(r => r.status === 'rejected').reason;
+      console.error('Error saving overlay edit:', firstErr);
+      if (typeof showStatus === 'function') {
+        showStatus(`❌ ${failed.length} feature(s) failed to save (${(firstErr && firstErr.message) || 'error'}) — they are still selected; click Save to retry or Cancel to revert`, 'error');
+      }
+    }
   } catch (error) {
+    // Unexpected error before/while dispatching saves: keep the session so the
+    // user can still Save/Cancel instead of stranding unlocked features.
     console.error('Error saving overlay edit:', error);
     if (typeof showStatus === 'function') showStatus(`❌ Failed to save: ${error.message}`, 'error');
-  } finally {
-    _overlayEditSession = null;
-    _closeOverlayEditBarDom();
   }
 }
 
@@ -1908,6 +2155,7 @@ async function _applyOverlayResize(layerId, featureId) {
     if (typeof showStatus === 'function') showStatus(`❌ ${error.message}`, 'error');
   } finally {
     _closeResizePopupDom();
+    _hideLiveSize();
   }
 }
 
@@ -1973,7 +2221,40 @@ function startTransectDrawMode() {
 function _onTransectKeydown(e) {
   if (e.key === 'Escape') {
     cancelTransectDrawMode();
+    // Consume it: the global Escape handler in annotation-runtime-shell-init.js
+    // would otherwise ALSO run and silently discard any unsaved annotation the
+    // user has open, just because they cancelled a transect.
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    e.preventDefault();
+  } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+    // This transect line is built by a custom click-collector, not Leaflet.Draw
+    // (catGetActiveDrawVertexHandler, used elsewhere, only knows about the
+    // latter) — without this, Ctrl+Z while placing transect points fell
+    // through to the global handler and undid a previously SAVED annotation
+    // instead of the point just placed, leaving the bad point on the
+    // in-progress line untouched. Same fix as the Leaflet.Draw case, just a
+    // separate state machine. Backspace gets the same treatment for
+    // consistency with every other draw tool's convention.
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    _removeLastTransectPoint();
+  } else if (e.key === 'Backspace') {
+    const t = e.target;
+    const typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+    if (typing) return;
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    _removeLastTransectPoint();
   } else if (e.key === 'Enter') {
+    // This listener is document-wide (capture): Enter while typing in a form
+    // field (segment count/length in the generate panel, the annotation form,
+    // a filter box...) must edit that field, not finish the transect.
+    const t = e.target;
+    const typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+    if (typing) return;
     finishTransectDraw();
   }
 }
@@ -2004,6 +2285,31 @@ function _onTransectClick(e) {
   }).addTo(map);
   _transectDrawState.markers.push(marker);
   _updateTransectPolyline();
+  _updateTransectDrawHint();
+}
+
+// Ctrl+Z / Backspace mid-draw — remove the most recently placed point,
+// mirroring the "delete last vertex" convention the Leaflet.Draw-based
+// tools already have.
+function _removeLastTransectPoint() {
+  const state = _transectDrawState;
+  if (!state || state.points.length === 0) {
+    if (typeof showStatus === 'function') showStatus('Nothing to remove — no points placed yet', 'info');
+    return;
+  }
+  state.points.pop();
+  const marker = state.markers.pop();
+  if (marker) map.removeLayer(marker);
+
+  // _updateTransectPolyline only (re)draws once >= 2 points remain — below
+  // that, the existing line would otherwise keep showing the segment that
+  // used to end at the point we just removed.
+  if (state.points.length < 2 && state.polyline) {
+    map.removeLayer(state.polyline);
+    state.polyline = null;
+  } else {
+    _updateTransectPolyline();
+  }
   _updateTransectDrawHint();
 }
 
@@ -2337,6 +2643,15 @@ async function deleteLayerFromManagement(layerId) {
  * Save layer management changes
  */
 async function saveLayerManagement() {
+  // Saving reloads every overlay from the server, which discards an
+  // in-progress move/rotate/vertex edit. Don't do that silently.
+  if (_overlayEditSession && _overlayEditSession.dirty) {
+    const proceed = await catConfirm(
+      'You have unsaved feature edits. Saving layer settings reloads the layers and will discard them. Continue?',
+      { danger: true, ok: 'Discard edits and save' }
+    );
+    if (!proceed) return;
+  }
   try {
     // Update display order if changed
     if (layerOrderChanged) {
@@ -2360,8 +2675,9 @@ async function saveLayerManagement() {
     }
 
     // Update each layer's is_active state
+    const failedNames = [];
     for (const layer of managementLayers) {
-      await fetch(
+      const resp = await fetch(
         `${window.location.origin}/api/db/projects/${currentProjectId}/overlay-layers/${layer.layer_id}`,
         {
           method: 'PUT',
@@ -2369,6 +2685,11 @@ async function saveLayerManagement() {
           body: JSON.stringify({ is_active: layer.is_active })
         }
       );
+      if (!resp.ok) failedNames.push(layer.layer_name || `#${layer.layer_id}`);
+    }
+    if (failedNames.length) {
+      // Keep the modal open so nothing looks saved when it wasn't.
+      throw new Error(`Could not update: ${failedNames.join(', ')}`);
     }
 
     showStatus('✅ Layer settings saved', 'success');
@@ -2379,7 +2700,7 @@ async function saveLayerManagement() {
 
   } catch (error) {
     console.error('Error saving layer management:', error);
-    showStatus('❌ Failed to save changes', 'error');
+    showStatus(`❌ Failed to save changes${error && error.message ? ` (${error.message})` : ''}`, 'error');
   }
 }
 
@@ -2408,15 +2729,21 @@ function handleLayerDragOver(e) {
 function handleLayerDrop(e) {
   e.preventDefault();
   
+  // A drop that didn't start from one of our rows (a file, text, another
+  // window) leaves draggedItem null.
+  if (!draggedItem) return;
   const targetItem = e.target.closest('.layer-management-item');
   if (!targetItem || targetItem === draggedItem) return;
 
   const draggedIndex = parseInt(draggedItem.dataset.index);
   const targetIndex = parseInt(targetItem.dataset.index);
 
-  // Reorder array
+  // Reorder array. The drop indicator is a line above the target row, so
+  // insert *before* it: after the splice below removes the dragged row, every
+  // later index shifts down by one when dragging downward.
   const [removed] = managementLayers.splice(draggedIndex, 1);
-  managementLayers.splice(targetIndex, 0, removed);
+  const insertAt = draggedIndex < targetIndex ? targetIndex - 1 : targetIndex;
+  managementLayers.splice(insertAt, 0, removed);
 
   layerOrderChanged = true;
   renderLayerManagementList();

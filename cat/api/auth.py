@@ -103,6 +103,16 @@ def require_admin(current_user: Dict[str, Any] = Depends(require_auth)) -> Dict[
     return current_user
 
 
+def require_team_lead_or_admin(current_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
+    """Deployment-wide annotation-form configuration (species/dropdown-option
+    toggles): team_lead is a read/export-plus-config elevated tier, distinct
+    from admin's full user-management powers, per migration 0013's design
+    note. Does not gate anything else admin-only."""
+    if current_user["role"] not in ("admin", "team_lead"):
+        raise HTTPException(status_code=403, detail="Team lead or admin role required")
+    return current_user
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------

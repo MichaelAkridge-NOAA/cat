@@ -14,7 +14,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from cat.api.auth import require_auth
+from cat.api.auth import require_auth, require_admin
 from cat.db import auth as auth_db
 from cat.db.config import is_oracle_backend_enabled
 from cat.db.oracle import execute, execute_returning_id, execute_many, fetch_all, fetch_one, test_connection, get_connection
@@ -323,7 +323,7 @@ def db_health() -> Dict[str, Any]:
 
 
 @router.post("/bootstrap")
-def db_bootstrap() -> Dict[str, Any]:
+def db_bootstrap(_current_user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     _ensure_oracle_mode()
     return bootstrap_schema()
 
@@ -460,6 +460,8 @@ def list_projects(
               WHERE l.project_id = p.project_id) AS overlay_count,
             (SELECT COUNT(*) FROM cat_project_collaborators c
               WHERE c.project_id = p.project_id) AS collaborator_count,
+            (SELECT c.role FROM cat_project_collaborators c
+              WHERE c.project_id = p.project_id AND c.user_id = :my_user_id) AS collab_role,
             (SELECT MAX(NVL(a.updated_at, a.created_at)) FROM cat_annotations a
               WHERE a.project_id = p.project_id AND a.deleted_at IS NULL) AS last_annotated_at
         FROM (
@@ -472,7 +474,16 @@ def list_projects(
         LEFT JOIN cat_users u ON u.user_id = p.owner_user_id
         ORDER BY p.{order_col} {order_dir}, p.project_id DESC
     """.format(where_sql=where_sql, order_col=order_col, order_dir=order_dir)
-    rows = fetch_all(sql, {**filter_params, "limit": limit, "offset": offset})
+    my_user_id = current_user.get("user_id")
+    rows = fetch_all(sql, {**filter_params, "limit": limit, "offset": offset, "my_user_id": my_user_id})
+
+    is_admin = current_user.get("role") == "admin"
+    for r in rows:
+        collab_role = r.pop("collab_role", None)
+        if is_admin or r.get("owner_user_id") == my_user_id:
+            r["my_role"] = "owner"
+        else:
+            r["my_role"] = collab_role or "viewer"
 
     _attach_incomplete_counts(rows)
 
@@ -692,7 +703,7 @@ def projects_qc(
 
 
 @router.get("/projects/{project_id}")
-def get_project(project_id: int, _current_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
+def get_project(project_id: int, current_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
     _ensure_oracle_mode()
 
     project = fetch_one(
@@ -714,10 +725,15 @@ def get_project(project_id: int, _current_user: Dict[str, Any] = Depends(require
         "SELECT * FROM cat_project_assets WHERE project_id = :project_id ORDER BY created_at ASC",
         {"project_id": project_id},
     )
+    # Caller's effective role (viewer/editor/owner) so the UI can go read-only.
+    my_role = _get_effective_project_role(project_id, current_user) or "viewer"
+    normalized = _normalize_project_row(project)
+    normalized["my_role"] = my_role
     return {
         "success": True,
-        "project": _normalize_project_row(project),
+        "project": normalized,
         "assets": [_normalize_asset_row(a) for a in assets],
+        "my_role": my_role,
     }
 
 
@@ -725,7 +741,7 @@ def get_project(project_id: int, _current_user: Dict[str, Any] = Depends(require
 def get_project_snapshot(
     project_id: int,
     include_annotations: bool = True,
-    _current_user: Dict[str, Any] = Depends(require_auth),
+    current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
     """
     Return project structure. Pass include_annotations=false to skip the annotation
@@ -784,6 +800,7 @@ def get_project_snapshot(
     return {
         "success": True,
         "project": _normalize_project_row(project),
+        "my_role": _get_effective_project_role(project_id, current_user) or "viewer",
         "assets": [_normalize_asset_row(a) for a in assets],
         "annotations": normalized_annotations,
         "overlay_layers": normalized_layers,
@@ -863,6 +880,176 @@ def delete_project(
 
     execute("DELETE FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
     return {"success": True, "deleted_project_id": project_id}
+
+
+class ProjectDuplicate(BaseModel):
+    new_name: Optional[str] = Field(default=None, max_length=255)
+
+
+def _pick_copy_name(source_name: str, owner_user_id: int) -> str:
+    """First free '<name> (copy)', '<name> (copy 2)', ... for this owner
+    (uniqueness is (project_name, owner_user_id)), truncated to fit 255."""
+    rows = fetch_all(
+        "SELECT project_name FROM cat_projects WHERE owner_user_id = :owner_id AND project_name LIKE :prefix",
+        {"owner_id": owner_user_id, "prefix": f"{source_name[:200]}%"},
+    )
+    taken = {r["project_name"] for r in rows}
+    for n in range(1, 1000):
+        suffix = " (copy)" if n == 1 else f" (copy {n})"
+        candidate = source_name[: 255 - len(suffix)] + suffix
+        if candidate not in taken:
+            return candidate
+    raise HTTPException(status_code=409, detail="Could not find a free name for the copy")
+
+
+@router.post("/projects/{project_id}/duplicate")
+def duplicate_project(
+    project_id: int,
+    payload: ProjectDuplicate,
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Copy a project (assets, annotations, overlay layers + features) into a
+    new project owned by the caller. Any user who can view the source may
+    duplicate it. Collaborators, activity log and sessions are not copied.
+    Runs in a single transaction: either the whole copy exists or nothing."""
+    _ensure_oracle_mode()
+    _require_project_role(project_id, current_user, "viewer")
+
+    source = fetch_one("SELECT * FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
+    if not source:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    user_id = current_user["user_id"]
+    requested = (payload.new_name or "").strip()
+    new_name = requested or _pick_copy_name(source["project_name"], user_id)
+
+    try:
+        with get_connection() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    out_project = cursor.var(int)
+                    cursor.execute(
+                        """
+                        INSERT INTO cat_projects (
+                            project_name, site, cruise, year_num, region, observer_name, notes,
+                            metadata_json, owner_user_id, last_mod_by_user_id
+                        ) VALUES (
+                            :project_name, :site, :cruise, :year_num, :region, :observer_name, :notes,
+                            :metadata_json, :owner_user_id, :owner_user_id
+                        ) RETURNING project_id INTO :new_project_id
+                        """,
+                        {
+                            "project_name": new_name,
+                            "site": source.get("site"),
+                            "cruise": source.get("cruise"),
+                            "year_num": source.get("year_num"),
+                            "region": source.get("region"),
+                            "observer_name": source.get("observer_name"),
+                            "notes": source.get("notes"),
+                            "metadata_json": source.get("metadata_json"),
+                            "owner_user_id": user_id,
+                            "new_project_id": out_project,
+                        },
+                    )
+                    new_project_id = int(out_project.getvalue()[0])
+
+                    # Assets: copy the URI rows (no imagery is duplicated) and map old -> new id.
+                    cursor.execute(
+                        "SELECT asset_id FROM cat_project_assets WHERE project_id = :pid ORDER BY asset_id",
+                        {"pid": project_id},
+                    )
+                    old_asset_ids = [r[0] for r in cursor.fetchall()]
+                    asset_map: Dict[int, int] = {}
+                    for old_id in old_asset_ids:
+                        cursor.execute(
+                            """
+                            INSERT INTO cat_project_assets (
+                                project_id, asset_type, asset_name, cog_url, source_uri,
+                                source_epsg, target_epsg, bounds_json, is_active
+                            )
+                            SELECT :new_pid, asset_type, asset_name, cog_url, source_uri,
+                                   source_epsg, target_epsg, bounds_json, is_active
+                            FROM cat_project_assets WHERE asset_id = :old_id
+                            """,
+                            {"new_pid": new_project_id, "old_id": old_id},
+                        )
+                        cursor.execute(
+                            "SELECT MAX(asset_id) FROM cat_project_assets WHERE project_id = :new_pid",
+                            {"new_pid": new_project_id},
+                        )
+                        asset_map[old_id] = int(cursor.fetchone()[0])
+
+                    # Annotations (live only), asset ids remapped; original authorship preserved.
+                    ann_cols = "feature_geojson, properties_json, created_by, created_by_user_id"
+                    for old_id, new_id in asset_map.items():
+                        cursor.execute(
+                            f"""
+                            INSERT INTO cat_annotations (project_id, asset_id, {ann_cols}, last_mod_by_user_id)
+                            SELECT :new_pid, :new_asset, {ann_cols}, :owner_id
+                            FROM cat_annotations
+                            WHERE project_id = :pid AND deleted_at IS NULL AND asset_id = :old_id
+                            """,
+                            {"new_pid": new_project_id, "new_asset": new_id, "owner_id": user_id, "pid": project_id, "old_id": old_id},
+                        )
+                    cursor.execute(
+                        f"""
+                        INSERT INTO cat_annotations (project_id, asset_id, {ann_cols}, last_mod_by_user_id)
+                        SELECT :new_pid, NULL, {ann_cols}, :owner_id
+                        FROM cat_annotations
+                        WHERE project_id = :pid AND deleted_at IS NULL
+                          AND (asset_id IS NULL OR asset_id NOT IN (SELECT asset_id FROM cat_project_assets WHERE project_id = :pid))
+                        """,
+                        {"new_pid": new_project_id, "owner_id": user_id, "pid": project_id},
+                    )
+
+                    # Overlay layers (style, order, visibility, type, lock flag) + their features.
+                    cursor.execute(
+                        "SELECT layer_id FROM cat_overlay_layers WHERE project_id = :pid ORDER BY display_order, layer_id",
+                        {"pid": project_id},
+                    )
+                    old_layer_ids = [r[0] for r in cursor.fetchall()]
+                    for old_layer in old_layer_ids:
+                        cursor.execute(
+                            """
+                            INSERT INTO cat_overlay_layers (
+                                project_id, layer_name, source_uri, source_epsg, target_epsg,
+                                style_json, is_active, display_order, layer_type, is_locked
+                            )
+                            SELECT :new_pid, layer_name, source_uri, source_epsg, target_epsg,
+                                   style_json, is_active, display_order, layer_type, is_locked
+                            FROM cat_overlay_layers WHERE layer_id = :old_layer
+                            """,
+                            {"new_pid": new_project_id, "old_layer": old_layer},
+                        )
+                        cursor.execute(
+                            "SELECT MAX(layer_id) FROM cat_overlay_layers WHERE project_id = :new_pid",
+                            {"new_pid": new_project_id},
+                        )
+                        new_layer = int(cursor.fetchone()[0])
+                        # Features come back locked (column default) with no stale lock owner.
+                        cursor.execute(
+                            """
+                            INSERT INTO cat_overlay_features (layer_id, feature_geojson, properties_json)
+                            SELECT :new_layer, feature_geojson, properties_json
+                            FROM cat_overlay_features WHERE layer_id = :old_layer ORDER BY feature_id
+                            """,
+                            {"new_layer": new_layer, "old_layer": old_layer},
+                        )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if "ORA-00001" in str(exc):
+            raise HTTPException(status_code=409, detail="You already have a project with this name")
+        logger.exception("duplicate_project failed for %s", project_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    _log_activity(new_project_id, user_id, "project_duplicated", {"source_project_id": project_id})
+    project = fetch_one("SELECT * FROM cat_projects WHERE project_id = :project_id", {"project_id": new_project_id})
+    return {"success": True, "project": _normalize_project_row(project)}
 
 
 # ---------------------------------------------------------------------------
@@ -1075,6 +1262,7 @@ def add_project_asset(
     _current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     project = fetch_one("SELECT project_id FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
     if not project:
@@ -2118,6 +2306,7 @@ def create_overlay_layer(
     _current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     project = fetch_one("SELECT project_id FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
     if not project:
@@ -2307,6 +2496,7 @@ def generate_transect_layers(
     any raster/mask auto-placement.
     """
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     project = fetch_one("SELECT project_id FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
     if not project:
@@ -2390,6 +2580,7 @@ def create_overlay_feature(
     _current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     layer = fetch_one(
         """
@@ -2653,6 +2844,7 @@ async def upload_shapefile_to_layer(
     Automatically imports all features from the shapefile into the layer.
     """
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     # Verify project exists
     project = fetch_one("SELECT project_id FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
@@ -2855,6 +3047,7 @@ async def upload_shapefile_loose_files(
     Accepts multiple files that together form one shapefile.
     """
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     project = fetch_one("SELECT project_id FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
     if not project:
@@ -2895,6 +3088,7 @@ def update_overlay_layer(
 ) -> Dict[str, Any]:
     """Update overlay layer metadata (name, style, is_active, display_order, is_locked)"""
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     # Verify layer exists and belongs to project
     layer = fetch_one(
@@ -2949,6 +3143,7 @@ def delete_overlay_layer(
 ) -> Dict[str, Any]:
     """Delete overlay layer and all associated features"""
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     # Verify layer exists
     layer = fetch_one(
@@ -2986,6 +3181,7 @@ def update_overlay_feature(
       - is_locked: 0/1 — lock gate for move/rotate/vertex-edit on this feature
     """
     _ensure_oracle_mode()
+    _require_project_role(project_id, current_user, "editor")
 
     # Verify feature belongs to the correct layer/project chain
     row = fetch_one(
@@ -3012,6 +3208,13 @@ def update_overlay_feature(
             # Caller sent a full Feature — store it as-is
             update_fields.append("feature_geojson = :feature_geojson")
             params["feature_geojson"] = json.dumps(geom)
+            # Keep the separate properties_json column in step with the
+            # Feature's own properties (e.g. Width_m/Length_m/Area_m2 after a
+            # vertex edit) unless the caller sent explicit properties below.
+            # Otherwise the two copies drift and resize/exports read stale sizes.
+            if "properties" not in payload and isinstance(geom.get("properties"), dict):
+                update_fields.append("properties_json = :properties_json")
+                params["properties_json"] = json.dumps(geom["properties"])
         else:
             # Caller sent just the geometry
             feature_obj = {"type": "Feature", "geometry": geom, "properties": payload.get("properties", {})}
@@ -3169,6 +3372,7 @@ def reorder_overlay_layers(
 ) -> Dict[str, Any]:
     """Reorder overlay layers by updating display_order"""
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     # Expect payload: {"layer_orders": [{"layer_id": 1, "display_order": 0}, ...]}
     layer_orders = payload.get("layer_orders", [])
@@ -3195,6 +3399,7 @@ def start_session(
     project_id: int, payload: SessionStart, _current_user: Dict[str, Any] = Depends(require_auth)
 ) -> Dict[str, Any]:
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     project = fetch_one("SELECT project_id FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
     if not project:
@@ -3242,6 +3447,7 @@ def update_session(
     project_id: int, session_id: int, payload: SessionUpdate, _current_user: Dict[str, Any] = Depends(require_auth)
 ) -> Dict[str, Any]:
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     session = fetch_one(
         """
@@ -3283,6 +3489,7 @@ def end_session(
     project_id: int, session_id: int, _current_user: Dict[str, Any] = Depends(require_auth)
 ) -> Dict[str, Any]:
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     session = fetch_one(
         """
@@ -3317,6 +3524,7 @@ def session_heartbeat(
 ) -> Dict[str, Any]:
     """Keep a session alive — call every ~5 minutes to prevent stale-session cleanup (4c)."""
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
 
     execute(
         """

@@ -909,6 +909,167 @@ DDL_BLOCKS: List[str] = [
     ON (dst.migration_id = src.mid)
     WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
     """,
+    # -----------------------------------------------------------------
+    # Team-lead annotation-form config, Phase 3 (docs/team-lead-config-plan.md):
+    # every dropdown option, for every configurable annotation field, in one
+    # table instead of duplicated as hardcoded lists in annotation.html, the
+    # edit modal (annotation-form.js), and the batch-fill/bulk-update modals
+    # (v2-table.js) — four copies of the same values that could already
+    # silently drift from each other. Same rule as species (Phase 2): a
+    # disabled option only affects what NEW selections offer; it never
+    # touches, hides, or revalidates an existing annotation's saved value.
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[
+            CREATE TABLE cat_annotation_field_options (
+                option_id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                field_name VARCHAR2(60) NOT NULL,
+                option_value VARCHAR2(120) NOT NULL,
+                option_label VARCHAR2(255),
+                display_order NUMBER DEFAULT 0 NOT NULL,
+                is_enabled NUMBER(1) DEFAULT 1 NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_cat_field_options UNIQUE (field_name, option_value)
+            )
+        ]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[CREATE INDEX idx_cat_field_options_field ON cat_annotation_field_options(field_name)]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    # Seed rows exactly matching today's hardcoded option lists, so importing
+    # this migration changes nothing about what annotators see until a team
+    # lead actually disables something. MERGE (not INSERT) so re-running is a
+    # no-op and a value a team lead already disabled stays disabled across
+    # every future deploy (the merge only inserts what's missing; it never
+    # overwrites is_enabled on a matched row).
+    """
+    MERGE INTO cat_annotation_field_options dst
+    USING (
+        SELECT 'transect' AS field_name, 'A' AS option_value, 'A' AS option_label, 1 AS display_order FROM DUAL UNION ALL
+        SELECT 'transect', 'B', 'B', 2 FROM DUAL
+    ) src
+    ON (dst.field_name = src.field_name AND dst.option_value = src.option_value)
+    WHEN NOT MATCHED THEN INSERT (field_name, option_value, option_label, display_order)
+        VALUES (src.field_name, src.option_value, src.option_label, src.display_order)
+    """,
+    """
+    MERGE INTO cat_annotation_field_options dst
+    USING (
+        SELECT 'segment' AS field_name, '0' AS option_value, '0' AS option_label, 1 AS display_order FROM DUAL UNION ALL
+        SELECT 'segment', '5', '5', 2 FROM DUAL UNION ALL
+        SELECT 'segment', '10', '10', 3 FROM DUAL UNION ALL
+        SELECT 'segment', '15', '15', 4 FROM DUAL
+    ) src
+    ON (dst.field_name = src.field_name AND dst.option_value = src.option_value)
+    WHEN NOT MATCHED THEN INSERT (field_name, option_value, option_label, display_order)
+        VALUES (src.field_name, src.option_value, src.option_label, src.display_order)
+    """,
+    """
+    MERGE INTO cat_annotation_field_options dst
+    USING (
+        SELECT 'morph_code' AS field_name, 'BR' AS option_value, 'BR - Branching' AS option_label, 1 AS display_order FROM DUAL UNION ALL
+        SELECT 'morph_code', 'CO', 'CO - Columnar', 2 FROM DUAL UNION ALL
+        SELECT 'morph_code', 'EN', 'EN - Encrusting', 3 FROM DUAL UNION ALL
+        SELECT 'morph_code', 'FO', 'FO - Foliaceous', 4 FROM DUAL UNION ALL
+        SELECT 'morph_code', 'FL', 'FL - Free-living', 5 FROM DUAL UNION ALL
+        SELECT 'morph_code', 'LA', 'LA - Laminar', 6 FROM DUAL UNION ALL
+        SELECT 'morph_code', 'MD', 'MD - Mounding', 7 FROM DUAL UNION ALL
+        SELECT 'morph_code', 'MA', 'MA - Massive', 8 FROM DUAL UNION ALL
+        SELECT 'morph_code', 'PL', 'PL - Plating', 9 FROM DUAL UNION ALL
+        SELECT 'morph_code', 'SM', 'SM - Submassive', 10 FROM DUAL UNION ALL
+        SELECT 'morph_code', 'SO', 'SO - Solitary', 11 FROM DUAL UNION ALL
+        SELECT 'morph_code', 'TB', 'TB - Tabular', 12 FROM DUAL
+    ) src
+    ON (dst.field_name = src.field_name AND dst.option_value = src.option_value)
+    WHEN NOT MATCHED THEN INSERT (field_name, option_value, option_label, display_order)
+        VALUES (src.field_name, src.option_value, src.option_label, src.display_order)
+    """,
+    # No bind variables here: bootstrap_schema() runs every DDL_BLOCKS entry
+    # with execute(ddl) and no params, so each Yes/No field is spelled out
+    # literally rather than parameterized.
+    """
+    MERGE INTO cat_annotation_field_options dst
+    USING (
+        SELECT 'no_colony' AS field_name, '0' AS option_value, 'No' AS option_label, 1 AS display_order FROM DUAL UNION ALL
+        SELECT 'no_colony', '-1', 'Yes', 2 FROM DUAL UNION ALL
+        SELECT 'juvenile', '0', 'No', 1 FROM DUAL UNION ALL
+        SELECT 'juvenile', '-1', 'Yes', 2 FROM DUAL UNION ALL
+        SELECT 'remnant', '0', 'No', 1 FROM DUAL UNION ALL
+        SELECT 'remnant', '-1', 'Yes', 2 FROM DUAL UNION ALL
+        SELECT 'ex_bound', '0', 'No', 1 FROM DUAL UNION ALL
+        SELECT 'ex_bound', '-1', 'Yes', 2 FROM DUAL
+    ) src
+    ON (dst.field_name = src.field_name AND dst.option_value = src.option_value)
+    WHEN NOT MATCHED THEN INSERT (field_name, option_value, option_label, display_order)
+        VALUES (src.field_name, src.option_value, src.option_label, src.display_order)
+    """,
+    # JUV_SUBSTRATE_OPTIONS (annotation-form.js) — a free-typed autocomplete
+    # today, not a <select>, but the same "team lead curates the suggestion
+    # list" idea applies. No display label distinct from the code.
+    """
+    MERGE INTO cat_annotation_field_options dst
+    USING (
+        SELECT 'juv_substrate' AS field_name, 'CCAH' AS option_value, 'CCAH' AS option_label, 1 AS display_order FROM DUAL UNION ALL
+        SELECT 'juv_substrate', 'CCAR', 'CCAR', 2 FROM DUAL UNION ALL
+        SELECT 'juv_substrate', 'TURFH', 'TURFH', 3 FROM DUAL UNION ALL
+        SELECT 'juv_substrate', 'TURFR', 'TURFR', 4 FROM DUAL UNION ALL
+        SELECT 'juv_substrate', 'EMA', 'EMA', 5 FROM DUAL UNION ALL
+        SELECT 'juv_substrate', 'PESP', 'PESP', 6 FROM DUAL UNION ALL
+        SELECT 'juv_substrate', 'LOBO', 'LOBO', 7 FROM DUAL UNION ALL
+        SELECT 'juv_substrate', 'HARD', 'HARD', 8 FROM DUAL UNION ALL
+        SELECT 'juv_substrate', 'CORAL', 'CORAL', 9 FROM DUAL UNION ALL
+        SELECT 'juv_substrate', 'RUB', 'RUB', 10 FROM DUAL UNION ALL
+        SELECT 'juv_substrate', 'HALI', 'HALI', 11 FROM DUAL
+    ) src
+    ON (dst.field_name = src.field_name AND dst.option_value = src.option_value)
+    WHEN NOT MATCHED THEN INSERT (field_name, option_value, option_label, display_order)
+        VALUES (src.field_name, src.option_value, src.option_label, src.display_order)
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0015' AS mid, 'Team-lead annotation-form config: cat_annotation_field_options table, seeded from the previously-hardcoded option lists' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
+    # -----------------------------------------------------------------
+    # Team-lead annotation-form config, Phase 4 candidate (docs/team-lead-
+    # config-plan.md): a deployment-wide default VALUE per field, sitting
+    # beneath the existing session (localStorage "Set Defaults") and account
+    # (Preferences -> Default annotation settings) tiers in v2-defaults.js —
+    # applied only when neither of those has already set a value. Empty
+    # table = no behavior change from today.
+    # -----------------------------------------------------------------
+    """
+    BEGIN
+        EXECUTE IMMEDIATE q'[
+            CREATE TABLE cat_annotation_field_defaults (
+                field_name VARCHAR2(60) NOT NULL PRIMARY KEY,
+                default_value VARCHAR2(255) NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_by_user_id NUMBER
+            )
+        ]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0016' AS mid, 'Team-lead annotation-form config: cat_annotation_field_defaults table (deployment-wide default values)' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+    """,
 ]
 
 

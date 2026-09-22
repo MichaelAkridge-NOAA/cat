@@ -25,7 +25,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+
+from cat.api.auth import require_auth
 
 router = APIRouter(prefix="/api/annotations", tags=["annotation-import"])
 
@@ -240,6 +242,7 @@ async def preview_shapefile_components(
     prj_file: Optional[UploadFile] = File(None),
     cpg_file: Optional[UploadFile] = File(None),
     xml_file: Optional[UploadFile] = File(None),
+    _current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
     """Inspect an uploaded shapefile and describe its columns.
 
@@ -311,6 +314,7 @@ async def execute_shapefile_components(
     mission_id: Optional[str] = Form(None),
     site_name: Optional[str] = Form(None),
     ortho_file: Optional[str] = Form(None),
+    _current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
     """Convert shapefile features into CAT annotations using a column mapping.
 

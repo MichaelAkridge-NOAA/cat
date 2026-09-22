@@ -22,6 +22,7 @@
 
     async function runAutoSave() {
       if (!isOracleProjectMode()) return;
+      if (window.catReadOnly) return; // view-only: the server would 403 every write
       if (!hasUnsavedChanges) {
         if (lastSaveTime) {
           const secs = Math.round((Date.now() - lastSaveTime) / 1000);
@@ -122,7 +123,7 @@
         autoSaveRetryCount = 0;
         if (autoSaveRetryTimeoutId) { clearTimeout(autoSaveRetryTimeoutId); autoSaveRetryTimeoutId = null; }
         const badge = document.getElementById('autoSaveBadge');
-        if (badge) badge.style.cursor = '';
+        if (badge) { badge.style.cursor = ''; badge.onclick = null; }
         // Exit degraded mode if we were in it (5c)
         _exitDegradedMode();
         setAutoSaveBadge('saved', '✅ Auto-saved');
@@ -151,15 +152,20 @@
           const badge = document.getElementById('autoSaveBadge');
           if (badge) {
             badge.style.cursor = 'pointer';
-            badge.addEventListener('click', () => {
+            // Assign (not addEventListener): every later failed auto-save runs
+            // this branch again, and stacked listeners made one click fire the
+            // backup export several times. Cleared on the next successful save.
+            badge.onclick = () => {
               if (typeof exportProjectData === 'function') exportProjectData();
-            }, { once: true });
+            };
           }
           // Diagnose: is it a full outage or just a DB error? (5c)
+          // Nothing is persisted locally — unsaved work exists only in this
+          // tab — so say that, and point at the export.
           _checkConnectivity().then(online => {
             const label = online
-              ? '⚠️ Database unreachable — working offline. Changes are saved locally.'
-              : '📡 No network connection — working offline. Changes are saved locally.';
+              ? '⚠️ Save failed — the database is unreachable. Your changes are NOT saved and exist only in this tab. Export a backup and do not close the page.'
+              : '📡 No network connection. Your changes are NOT saved and exist only in this tab. Export a backup and do not close the page.';
             _enterDegradedMode(label);
           });
         }

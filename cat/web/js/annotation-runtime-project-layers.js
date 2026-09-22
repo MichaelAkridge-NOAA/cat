@@ -262,6 +262,10 @@
       }
 
       const snapshot = await response.json();
+      // Everyone may view every project; only owner/editor may change it.
+      // Set before anything else initializes so the edit tools never arm.
+      window.catProjectRole = snapshot.my_role || 'viewer';
+      window.catReadOnly = window.catProjectRole === 'viewer';
       currentProject = transformDbSnapshotToProject(snapshot);
       projectAnnotations = (snapshot.annotations || []).map((a) => {
         // Use normalizeDbAnnotationResponse to preserve _dbAnnotationId / _dbAnnotationVersion
@@ -289,8 +293,13 @@
       // styles this panel as a flex column when docked, and an inline 'block'
       // would beat that stylesheet.
       document.getElementById('mapLayersPanel').style.display = '';
-      document.getElementById('annotationFormPanel').style.display = 'block';
-      document.getElementById('saveProjectBtn').style.display = 'block';
+      if (window.catReadOnly) {
+        // Leave the form panel and Save button hidden; show the view-only banner.
+        if (typeof catApplyReadOnlyMode === 'function') catApplyReadOnlyMode(numericId, currentProject);
+      } else {
+        document.getElementById('annotationFormPanel').style.display = 'block';
+        document.getElementById('saveProjectBtn').style.display = 'block';
+      }
 
       const siteBadge = document.getElementById('mapLayersSiteBadge');
       if (siteBadge) {
@@ -316,6 +325,7 @@
 
       // Start DB annotation session (best effort)
       try {
+        if (window.catReadOnly) throw new Error('view-only: no annotation session');
         const analyst = document.getElementById('analyst')?.value || 'unknown';
         const sessionResp = await fetch(`${serverUrl}/api/db/projects/${numericId}/sessions/start`, {
           method: 'POST',
@@ -628,7 +638,11 @@
 
         checkbox.addEventListener('change', (e) => {
           if (e.target.checked) {
-            loadTifLayer(tif);
+            loadTifLayer(tif).catch((err) => {
+              console.error('Failed to load raster layer:', err);
+              e.target.checked = false;
+              if (typeof showStatus === 'function') showStatus(`Could not load ${tif.name}: ${err.message || err}`, 'error');
+            });
             if (isDEM && opacitySlider) opacitySlider.disabled = false;
             if (isDEM && colormapSelect) colormapSelect.disabled = false;
           } else {
@@ -656,7 +670,10 @@
 
         // Auto-load orthomosaic TIF
         if (shouldAutoLoad) {
-          loadTifLayer(tif);
+          loadTifLayer(tif).catch((err) => {
+            console.error('Failed to auto-load raster layer:', err);
+            if (typeof showStatus === 'function') showStatus(`Could not load ${tif.name}: ${err.message || err}`, 'error');
+          });
           if (isDEM && opacitySlider) opacitySlider.disabled = false;
           if (isDEM && colormapSelect) colormapSelect.disabled = false;
         }
@@ -1079,6 +1096,32 @@
         </div>
 
         <div class="cog-drawer-section">
+          <div class="cog-drawer-section-title">Band &amp; Colormap</div>
+          <div class="cog-drawer-row">
+            <label>Band</label>
+            <select id="d_band" style="width:100%;padding:5px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">
+              <option value="">Natural color (RGB)</option>
+            </select>
+          </div>
+          <div class="cog-drawer-row">
+            <label>Colormap <span style="color:#999;">(single band)</span></label>
+            <select id="d_colormap" style="width:100%;padding:5px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">
+              <option value="">None (grayscale)</option>
+              <option value="viridis">Viridis</option>
+              <option value="magma">Magma</option>
+              <option value="inferno">Inferno</option>
+              <option value="plasma">Plasma</option>
+              <option value="cividis">Cividis</option>
+              <option value="turbo">Turbo</option>
+              <option value="rdylgn">Red-Yellow-Green</option>
+              <option value="ocean">Ocean</option>
+              <option value="terrain">Terrain</option>
+            </select>
+          </div>
+          <div style="font-size:10px;color:#aaa;">Pick a band to render it alone with a colormap. Tone and color-balance sliders apply to natural color only.</div>
+        </div>
+
+        <div class="cog-drawer-section">
           <div class="cog-drawer-section-title">Presets</div>
           <div style="display:flex;gap:4px;">
             <button class="cog-preset-btn" id="d_presetNatural">Natural</button>
@@ -1148,9 +1191,28 @@
       });
       q('d_hue').addEventListener('input', e => { const v = parseInt(e.target.value); q('d_hueValue').textContent = v; setPane('hueRotate', v); });
 
+      // Band & colormap. The band list is filled once /info answers.
+      q('d_band').addEventListener('change', e => setVis('band', e.target.value ? Number(e.target.value) : null));
+      q('d_colormap').addEventListener('change', e => setVis('colormap', e.target.value || null));
+      q('d_colormap').value = v('colormap', '') || '';
+      getCogBandCount(tif).then(n => {
+        const sel = document.getElementById('d_band');
+        if (!sel || !n || n < 2) return;
+        for (let i = 1; i <= n; i++) {
+          const opt = document.createElement('option');
+          opt.value = String(i);
+          opt.textContent = `Band ${i}`;
+          sel.appendChild(opt);
+        }
+        sel.value = v('band', '') ? String(v('band', '')) : '';
+      });
+
       // Sync drawer sliders from state (called by applyPreset)
       const syncDrawer = () => {
         const vs2 = cogVisualSettings[tif.id] || {};
+        const bandSel = q('d_band'), cmapSel = q('d_colormap');
+        if (bandSel) bandSel.value = vs2.band ? String(vs2.band) : '';
+        if (cmapSel) cmapSel.value = vs2.colormap || '';
         const ps2 = cogPaneSettings[tif.id]   || {};
         const vv = (k,d) => vs2[k] ?? d;
         const pp = (k,d) => ps2[k] ?? d;
@@ -1286,6 +1348,41 @@
     // /api/check-cog-crs just to re-derive the same answer (see debug_readme.md).
     const cogCrsCache = {};
 
+    // Band count per COG (from TiTiler /info), cached for the same reason as the
+    // CRS lookup above. Resolves to null when it can't be determined, in which
+    // case callers fall back to the previous behavior.
+    const cogBandCountCache = {};
+    async function getCogBandCount(tif) {
+      const key = tif.cog_path;
+      if (key in cogBandCountCache) return cogBandCountCache[key];
+      let count = null;
+      try {
+        const resp = await fetch(`${serverUrl}/info?url=${encodeURIComponent(toGdalPath(tif.cog_path))}`);
+        if (resp.ok) {
+          const info = await resp.json();
+          const n = Number(info.count ?? (Array.isArray(info.band_metadata) ? info.band_metadata.length : NaN));
+          if (Number.isFinite(n) && n > 0) count = n;
+        }
+      } catch (e) {
+        console.warn('Could not read COG band count:', e);
+      }
+      if (count !== null) cogBandCountCache[key] = count; // don't cache failures
+      return count;
+    }
+
+    // Project-mode tile layers used to share the default tile pane, so
+    // z-order was just insertion order and any settings reload put an
+    // orthomosaic on top of an already-loaded DEM. Ortho 250 sits above the
+    // basemap (200); DEM 300 sits above ortho.
+    function ensureRasterPane(isDEM) {
+      const name = isDEM ? 'demPane' : 'cogProjectPane';
+      if (!map.getPane(name)) {
+        map.createPane(name);
+        map.getPane(name).style.zIndex = isDEM ? 300 : 250;
+      }
+      return name;
+    }
+
     async function loadTifLayer(tif, requestedVersion = null) {
       const version = requestedVersion ?? ((cogLoadVersions[tif.id] || 0) + 1);
       cogLoadVersions[tif.id] = version;
@@ -1339,23 +1436,27 @@
         
         try {
           // Fetch statistics to get proper rescale values
-          const statsUrl = `${serverUrl}/statistics?url=${cogPath}`;
-          const statsResponse = await fetch(statsUrl);
-          const stats = await statsResponse.json();
-          
-          console.log('DEM statistics:', stats);
-          
-          // Handle different statistics response formats
-          const bandStats = stats.b1 || stats['1'] || (stats.statistics && stats.statistics[0]) || {};
-          
-          // Use percentiles if available (more robust than min/max with outliers)
-          const min = bandStats.percentile_2 || bandStats.min || -10;
-          const max = bandStats.percentile_98 || bandStats.max || 10;
-          
-          console.log('Using DEM rescale:', min, 'to', max);
-          
+          const userRescale = (cogVisualSettings[tif.id] || {}).rescale;
+          let rescale = userRescale || null;
+          if (!rescale) {
+            const statsUrl = `${serverUrl}/statistics?url=${cogPath}`;
+            const statsResponse = await fetch(statsUrl);
+            if (!statsResponse.ok) throw new Error(`Statistics request failed (HTTP ${statsResponse.status})`);
+            const stats = await statsResponse.json();
+
+            // Handle different statistics response formats
+            const bandStats = stats.b1 || stats['1'] || (stats.statistics && stats.statistics[0]) || {};
+
+            // Percentiles are more robust than min/max with outliers. Use ??
+            // (not ||): a legitimate 2nd percentile of 0 must not be replaced.
+            const pick = (...vals) => vals.find(v => Number.isFinite(Number(v)) && v !== null && v !== '');
+            const min = pick(bandStats.percentile_2, bandStats.min) ?? -10;
+            const max = pick(bandStats.percentile_98, bandStats.max) ?? 10;
+            rescale = `${min},${max}`;
+          }
+
           // Add DEM parameters: band index, colormap, and rescale
-          tileUrl += `&bidx=1&colormap_name=${colormap}&rescale=${min},${max}`;
+          tileUrl += `&bidx=1&colormap_name=${colormap}&rescale=${rescale}`;
         } catch (error) {
           console.warn('Could not fetch DEM statistics, using defaults:', error);
           tileUrl += `&bidx=1&colormap_name=${colormap}&rescale=-10,10`;
@@ -1365,9 +1466,24 @@
       // For non-DEM COGs, apply any stored visual settings
       if (!isDEM) {
         const vs = cogVisualSettings[tif.id] || {};
-        const formula = buildColorFormula(vs);
-        if (formula)  tileUrl += `&color_formula=${encodeURIComponent(formula)}`;
-        if (vs.rescale) tileUrl += `&rescale=${vs.rescale}`;
+        const bandCount = await getCogBandCount(tif);
+        if (cogLoadVersions[tif.id] !== version) return null;
+        const singleBand = Number(vs.band) > 0 ? Number(vs.band) : (bandCount === 1 ? 1 : null);
+        if (singleBand) {
+          // Single-band render (user picked a band, or the file only has one):
+          // RGB color formulas don't apply, but a colormap + stretch do.
+          tileUrl += `&bidx=${singleBand}`;
+          if (vs.colormap) tileUrl += `&colormap_name=${encodeURIComponent(vs.colormap)}`;
+          if (vs.rescale)  tileUrl += `&rescale=${vs.rescale}`;
+        } else {
+          const formula = buildColorFormula(vs);
+          // rio-color's "RGB" operations need exactly 3 bands. Drone mosaics are
+          // often RGBA, so select bands 1-3 explicitly when a formula is used
+          // (the alpha/nodata mask is still applied by the tiler).
+          if (formula && bandCount && bandCount >= 4) tileUrl += `&bidx=1&bidx=2&bidx=3`;
+          if (formula)    tileUrl += `&color_formula=${encodeURIComponent(formula)}`;
+          if (vs.rescale) tileUrl += `&rescale=${vs.rescale}`;
+        }
       }
 
       console.log('🔧 Loading TIF layer:', {
@@ -1408,6 +1524,7 @@
         errorTileUrl: '',  // Don't show broken image icons
         crossOrigin: true,
         noWrap: true,
+        pane: ensureRasterPane(isDEM),
         bounds: rasterBounds || undefined
       });
 
@@ -1439,17 +1556,38 @@
         if (tileErrorCount <= 3) {
           console.error('❌ Tile load error #' + tileErrorCount + ':', error.tile.src);
         }
-        if (tileErrorCount === 1 && typeof showStatus === 'function') {
-          showStatus(`Could not render COG settings for ${tif.name}`, 'error');
-        }
         if (tileErrorCount === 10) {
           console.error('⚠️ Suppressing further tile error messages...');
         }
+        // A flyTo/flyToBounds animation (zoomToSite, opening a project, a
+        // bookmark) passes through low intermediate zoom levels on its way
+        // to where it settles — fitBounds/setView never painted those, so
+        // this always-latent failure mode (a COG's real footprint is tiny
+        // next to a low-zoom WebMercator tile; TiTiler has nothing to
+        // return for the rest of that tile) only became visible once flying
+        // started actually requesting them. The failing tile's own zoom
+        // can't be compared against the map's current zoom to tell a
+        // fly-through frame from a settled one — Leaflet always requests
+        // tiles for whatever zoom it's AT, so the two are the same value at
+        // request time by construction. What actually distinguishes them is
+        // TIME: debounce the user-facing toast so it only fires once tile
+        // errors have stopped arriving for a beat with the map at rest — a
+        // fly-through failure stops the moment the animation lands, while a
+        // real failure (bad URL, COG genuinely unreachable) keeps erroring
+        // at the resting zoom and the toast fires ~2s after settling.
+        clearTimeout(tileErrorVerdictTimer);
+        tileErrorVerdictTimer = setTimeout(() => {
+          if (tileErrorCount >= 3 && typeof showStatus === 'function') {
+            showStatus(`Could not render COG settings for ${tif.name}`, 'error');
+          }
+          tileErrorCount = 0;
+        }, 2000); // must exceed the 1.2s flyTo/flyToBounds duration used elsewhere in this file
       });
-      
+
       // Track tile loading (only log first few to avoid spam)
       let tileLoadCount = 0;
       let tileErrorCount = 0;
+      let tileErrorVerdictTimer = null;
       
       layer.on('tileloadstart', (e) => {
         if (tileLoadCount < 3) {
@@ -1512,7 +1650,13 @@
         });
 
         if (Object.keys(tifLayers).length === 1) {
-          map.fitBounds(projectBounds, { padding: [50, 50], maxZoom: 22 });
+          // flyToBounds, not fitBounds: this is usually a large jump from
+          // wherever the map defaulted to, and Leaflet's plain fitBounds
+          // animation silently skips the animation for a big enough zoom
+          // delta (it just snaps). flyTo's easing handles any distance
+          // smoothly, so opening a project always feels like arriving
+          // somewhere rather than a jump-cut.
+          map.flyToBounds(projectBounds, { padding: [50, 50], maxZoom: 22, duration: 1.2 });
           console.log('🎯 Zoomed to LOCAL_CS imagery bounds via VRT');
         }
         showCrsWarning('LOCAL_CS');
@@ -1529,7 +1673,7 @@
           if (fallback) {
             console.log(`📍 Using metadata fallback center: ${fallback.lat}, ${fallback.lon}`);
             if (Object.keys(tifLayers).length === 1) {
-              map.setView([fallback.lat, fallback.lon], 18, { animate: true });
+              map.flyTo([fallback.lat, fallback.lon], 18, { duration: 1.2 });
               console.log('🎯 Zoomed to metadata site location');
             }
             showCrsWarning(boundsCheck.reason);
@@ -1550,7 +1694,7 @@
             console.warn('⚠️ Bounds look invalid (out of lat/lon range):', boundsToUse);
             const fallback = getMetadataFallbackCenter();
             if (fallback && Object.keys(tifLayers).length === 1) {
-              map.setView([fallback.lat, fallback.lon], 18, { animate: true });
+              map.flyTo([fallback.lat, fallback.lon], 18, { duration: 1.2 });
               showCrsWarning('projected coordinates');
               showStatus('⚠️ COG bounds out of range — centred on site metadata', 'warning');
             }
@@ -1565,7 +1709,7 @@
             });
 
             if (Object.keys(tifLayers).length === 1) {
-              map.fitBounds(projectBounds, { padding: [50, 50], maxZoom: 22 });
+              map.flyToBounds(projectBounds, { padding: [50, 50], maxZoom: 22, duration: 1.2 });
               console.log('🎯 Zoomed to layer bounds:', projectBounds);
             }
           }
@@ -1583,8 +1727,12 @@
       if (tifLayers[tifId]) {
         map.removeLayer(tifLayers[tifId]);
         
-        // If this is the DEM layer, hide controls and clear reference
-        if (tifLayers[tifId] === demLayer) {
+        // If this is the DEM layer, hide controls and clear reference.
+        // typeof guard: `demLayer` is only ever created (as an implicit
+        // global) when a DEM loads, so reading it bare threw a ReferenceError
+        // on every reload of an orthomosaic — which silently killed every COG
+        // settings change (gamma, saturation, band, colormap...).
+        if (typeof demLayer !== 'undefined' && tifLayers[tifId] === demLayer) {
           demLayer = null;
           const demControls = document.getElementById('demGlobalControls');
           if (demControls) {

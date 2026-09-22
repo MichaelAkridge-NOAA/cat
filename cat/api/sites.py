@@ -26,7 +26,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from cat.api.auth import get_current_user, require_admin
+from cat.api.auth import require_admin, require_auth
 from cat.db.config import is_oracle_backend_enabled
 from cat.db.sites import (
     _asset_kind_from_uri,
@@ -134,7 +134,7 @@ def sites_status():
 # ---------------------------------------------------------------------------
 
 @router.post("/seed")
-def seed_sites():
+def seed_sites(_admin: dict = Depends(require_admin)):
     if not _use_db():
         raise HTTPException(
             status_code=400,
@@ -160,8 +160,10 @@ class LoadReportRequest(BaseModel):
 
 
 @router.post("/load-gcs-report")
-def load_gcs_report(body: LoadReportRequest, _user: Optional[dict] = Depends(get_current_user)):
-    if body.sync and (not _user or _user.get("role") != "admin"):
+def load_gcs_report(body: LoadReportRequest, _user: dict = Depends(require_auth)):
+    # Login is the floor (this reads a local file glob); a DB write (sync)
+    # additionally requires admin.
+    if body.sync and _user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin role required for sync mode")
     report_path_str = (body.report_path or "").strip()
     if report_path_str:
@@ -286,8 +288,10 @@ def _list_gcs_public(gcs_prefix: str, pattern: str) -> list[str]:
 
 
 @router.post("/scan-gcs")
-def scan_gcs(body: ScanGCSRequest, _user: Optional[dict] = Depends(get_current_user)):
-    if body.sync and (not _user or _user.get("role") != "admin"):
+def scan_gcs(body: ScanGCSRequest, _user: dict = Depends(require_auth)):
+    # Login is the floor (this can shell out to gsutil / list a GCS bucket);
+    # a DB write (sync) additionally requires admin.
+    if body.sync and _user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin role required for sync mode")
 
     prefix = body.gcs_prefix.rstrip("/")

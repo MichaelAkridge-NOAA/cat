@@ -94,7 +94,10 @@
     const bookmarks = getBookmarks();
     const b = bookmarks[index];
     if (!b || typeof map === 'undefined' || !map) return;
-    map.setView([b.lat, b.lng], b.zoom);
+    // flyTo: jumping to a saved bookmark is often a big, deliberate move
+    // (a different corner of the site, or a very different zoom level) —
+    // a smooth arrival reads as intentional navigation, not a jump-cut.
+    map.flyTo([b.lat, b.lng], b.zoom, { duration: 1 });
     closeBookmarksModal();
   };
 

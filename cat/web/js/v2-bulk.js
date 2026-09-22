@@ -636,6 +636,18 @@
 
         e.preventDefault();
         e.stopImmediatePropagation(); // prevent annotation-undo.js from also firing
+
+        // Mid-draw (placing points on the current transect/segment line, not
+        // yet finished) Ctrl+Z must remove the last placed POINT, matching
+        // every other drawing tool — not the previous COMPLETED shape from
+        // earlier in this bulk session. Without this, correcting a
+        // just-placed point by reflex (Ctrl+Z) instead silently deleted a
+        // finished, already-drawn annotation while the bad point stayed put.
+        const vertexHandler = window.catGetActiveDrawVertexHandler && window.catGetActiveDrawVertexHandler();
+        if (vertexHandler) {
+          vertexHandler.deleteLastVertex();
+          return;
+        }
         undoLastDraw();
       }
     });

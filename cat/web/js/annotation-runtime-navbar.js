@@ -72,6 +72,12 @@
     function createToast(message, type) {
       const container = document.getElementById('toastContainer');
       if (!container) return;
+      // An identical toast that is still showing (repeated hints while
+      // dragging, rapid re-selection) adds nothing — don't stack duplicates.
+      const dupe = Array.from(container.children).some(
+        c => !c.classList.contains('exit') && c.textContent === message && c.classList.contains(type)
+      );
+      if (dupe) return;
       const el = document.createElement('div');
       el.className = 'cat-toast ' + type;
       // Strip emoji prefix for cleaner look (keep if it's the whole message)
@@ -81,9 +87,16 @@
       // Auto-dismiss
       const dur = TOAST_DURATION[type] || 3000;
       setTimeout(() => dismissToast(el), dur);
-      // Cap at 4 toasts visible
-      while (container.children.length > 4) {
-        dismissToast(container.firstElementChild);
+      // Cap at 4 toasts visible. Only count toasts that aren't already
+      // leaving: dismissToast() just tags an element 'exit' and removes it
+      // 220ms later, so the old `while (children.length > 4) dismiss(first)`
+      // loop spun forever once 6+ toasts appeared within that window (the
+      // first child was already 'exit', dismissToast returned early, and the
+      // timer that would remove it can't run inside a synchronous loop) —
+      // freezing and then crashing the tab on any burst of status messages.
+      const live = Array.from(container.children).filter(c => !c.classList.contains('exit'));
+      while (live.length > 4) {
+        dismissToast(live.shift());
       }
     }
 

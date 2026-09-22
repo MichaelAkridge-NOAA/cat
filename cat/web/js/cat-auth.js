@@ -64,6 +64,18 @@
     });
   }
 
+  // team_lead is a strict SUBSET of admin (deployment-wide annotation-form
+  // config only — see docs/team-lead-config-plan.md); admin also passes.
+  function requireTeamLead(loginPath) {
+    return requireLogin(loginPath).then(function (user) {
+      if (user && user.role !== 'admin' && user.role !== 'team_lead') {
+        window.location.href = '/';
+        return null;
+      }
+      return user;
+    });
+  }
+
   function logout() {
     return fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).then(function () {
       _userPromise = null;
@@ -103,6 +115,14 @@
             menu.appendChild(debugLink);
           }
 
+          if (data.user.role === 'admin' || data.user.role === 'team_lead') {
+            var speciesConfigLink = document.createElement('a');
+            speciesConfigLink.href = '/species_config.html';
+            speciesConfigLink.className = 'cat-topnav-link';
+            speciesConfigLink.textContent = 'Annotation Config';
+            menu.appendChild(speciesConfigLink);
+          }
+
           var prefsLink = document.createElement('a');
           prefsLink.href = '/user_preferences.html';
           prefsLink.className = 'cat-topnav-link';
@@ -136,6 +156,7 @@
     fetchCurrentUser: fetchCurrentUser,
     requireLogin: requireLogin,
     requireAdmin: requireAdmin,
+    requireTeamLead: requireTeamLead,
     logout: logout
   };
 

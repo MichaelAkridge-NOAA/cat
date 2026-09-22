@@ -49,11 +49,15 @@
     if (!window.v2Table) return 0;
 
     let count = 0;
+    // Index once instead of annotations.indexOf() per layer (O(layers x
+    // annotations) — very slow on large projects).
+    const idxByData = new Map();
+    annotations.forEach((a, i) => idxByData.set(a, i));
     drawnItems.eachLayer(layer => {
       if (!layer.annotationData) return;
       const c = _centroid(layer);
       if (!c) return;
-      const idx = annotations.indexOf(layer.annotationData);
+      const idx = idxByData.has(layer.annotationData) ? idxByData.get(layer.annotationData) : -1;
       if (idx < 0) return;
       if (_pip(c, polygon)) {
         window.v2Table.addToSelection(idx);
@@ -77,8 +81,12 @@
   }
 
   function _deactivateLasso() {
+    // Escape (or a tool switch) mid-drag: mousedown disabled map panning, and
+    // the mouseup that would re-enable it may never be handled now.
+    const wasDrawing = drawing;
     lassoActive = false;
     drawing = false;
+    if (wasDrawing && map && map.dragging) map.dragging.enable();
     lassoPoints = [];
     if (lassoBtn) lassoBtn.classList.remove('active');
     if (map) map.getContainer().style.cursor = '';
@@ -227,8 +235,11 @@
 
     _injectStyles();
 
-    // Wait for the v2 toolbar to be injected by v2-bulk.js
+    // Wait for the v2 toolbar to be injected by v2-bulk.js. Give up after ~30s
+    // rather than polling forever if the toolbar never appears.
+    let polls = 0;
     const poll = setInterval(() => {
+      if (++polls > 200) { clearInterval(poll); return; }
       if (document.querySelector('.v2-toolbar-inline')) {
         clearInterval(poll);
         _injectButton();
@@ -238,7 +249,10 @@
         if (!container) { console.warn('v2-lasso: no map container; lasso disabled'); return; }
         container.addEventListener('mousedown', _onMouseDown);
         container.addEventListener('mousemove', _onMouseMove);
-        container.addEventListener('mouseup', _onMouseUp);
+        // mouseup on document (capture): a release outside the map container
+        // (easy with the docked sidebar) never reached a container listener,
+        // leaving the lasso mid-draw with map panning disabled.
+        document.addEventListener('mouseup', _onMouseUp, true);
         document.addEventListener('keydown', _onKeyDown);
 
         // Deactivate lasso when bulk mode turns on

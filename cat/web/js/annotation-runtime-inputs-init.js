@@ -176,9 +176,15 @@
     // JUV_SUBSTRATE AUTOCOMPLETE
     // =========================================================================
     
-    const JUV_SUBSTRATE_OPTIONS = [
-      'CCAH', 'CCAR', 'TURFH', 'TURFR', 'EMA', 'PESP', 'LOBO', 'HARD', 'CORAL', 'RUB', 'HALI'
-    ];
+    // Team-lead-configured (docs/team-lead-config-plan.md, Phase 3). Read
+    // live rather than snapshotted at load, so a team lead's later edit
+    // takes effect without needing a page reload; falls back to today's
+    // hardcoded list if the config hasn't loaded (or isn't available).
+    function JUV_SUBSTRATE_OPTIONS_LIVE() {
+      return window.CatFieldOptions
+        ? window.CatFieldOptions.getValues('juv_substrate')
+        : ['CCAH', 'CCAR', 'TURFH', 'TURFR', 'EMA', 'PESP', 'LOBO', 'HARD', 'CORAL', 'RUB', 'HALI'];
+    }
     
     let juvSubstrateAutocompleteTimeout = null;
     let juvSubstrateAutocompleteSelectedIndex = -1;
@@ -284,7 +290,7 @@
       const dropdown = document.getElementById('juv-substrate-autocomplete');
       
       // Filter options based on query
-      juvSubstrateAutocompleteResults = JUV_SUBSTRATE_OPTIONS.filter(option => 
+      juvSubstrateAutocompleteResults = JUV_SUBSTRATE_OPTIONS_LIVE().filter(option => 
         option.includes(query)
       );
       

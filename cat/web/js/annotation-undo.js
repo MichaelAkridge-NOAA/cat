@@ -251,6 +251,28 @@ document.addEventListener('keydown', function (e) {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
     if (window.v2BulkMode && window.v2BulkMode.enabled) return;
     e.preventDefault();
+    // Mid-draw (placing points on a polyline/polygon/transect, not yet
+    // finished), Ctrl+Z matches every other drawing tool's muscle memory:
+    // remove the last placed point. Without this it silently undid the
+    // PREVIOUSLY SAVED annotation instead — the in-progress shape you were
+    // actually trying to correct was untouched, and something you'd already
+    // saved vanished instead. Same handler Backspace already uses.
+    const vertexHandler = window.catGetActiveDrawVertexHandler && window.catGetActiveDrawVertexHandler();
+    if (vertexHandler) {
+      vertexHandler.deleteLastVertex();
+      return;
+    }
+    // A shape that's finished drawing (double-clicked to close the line) but
+    // not yet saved has no undo-stack entry — undoPushAdd only happens on
+    // Save — so Ctrl+Z here used to either say "nothing to undo" or, worse,
+    // undo a previously SAVED annotation while the just-drawn unsaved shape
+    // sat there untouched. Ctrl+Z should discard it, same as Escape and the
+    // Discard button already do (window.discardCurrentAnnotation, shell-init.js).
+    if (typeof currentAnnotation !== 'undefined' && currentAnnotation && currentAnnotation.layer &&
+        !currentAnnotation.layer.annotationData && typeof window.discardCurrentAnnotation === 'function') {
+      window.discardCurrentAnnotation();
+      return;
+    }
     undoLastAction();
     return;
   }

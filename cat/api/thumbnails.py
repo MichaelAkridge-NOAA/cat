@@ -24,12 +24,14 @@ place.
 import hashlib
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
+from cat.api.auth import require_auth
 from cat.gdal_env import GCS_GDAL_ENV, gdal_path
 
 logger = logging.getLogger(__name__)
@@ -194,9 +196,20 @@ def render_cached_thumbnail(url: str, size: int, refresh: bool = False) -> Path:
     # Write via a temp file in the same directory, then replace: two requests
     # for the same uncached thumbnail arrive together on any project list, and
     # a half-written PNG served to the first one would be cached by the browser.
-    tmp = path.with_suffix(f".{hashlib.sha1(png[:64]).hexdigest()[:8]}.tmp")
-    tmp.write_bytes(png)
-    tmp.replace(path)
+    # The temp name must be unique PER REQUEST: it used to be derived from the
+    # PNG's own first bytes, so two concurrent renders of the same source
+    # produced identical PNGs, shared one temp path, and the loser's replace()
+    # failed (surfacing as a 404 for that thumbnail).
+    tmp = path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex[:12]}.tmp")
+    try:
+        tmp.write_bytes(png)
+        tmp.replace(path)
+    finally:
+        # Only present if the replace didn't happen (error path).
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
 
     _evict_if_over_budget()
     return path
@@ -271,6 +284,7 @@ def cog_thumbnail(
     url: str = Query(..., description="COG URL or gs:// URI to render"),
     size: int = Query(DEFAULT_SIZE, ge=MIN_SIZE, le=MAX_SIZE),
     refresh: bool = Query(False, description="Re-render even if a cached PNG exists"),
+    _current_user: Dict[str, Any] = Depends(require_auth),
 ):
     """Thumbnail for any COG URL.
 
@@ -300,6 +314,7 @@ def project_thumbnail(
     project_id: int,
     size: int = Query(DEFAULT_SIZE, ge=MIN_SIZE, le=MAX_SIZE),
     refresh: bool = Query(False, description="Re-render even if a cached PNG exists"),
+    _current_user: Dict[str, Any] = Depends(require_auth),
 ):
     """Thumbnail for a DB project, rendered from its first orthomosaic asset.
 
