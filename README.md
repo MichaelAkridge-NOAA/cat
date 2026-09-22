@@ -33,3 +33,5 @@ The generated `site/` directory is local build output and is not committed.
 Pushes to `gh_pages` trigger the Pages workflow. Pull requests targeting `gh_pages` run the strict build without deploying.
 
 In repository settings, configure **Pages** > **Build and deployment** > **Source** as **GitHub Actions**.
+
+# Placeholder
