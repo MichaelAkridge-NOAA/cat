@@ -360,6 +360,9 @@
             annotation.properties[field] = newValue;
           }
         }
+        if (isOracleProjectMode()) {
+          annotation._syncStatus = 'pending';
+        }
 
         // Push to undo stack
         if (typeof undoPushEdit === 'function') {
@@ -586,6 +589,9 @@
           } else {
             annotation.properties[field] = newValue;
           }
+        }
+        if (isOracleProjectMode()) {
+          annotation._syncStatus = 'pending';
         }
         
         cell.classList.remove('editing');

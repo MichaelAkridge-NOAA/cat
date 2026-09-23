@@ -1793,6 +1793,11 @@
         // Add the array index as the display ID (for consistent referencing)
         normalizedAnn._displayIndex = idx + 1;
 
+        // Keep every annotation consumer on the same object. Differential
+        // sync replaces projectAnnotations entries after a successful PUT,
+        // so the table array and layer must share this normalized instance.
+        projectAnnotations[idx] = normalizedAnn;
+
         layer.annotationData = normalizedAnn;
         // Multi-user contributor toggle reads these directly off the layer —
         // see buildContributorVisibilityPanel()/applyContributorVisibility()
