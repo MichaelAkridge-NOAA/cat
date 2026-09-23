@@ -616,6 +616,7 @@ function showAnnotationPopup(layer, latlng) {
   const excludeFields = ['geometry', ...keyFields, ...idFields, ...sizeFields];
   const otherFields = Object.keys(data).filter(key => 
     !excludeFields.includes(key) && 
+    !key.startsWith('_') &&
     data[key] !== null && 
     data[key] !== undefined &&
     data[key] !== ''
