@@ -508,20 +508,24 @@
           <svg class="cat-icon" style="width:22px;height:22px;"><use href="/vendor/feather/feather-sprite.svg#folder"/></svg>
           Projects
         </h1>
-        <p id="projectManagerSubtitle" style="color: #666; font-size: 14px; margin:0;">Create, edit, and open annotation projects</p>
+        <!-- Default text/state below assumes Oracle (the deployed default,
+             see docker-compose.cat.yml CAT_STORAGE_BACKEND=oracle); file
+             mode is the fallback and patches itself in via JS once
+             /api/config resolves, avoiding a file-UI flash on every load. -->
+        <p id="projectManagerSubtitle" style="color: #666; font-size: 14px; margin:0;">Open a project to annotate, or browse survey sites to start a new one</p>
       </div>
 
       <!-- Mode Selection -->
       <div class="mode-selection" role="tablist" aria-label="Project manager mode">
-        <div class="mode-card active" id="createMode" role="tab" tabindex="0" onclick="selectMode('create')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectMode('create');}">
+        <div class="mode-card" id="createMode" role="tab" tabindex="0" onclick="selectMode('create')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectMode('create');}" style="display:none;">
           <div class="mode-icon">✨</div>
           <span class="mode-title">Create New Project</span>
           <p>Drag & drop TIF files to create a new annotation project</p>
         </div>
-        <div class="mode-card" id="loadMode" role="tab" tabindex="0" onclick="selectMode('load')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectMode('load');}">
-          <div class="mode-icon"><svg class="cat-icon" style="width:40px;height:40px;"><use href="/vendor/feather/feather-sprite.svg#folder"/></svg></div>
-          <span class="mode-title">Load Existing Project</span>
-          <p>Upload an existing project.json to edit or continue</p>
+        <div class="mode-card active" id="loadMode" role="tab" tabindex="0" onclick="selectMode('load')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectMode('load');}">
+          <div class="mode-icon">🗄️</div>
+          <span class="mode-title">Projects</span>
+          <p>Open, edit, and delete existing projects</p>
         </div>
         <div class="mode-card" id="siteMode" role="tab" tabindex="0" onclick="selectMode('site')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectMode('site');}">
           <div class="mode-icon"><svg class="cat-icon" style="width:40px;height:40px;"><use href="/vendor/feather/feather-sprite.svg#map"/></svg></div>
@@ -530,8 +534,9 @@
         </div>
       </div>
 
-      <!-- Create Mode -->
-      <div id="createSection" class="creator-section active">
+      <!-- Create Mode (file-mode fallback only; hidden by default via the
+           .creator-section base rule since it has no "active" class) -->
+      <div id="createSection" class="creator-section">
         <h2 style="display:flex; align-items:center; gap:10px;">
           <svg class="cat-icon" style="width:22px;height:22px;"><use href="/vendor/feather/feather-sprite.svg#edit-3"/></svg>
           Build Your Project
@@ -694,18 +699,18 @@
       </div>
 
       <!-- Load Mode -->
-      <div id="loadSection" class="creator-section">
-        <!-- Hidden in Oracle mode (see the storageBackend branch below), where
-             the page heading already says "Projects" and this only repeated
-             it. File mode still needs it to distinguish Load from Create. -->
-        <h2 id="loadSectionHeading" style="display:flex; align-items:center; gap:10px;">
+      <div id="loadSection" class="creator-section active">
+        <!-- Shown only in the file-mode fallback, where the page heading
+             doesn't already say "Projects" and this distinguishes Load from
+             Create. Hidden by default (Oracle mode repeats the page title). -->
+        <h2 id="loadSectionHeading" style="display:none; align-items:center; gap:10px;">
           <svg class="cat-icon" style="width:22px;height:22px;"><use href="/vendor/feather/feather-sprite.svg#folder"/></svg>
           Load Existing Project
         </h2>
 
         <!-- The panel used to repeat the page heading ("Oracle Projects") above
              its own toolbar. The heading is gone; the toolbar is the panel. -->
-        <div id="dbProjectBrowser" style="display:none; margin-bottom: 20px;">
+        <div id="dbProjectBrowser" style="margin-bottom: 20px;">
           <div style="display:flex; gap:8px; margin-bottom: 10px; flex-wrap:wrap;">
             <input type="text" id="dbProjectSearch" placeholder="Search by project name, site, cruise, observer..." oninput="filterDbProjects()" style="flex:1; min-width:220px; padding:10px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px;">
             <select id="dbProjectScope" onchange="fetchDbProjects()" style="padding:10px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; background:#fff;" title="Filter by project owner">
@@ -742,7 +747,7 @@
           </div>
         </div>
 
-        <div id="legacyFileLoadPanel">
+        <div id="legacyFileLoadPanel" style="display:none;">
           <div style="margin-bottom: 10px; padding: 10px 12px; background: #fff7ed; border: 1px solid #fdba74; border-radius: 6px; color: #9a3412; font-size: 12px;">
             Legacy file-based load mode
           </div>
@@ -1187,7 +1192,7 @@
     // ========================================
     // STATE
     // ========================================
-    let currentMode = 'create';
+    let currentMode = 'load';
     let tifFiles = [];
     let shapefiles = [];
     let loadedProject = null;
@@ -1195,7 +1200,7 @@
     let annotationsFileName = '';
     let shapefileImportData = null;
     let shapefileColumnMapping = {};
-    let storageBackend = 'file';
+    let storageBackend = 'oracle';
     let dbApiAvailable = false;
     let canManageSiteAssets = false;
     let dbProjects = [];
@@ -1227,58 +1232,46 @@
           }
         }
 
-        const subtitle = document.getElementById('projectManagerSubtitle');
-        if (subtitle && storageBackend === 'oracle') {
-          // "Oracle-backed" is how the app stores things, not anything the
-          // analyst chose or needs to think about.
-          subtitle.textContent = 'Open a project to annotate, or browse survey sites to start a new one';
-        }
+        // The page is rendered assuming Oracle (the deployed default) so
+        // there's no file-UI flash on load. File mode is the rare fallback,
+        // patched in here once we actually know the backend isn't Oracle.
+        if (storageBackend !== 'oracle') {
+          const subtitle = document.getElementById('projectManagerSubtitle');
+          if (subtitle) subtitle.textContent = 'Create, edit, and open annotation projects';
 
-        const createModeCard = document.getElementById('createMode');
-        const createSection = document.getElementById('createSection');
-        const loadModeCard = document.getElementById('loadMode');
-        const loadHeading = document.getElementById('loadSectionHeading');
-        const legacyFileLoadPanel = document.getElementById('legacyFileLoadPanel');
+          const createModeCard = document.getElementById('createMode');
+          const createSection = document.getElementById('createSection');
+          const loadModeCard = document.getElementById('loadMode');
+          const loadHeading = document.getElementById('loadSectionHeading');
+          const legacyFileLoadPanel = document.getElementById('legacyFileLoadPanel');
 
-        if (storageBackend === 'oracle') {
-          if (createModeCard) createModeCard.style.display = 'none';
-          if (createSection) createSection.style.display = 'none';
+          if (createModeCard) createModeCard.style.display = '';
+          if (createSection) createSection.style.display = '';
           if (loadModeCard) {
             const icon = loadModeCard.querySelector('.mode-icon');
             const title = loadModeCard.querySelector('.mode-title');
             const desc = loadModeCard.querySelector('p');
-            if (icon) icon.textContent = '🗄️';
-            if (title) title.textContent = 'Projects';
-            if (desc) desc.textContent = 'Open, edit, and delete existing projects';
-            loadModeCard.title = 'Open, edit, and delete existing projects';
+            if (icon) icon.innerHTML = '<svg class="cat-icon" style="width:40px;height:40px;"><use href="/vendor/feather/feather-sprite.svg#folder"/></svg>';
+            if (title) title.textContent = 'Load Existing Project';
+            if (desc) desc.textContent = 'Upload an existing project.json to edit or continue';
+            loadModeCard.title = '';
           }
-          // Third heading for the same list — the page title covers it.
-          if (loadHeading) loadHeading.style.display = 'none';
-          if (legacyFileLoadPanel) legacyFileLoadPanel.style.display = 'none';
-          if (currentMode === 'create') {
-            currentMode = 'load';
-            selectMode('load');
-          }
-        } else {
-          if (createModeCard) createModeCard.style.display = '';
-          if (createSection) createSection.style.display = '';
           if (loadHeading) loadHeading.style.display = '';
           if (legacyFileLoadPanel) legacyFileLoadPanel.style.display = '';
-        }
 
-        const dbBrowser = document.getElementById('dbProjectBrowser');
-        if (dbBrowser) {
-          const showDbBrowser = storageBackend === 'oracle';
-          dbBrowser.style.display = showDbBrowser ? 'block' : 'none';
-          if (showDbBrowser) {
-            fetchDbProjects();
-            loadDbFilterOptions();
-          }
+          const dbBrowser = document.getElementById('dbProjectBrowser');
+          if (dbBrowser) dbBrowser.style.display = 'none';
+
+          currentMode = 'create';
+          selectMode('create');
+        } else {
+          fetchDbProjects();
+          loadDbFilterOptions();
         }
 
         console.log(`🧭 Project Creator backend: ${storageBackend} (db_api_available=${dbApiAvailable})`);
       } catch (error) {
-        console.warn('Could not detect storage backend, defaulting to file mode:', error);
+        console.warn('Could not detect storage backend, defaulting to Oracle mode:', error);
       }
     }
     
