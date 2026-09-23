@@ -1131,6 +1131,7 @@
       bar.innerHTML = `
         <span id="v2SelectionCount">0 rows selected</span>
         <button id="v2BulkUpdateBtn" style="padding:4px 12px; background:#3b82f6; color:#fff; border:none; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;">Bulk Update</button>
+        <button id="v2BulkDeleteBtn" style="padding:4px 12px; background:#b91c1c; color:#fff; border:none; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;">Delete selected</button>
         <button id="v2ClearSelectionBtn" style="padding:4px 10px; background:#e2e8f0; color:#475569; border:1px solid #cbd5e1; border-radius:4px; font-size:11px; cursor:pointer;">Clear</button>
       `;
       tableContainer.parentElement.insertBefore(bar, tableContainer);
@@ -1138,6 +1139,10 @@
       document.getElementById('v2BulkUpdateBtn').addEventListener('click', (e) => {
         e.stopPropagation();
         openBulkUpdateModal();
+      });
+      document.getElementById('v2BulkDeleteBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteSelectedAnnotations();
       });
       document.getElementById('v2ClearSelectionBtn').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1147,6 +1152,86 @@
         updateSelectionUI();
       });
     }, 300);
+  }
+
+  async function deleteSelectedAnnotations() {
+    if (selectedRows.size === 0 || window.catReadOnly) return;
+    if (typeof annotations === 'undefined') return;
+
+    const selected = [...selectedRows]
+      .map(index => ({ index, annotation: annotations[index] }))
+      .filter(item => item.annotation);
+    if (selected.length === 0) return;
+
+    const noun = selected.length === 1 ? 'annotation' : 'annotations';
+    if (!await catConfirm(`Delete ${selected.length} selected ${noun}?`, { danger: true, ok: 'Delete' })) return;
+
+    const isOracle = typeof isOracleProjectMode === 'function' && isOracleProjectMode();
+    const deleted = [];
+    const failed = [];
+    const deleteBtn = document.getElementById('v2BulkDeleteBtn');
+    if (deleteBtn) deleteBtn.disabled = true;
+
+    try {
+      for (const item of selected) {
+        const dbId = isOracle && typeof getDbAnnotationId === 'function'
+          ? getDbAnnotationId(item.annotation)
+          : null;
+        try {
+          if (dbId) await deleteAnnotationFromDb(item.annotation);
+          deleted.push(item);
+        } catch (err) {
+          failed.push({ ...item, error: err });
+        }
+      }
+
+      if (typeof drawnItems !== 'undefined') {
+        const deletedAnnotations = new Set(deleted.map(item => item.annotation));
+        const layersToRemove = [];
+        drawnItems.eachLayer(layer => {
+          if (deletedAnnotations.has(layer.annotationData)) layersToRemove.push(layer);
+        });
+        layersToRemove.forEach(layer => {
+          if (typeof removeAnnotationLabel === 'function') removeAnnotationLabel(layer._leaflet_id);
+          drawnItems.removeLayer(layer);
+        });
+      }
+
+      deleted.sort((a, b) => b.index - a.index).forEach(item => annotations.splice(item.index, 1));
+      if (typeof getProjectAnnotations === 'function') {
+        const projectAnnotations = getProjectAnnotations();
+        if (projectAnnotations && projectAnnotations !== annotations) {
+          deleted.forEach(item => {
+            const index = projectAnnotations.indexOf(item.annotation);
+            if (index !== -1) projectAnnotations.splice(index, 1);
+          });
+        }
+      }
+
+      selectedRows.clear();
+      failed.forEach(item => {
+        const currentIndex = annotations.indexOf(item.annotation);
+        if (currentIndex !== -1) selectedRows.add(currentIndex);
+      });
+      _lastCheckedIdx = -1;
+
+      if (!isOracle && deleted.length > 0 && typeof hasUnsavedChanges !== 'undefined') {
+        hasUnsavedChanges = true;
+      }
+      if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
+      if (isOracle && deleted.length > 0 && window._catChannel) {
+        window._catChannel.postMessage({ type: 'annotations-changed' });
+      }
+
+      if (failed.length > 0) {
+        const firstError = failed[0].error?.message || 'Delete request failed';
+        showStatus(`Deleted ${deleted.length}; failed to delete ${failed.length}: ${firstError}`, 'error');
+      } else {
+        showStatus(`Deleted ${deleted.length} ${noun}`, 'success');
+      }
+    } finally {
+      if (deleteBtn) deleteBtn.disabled = false;
+    }
   }
 
   // ===================================================================

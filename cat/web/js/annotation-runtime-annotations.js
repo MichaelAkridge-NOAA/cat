@@ -1434,19 +1434,17 @@
       const ann = annotations[index];
       if (!ann) return;
 
+      const isOracle = typeof isOracleProjectMode === 'function' && isOracleProjectMode();
+      const dbId = isOracle && typeof getDbAnnotationId === 'function' ? getDbAnnotationId(ann) : null;
+
       // In popout mode: delete directly from DB (no Leaflet layers to remove)
-      if (window._catPopoutMode && typeof isOracleProjectMode === 'function' && isOracleProjectMode()) {
-        const dbId = typeof getDbAnnotationId === 'function' ? getDbAnnotationId(ann) : null;
+      if (window._catPopoutMode && isOracle) {
         if (dbId) {
           try {
-            await catFetch(`${serverUrl}/api/db/projects/${currentProject.project_id}/annotations/${dbId}`, {
-              method: 'DELETE'
-            }, 'Deleting annotation');
+            await deleteAnnotationFromDb(ann);
           } catch (err) {
-            // catFetch already toasted the failure — don't remove the
-            // annotation locally / claim success if the DB delete failed
-            // (previously this swallowed the error and always reported success).
             console.warn('Delete API call failed:', err);
+            showStatus(`❌ Failed to delete annotation: ${err.message}`, 'error');
             return;
           }
         }
@@ -1455,6 +1453,16 @@
         if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed' });
         showStatus('🗑️ Annotation deleted', 'success');
         return;
+      }
+
+      if (dbId) {
+        try {
+          await deleteAnnotationFromDb(ann);
+        } catch (err) {
+          console.warn('Delete API call failed:', err);
+          showStatus(`❌ Failed to delete annotation: ${err.message}`, 'error');
+          return;
+        }
       }
 
       // Find and remove layer from map (and get its ID for label removal)
@@ -1486,11 +1494,10 @@
       updateAnnotationTable();
       
       showStatus('🗑️ Annotation deleted', 'success');
-      hasUnsavedChanges = true;
-      if (typeof isOracleProjectMode === 'function' && isOracleProjectMode()) {
-        setAutoSaveBadge('pending', '🔵 Unsaved changes');
-        if (typeof saveProject === 'function') saveProject();
+      if (isOracle) {
         if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed' });
+      } else {
+        hasUnsavedChanges = true;
       }
     }
 

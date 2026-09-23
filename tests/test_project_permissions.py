@@ -18,6 +18,7 @@ EDITOR_ROUTES = [
     "delete_overlay_layer",
     "update_overlay_feature",
     "reorder_overlay_layers",
+    "delete_annotation",
     "start_session",
     "update_session",
     "end_session",

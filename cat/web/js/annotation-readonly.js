@@ -30,6 +30,8 @@
       // keeps the UI honest.
       'body.cat-readonly .leaflet-draw,' +
       'body.cat-readonly #saveProjectBtn,' +
+      'body.cat-readonly #v2BulkUpdateBtn,' +
+      'body.cat-readonly #v2BulkDeleteBtn,' +
       'body.cat-readonly #annotationFormPanel { display: none !important; }' +
       '#' + BANNER_ID + ' { position: fixed; top: env(safe-area-inset-top, 0px); left: 50%;' +
       ' transform: translateX(-50%); z-index: 2500; display: flex; align-items: center; gap: 10px;' +
