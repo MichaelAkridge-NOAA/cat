@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from cat.api.auth import require_auth, require_admin
 from cat.db import auth as auth_db
 from cat.db.config import is_oracle_backend_enabled
-from cat.db.oracle import execute, execute_returning_id, execute_many, fetch_all, fetch_one, test_connection, get_connection
+from cat.db.oracle import execute, execute_returning_id, execute_rowcount, execute_many, fetch_all, fetch_one, test_connection, get_connection
 from cat.db.schema import bootstrap_schema
 
 
@@ -81,6 +81,9 @@ class AnnotationCreate(BaseModel):
     feature: Dict[str, Any]
     properties: Dict[str, Any] = Field(default_factory=dict)
     created_by: Optional[str] = None
+    # Client-generated id, re-sent on every retry of the same create so the
+    # server can return the row it already made instead of inserting again.
+    client_uuid: Optional[str] = Field(default=None, max_length=64)
 
 
 class OverlayLayerCreate(BaseModel):
@@ -645,20 +648,31 @@ def projects_qc(
     if not ids:
         return {"project_ids": [], "rollup": aggregate_annotations([]), "projects": []}
 
-    id_binds = {f"pid{i}": pid for i, pid in enumerate(ids)}
-    in_clause = ", ".join(f":{k}" for k in id_binds)
-    project_rows = fetch_all(
-        f"SELECT project_id, project_name, region, year_num FROM cat_projects "
-        f"WHERE project_id IN ({in_clause}) ORDER BY project_name",
-        id_binds,
-    )
+    started = datetime.now()
+    project_rows: List[Dict[str, Any]] = []
+    for in_clause, binds in _chunked_in(ids):
+        project_rows.extend(fetch_all(
+            f"SELECT project_id, project_name, region, year_num FROM cat_projects "
+            f"WHERE project_id IN ({in_clause})",
+            binds,
+        ))
+    project_rows.sort(key=lambda r: str(r.get("project_name") or ""))
 
-    rollup = aggregate_annotations(ids)
+    # One fetch for everything, grouped in memory. This used to re-read every
+    # annotation for the rollup and then once more per project (3 queries
+    # each), so the page slowed down linearly with the number of projects.
+    rows, species_lookup, epsgs_by_project = _load_aggregate_inputs(ids)
+    rows_by_project: Dict[int, List[Dict[str, Any]]] = {}
+    for r in rows:
+        rows_by_project.setdefault(r["project_id"], []).append(r)
+    all_epsgs = [e for pid in ids for e in epsgs_by_project.get(pid, [])]
+    rollup = _aggregate_rows(rows, species_lookup, _is_geographic(all_epsgs))
 
     projects = []
     for p in project_rows:
         pid = p["project_id"]
-        stats = aggregate_annotations([pid])
+        stats = _aggregate_rows(rows_by_project.get(pid, []), species_lookup,
+                                _is_geographic(epsgs_by_project.get(pid, [])))
         missing_spcode = stats["missing_fields"]["spcode"]
         missing_con1 = stats["missing_fields"]["con_1"]
         unrecognized = stats.get("by_unrecognized_species") or []
@@ -699,6 +713,10 @@ def projects_qc(
     # Projects with the most issues first, so reviewers see problems immediately.
     projects.sort(key=lambda pr: -len(pr["flags"]))
 
+    logger.info(
+        "QC: %d project(s), %d annotation(s) in %.0f ms",
+        len(ids), len(rows), (datetime.now() - started).total_seconds() * 1000,
+    )
     return {"project_ids": ids, "rollup": rollup, "projects": projects}
 
 
@@ -869,17 +887,42 @@ def update_project(
 @router.delete("/projects/{project_id}")
 def delete_project(
     project_id: int,
+    confirm_name: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
+    """Permanently delete a project (annotations, overlays, sessions cascade).
+
+    A project that still has annotations is only deleted when `confirm_name`
+    matches its name exactly — a one-click OK used to wipe a whole project.
+    The deleted annotations stay recoverable by an admin from
+    cat_annotation_history (op HARD_DELETE; no FKs, so it survives)."""
     _ensure_oracle_mode()
 
-    existing = fetch_one("SELECT project_id FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
+    existing = fetch_one(
+        "SELECT project_id, project_name FROM cat_projects WHERE project_id = :project_id",
+        {"project_id": project_id},
+    )
     if not existing:
         raise HTTPException(status_code=404, detail="Project not found")
     _require_project_role(project_id, current_user, "owner")
 
+    counts = fetch_one(
+        "SELECT COUNT(*) AS n FROM cat_annotations WHERE project_id = :project_id AND deleted_at IS NULL",
+        {"project_id": project_id},
+    )
+    live = int((counts or {}).get("n") or 0)
+    if live and (confirm_name or "").strip() != (existing.get("project_name") or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail=f"This project has {live} annotation(s). Type the project name exactly to confirm deletion.",
+        )
+
+    logger.warning(
+        "Project %s (%r) deleted by user %s with %s live annotation(s)",
+        project_id, existing.get("project_name"), current_user.get("user_id"), live,
+    )
     execute("DELETE FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
-    return {"success": True, "deleted_project_id": project_id}
+    return {"success": True, "deleted_project_id": project_id, "deleted_annotation_count": live}
 
 
 class ProjectDuplicate(BaseModel):
@@ -1297,6 +1340,35 @@ def add_project_asset(
     return {"success": True, "asset": _normalize_asset_row(asset)}
 
 
+def _existing_by_client_uuid(project_id: int, client_uuid: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Row already created for this client_uuid, if any (retry-safe creates).
+
+    Raises 410 if that annotation has since been deleted — a late retry of
+    its create must not bring it back — and 409 if the UUID belongs to a
+    different project (a client bug; never silently cross projects).
+    """
+    if not client_uuid:
+        return None
+    row = fetch_one(
+        "SELECT * FROM cat_annotations WHERE client_uuid = :client_uuid",
+        {"client_uuid": client_uuid},
+    )
+    if not row:
+        return None
+    if int(row.get("project_id")) != int(project_id):
+        raise HTTPException(status_code=409, detail="client_uuid already used in another project")
+    if row.get("deleted_at") is not None:
+        raise HTTPException(
+            status_code=410,
+            detail={"message": "Annotation was deleted", "annotation_id": row.get("annotation_id")},
+        )
+    return row
+
+
+def _is_unique_violation(exc: Exception) -> bool:
+    return "ORA-00001" in str(exc)
+
+
 @router.post("/projects/{project_id}/annotations")
 def create_annotation(
     project_id: int,
@@ -1310,28 +1382,42 @@ def create_annotation(
         raise HTTPException(status_code=404, detail="Project not found")
     _require_project_role(project_id, current_user, "editor")
 
+    # Retry of a create that already went through: hand back that row.
+    existing = _existing_by_client_uuid(project_id, payload.client_uuid)
+    if existing:
+        return {"success": True, "annotation": _normalize_annotation_row(existing), "duplicate": True}
+
     created_by = payload.created_by or current_user.get("display_name")
 
     sql = """
         INSERT INTO cat_annotations (
-            project_id, asset_id, feature_geojson, properties_json, created_by, created_by_user_id
+            project_id, asset_id, feature_geojson, properties_json, created_by, created_by_user_id, client_uuid
         ) VALUES (
-            :project_id, :asset_id, :feature_geojson, :properties_json, :created_by, :created_by_user_id
+            :project_id, :asset_id, :feature_geojson, :properties_json, :created_by, :created_by_user_id, :client_uuid
         ) RETURNING annotation_id INTO :annotation_id
     """
 
-    annotation_id = execute_returning_id(
-        sql,
-        {
-            "project_id": project_id,
-            "asset_id": payload.asset_id,
-            "feature_geojson": json.dumps(payload.feature),
-            "properties_json": json.dumps(payload.properties),
-            "created_by": created_by,
-            "created_by_user_id": current_user["user_id"],
-        },
-        id_column="annotation_id",
-    )
+    try:
+        annotation_id = execute_returning_id(
+            sql,
+            {
+                "project_id": project_id,
+                "asset_id": payload.asset_id,
+                "feature_geojson": json.dumps(payload.feature),
+                "properties_json": json.dumps(payload.properties),
+                "created_by": created_by,
+                "created_by_user_id": current_user["user_id"],
+                "client_uuid": payload.client_uuid,
+            },
+            id_column="annotation_id",
+        )
+    except Exception as exc:
+        # Two identical POSTs raced; the other one inserted first.
+        if payload.client_uuid and _is_unique_violation(exc):
+            existing = _existing_by_client_uuid(project_id, payload.client_uuid)
+            if existing:
+                return {"success": True, "annotation": _normalize_annotation_row(existing), "duplicate": True}
+        raise
 
     row = fetch_one(
         "SELECT * FROM cat_annotations WHERE annotation_id = :annotation_id",
@@ -1381,9 +1467,9 @@ def update_annotation(
 
     existing = fetch_one(
         """
-        SELECT annotation_id, version
+        SELECT annotation_id, version, deleted_at, properties_json
         FROM cat_annotations
-        WHERE project_id = :project_id AND annotation_id = :annotation_id AND deleted_at IS NULL
+        WHERE project_id = :project_id AND annotation_id = :annotation_id
         """,
         {"project_id": project_id, "annotation_id": annotation_id},
     )
@@ -1391,30 +1477,36 @@ def update_annotation(
         raise HTTPException(status_code=404, detail="Annotation not found")
     _require_project_role(project_id, current_user, "editor")
 
-    # Optimistic locking: if client sends a version, verify it matches (4a)
-    if payload.version is not None:
-        current_version = existing.get("version") or 1
-        if payload.version != current_version:
-            current_row = fetch_one(
-                "SELECT * FROM cat_annotations WHERE annotation_id = :annotation_id",
-                {"annotation_id": annotation_id},
-            )
-            # Task 7 round 2 fix: HTTPException.detail is passed straight to
-            # json.dumps() by Starlette's default exception handler (unlike a
-            # normal route return value, which FastAPI runs through
-            # jsonable_encoder). current_annotation carries raw datetime
-            # columns (created_at/updated_at), which made json.dumps() blow up
-            # with "Object of type datetime is not JSON serializable" — the
-            # client saw a 500, never the intended 409, so conflict recovery
-            # could never run.
+    # A soft-deleted row answers 410, not 404. The client used to treat 404
+    # as "never existed", drop the id and re-POST the annotation as new —
+    # which resurrected annotations another user (or tab) had deleted.
+    if existing.get("deleted_at") is not None:
+        raise HTTPException(
+            status_code=410,
+            detail={"message": "Annotation was deleted", "annotation_id": annotation_id},
+        )
+
+    # Never let a PUT blank out every property of an annotation that has
+    # some. An unreadable properties CLOB used to reach the client as {},
+    # and the next autosave wrote that {} straight back over the real data.
+    stored = existing.get("properties_json")
+    if payload.properties is not None and stored not in (None, "", "{}"):
+        # Stored properties that don't parse reached the client as {} — any
+        # PUT built from that would replace the real (if damaged) record with
+        # a near-empty one. Refuse and leave the stored text for an admin.
+        try:
+            json.loads(stored) if isinstance(stored, str) else None
+        except (TypeError, ValueError):
+            logger.error("Annotation %s in project %s has unreadable properties_json; refusing overwrite", annotation_id, project_id)
             raise HTTPException(
-                status_code=409,
-                detail=jsonable_encoder({
-                    "message": "Version conflict — annotation was modified by another session",
-                    "current_version": current_version,
-                    "client_version": payload.version,
-                    "current_annotation": _normalize_annotation_row(current_row) if current_row else None,
-                }),
+                status_code=422,
+                detail="This annotation's stored data could not be read; it was not overwritten. Ask an admin to repair it.",
+            )
+    if payload.properties is not None and len(payload.properties) == 0:
+        if stored not in (None, "", "{}"):
+            raise HTTPException(
+                status_code=422,
+                detail="Refusing to replace this annotation's properties with an empty set",
             )
 
     fields = []
@@ -1435,10 +1527,42 @@ def update_annotation(
         fields.append("last_mod_by_user_id = :last_mod_by_user_id")
         params["last_mod_by_user_id"] = current_user["user_id"]
         fields.append("version = NVL(version, 1) + 1")  # increment version (4a)
-        execute(
-            f"UPDATE cat_annotations SET {', '.join(fields)} WHERE project_id = :project_id AND annotation_id = :annotation_id",
+
+        # Optimistic locking (4a) as one compare-and-set UPDATE. The old
+        # SELECT-then-UPDATE let two writers holding the same version both
+        # pass the check and both write.
+        where = "project_id = :project_id AND annotation_id = :annotation_id AND deleted_at IS NULL"
+        if payload.version is not None:
+            where += " AND NVL(version, 1) = :expected_version"
+            params["expected_version"] = payload.version
+
+        updated = execute_rowcount(
+            f"UPDATE cat_annotations SET {', '.join(fields)} WHERE {where}",
             params,
         )
+        if updated == 0:
+            current_row = fetch_one(
+                "SELECT * FROM cat_annotations WHERE project_id = :project_id AND annotation_id = :annotation_id",
+                {"project_id": project_id, "annotation_id": annotation_id},
+            )
+            if not current_row:
+                raise HTTPException(status_code=404, detail="Annotation not found")
+            if current_row.get("deleted_at") is not None:
+                raise HTTPException(
+                    status_code=410,
+                    detail={"message": "Annotation was deleted", "annotation_id": annotation_id},
+                )
+            # HTTPException.detail skips FastAPI's encoder, so datetimes in
+            # current_annotation must be made JSON-safe here (Task 7 round 2).
+            raise HTTPException(
+                status_code=409,
+                detail=jsonable_encoder({
+                    "message": "Version conflict — annotation was modified by another session",
+                    "current_version": current_row.get("version") or 1,
+                    "client_version": payload.version,
+                    "current_annotation": _normalize_annotation_row(current_row),
+                }),
+            )
         _log_activity(project_id, current_user["user_id"], "annotation_updated", {"annotation_id": annotation_id})
 
     row = fetch_one(
@@ -1469,13 +1593,18 @@ def delete_annotation(
     if not existing:
         raise HTTPException(status_code=404, detail="Annotation not found")
 
+    # Bump version/updated_at too, so other open tabs see the delete as a
+    # change instead of holding a "current" copy they later write back.
     execute(
         """
         UPDATE cat_annotations
-        SET deleted_at = CURRENT_TIMESTAMP
+        SET deleted_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP,
+            last_mod_by_user_id = :last_mod_by_user_id,
+            version = NVL(version, 1) + 1
         WHERE project_id = :project_id AND annotation_id = :annotation_id
         """,
-        {"project_id": project_id, "annotation_id": annotation_id},
+        {"project_id": project_id, "annotation_id": annotation_id, "last_mod_by_user_id": current_user["user_id"]},
     )
     _log_activity(project_id, current_user["user_id"], "annotation_deleted", {"annotation_id": annotation_id})
     return {"success": True, "deleted_annotation_id": annotation_id}
@@ -1502,19 +1631,236 @@ def restore_annotation(
     if not existing:
         raise HTTPException(status_code=404, detail="Annotation not found or not deleted")
 
+    # Bump version so open tabs holding the deleted copy see a change, and
+    # record who restored it (the history trigger captures the before-state).
     execute(
         """
         UPDATE cat_annotations
-        SET deleted_at = NULL
+        SET deleted_at = NULL,
+            updated_at = CURRENT_TIMESTAMP,
+            last_mod_by_user_id = :last_mod_by_user_id,
+            version = NVL(version, 1) + 1
         WHERE project_id = :project_id AND annotation_id = :annotation_id
         """,
-        {"project_id": project_id, "annotation_id": annotation_id},
+        {"project_id": project_id, "annotation_id": annotation_id, "last_mod_by_user_id": current_user["user_id"]},
     )
+    _log_activity(project_id, current_user["user_id"], "annotation_restored", {"annotation_id": annotation_id})
     row = fetch_one(
         "SELECT * FROM cat_annotations WHERE annotation_id = :annotation_id",
         {"annotation_id": annotation_id},
     )
     return {"success": True, "annotation": _normalize_annotation_row(row)}
+
+
+def _normalize_history_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(row)
+    feature = _parse_json_field(normalized.pop("feature_geojson", None), default=None)
+    normalized["feature"] = feature
+    normalized["geometry"] = feature.get("geometry") if isinstance(feature, dict) and feature.get("type") == "Feature" else feature
+    normalized["properties"] = _parse_json_field(normalized.pop("properties_json", None), default={})
+    return normalized
+
+
+@router.get("/projects/{project_id}/annotations/versions")
+def annotation_versions(
+    project_id: int,
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """id + version of every live annotation — what the page's change poll
+    needs, without shipping every geometry every minute. Uncapped, so the
+    poll also sees deletions (ids that disappeared) on any project size."""
+    _ensure_oracle_mode()
+    _require_project_role(project_id, current_user, "viewer")
+    rows = fetch_all(
+        """
+        SELECT annotation_id, NVL(version, 1) AS version, last_mod_by_user_id
+        FROM cat_annotations
+        WHERE project_id = :project_id AND deleted_at IS NULL
+        """,
+        {"project_id": project_id},
+    )
+    return {
+        "success": True,
+        "count": len(rows),
+        "annotations": [
+            {"annotation_id": r["annotation_id"], "version": r["version"], "last_mod_by_user_id": r.get("last_mod_by_user_id")}
+            for r in rows
+        ],
+    }
+
+
+@router.get("/projects/{project_id}/annotations/history")
+def list_project_annotation_history(
+    project_id: int,
+    op: Optional[str] = None,
+    limit: int = 200,
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Recent changes to a project's annotations, newest first — the place to
+    find something that was deleted or overwritten. `op` filters by
+    UPDATE / DELETE / RESTORE / HARD_DELETE. Each entry is the annotation as
+    it was just BEFORE that change."""
+    _ensure_oracle_mode()
+    _require_project_role(project_id, current_user, "viewer")
+
+    params: Dict[str, Any] = {"project_id": project_id, "limit": max(1, min(int(limit), 2000))}
+    op_sql = ""
+    if op:
+        op_sql = "AND h.op = :op"
+        params["op"] = op.upper()
+    rows = fetch_all(
+        f"""
+        SELECT h.*, u.display_name AS changed_by_display_name, u.username AS changed_by_username,
+               CASE WHEN a.annotation_id IS NULL THEN 'missing'
+                    WHEN a.deleted_at IS NOT NULL THEN 'deleted'
+                    ELSE 'live' END AS current_state
+        FROM cat_annotation_history h
+        LEFT JOIN cat_users u ON u.user_id = h.changed_by_user_id
+        LEFT JOIN cat_annotations a ON a.annotation_id = h.annotation_id
+        WHERE h.project_id = :project_id {op_sql}
+        ORDER BY h.changed_at DESC, h.history_id DESC
+        FETCH FIRST :limit ROWS ONLY
+        """,
+        params,
+    )
+    entries = [_normalize_history_row(r) for r in rows]
+
+    # Annotations soft-deleted before the history table existed (i.e. under
+    # an older version) have no DELETE entry, but the row is still there and
+    # restorable. List them too so they can be found and brought back.
+    if not op or op.upper() == "DELETE":
+        legacy = fetch_all(
+            """
+            SELECT a.annotation_id, a.project_id, NVL(a.version, 1) AS version, a.deleted_at,
+                   a.feature_geojson, a.properties_json, a.created_by, a.created_by_user_id,
+                   a.client_uuid, a.last_mod_by_user_id AS changed_by_user_id,
+                   a.deleted_at AS changed_at,
+                   u.display_name AS changed_by_display_name, u.username AS changed_by_username
+            FROM cat_annotations a
+            LEFT JOIN cat_users u ON u.user_id = a.last_mod_by_user_id
+            WHERE a.project_id = :project_id AND a.deleted_at IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM cat_annotation_history h
+                  WHERE h.annotation_id = a.annotation_id AND h.op = 'DELETE'
+              )
+            ORDER BY a.deleted_at DESC
+            FETCH FIRST :limit ROWS ONLY
+            """,
+            {"project_id": project_id, "limit": params["limit"]},
+        )
+        for r in legacy:
+            e = _normalize_history_row(r)
+            e.update({"history_id": None, "op": "DELETE", "current_state": "deleted", "legacy": True})
+            entries.append(e)
+        entries.sort(key=lambda e: str(e.get("changed_at") or ""), reverse=True)
+        entries = entries[: params["limit"]]
+
+    return {"success": True, "count": len(entries), "history": entries}
+
+
+@router.get("/projects/{project_id}/annotations/{annotation_id}/history")
+def get_annotation_history(
+    project_id: int,
+    annotation_id: int,
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Every earlier state of one annotation, newest first."""
+    _ensure_oracle_mode()
+    _require_project_role(project_id, current_user, "viewer")
+    rows = fetch_all(
+        """
+        SELECT h.*, u.display_name AS changed_by_display_name, u.username AS changed_by_username
+        FROM cat_annotation_history h
+        LEFT JOIN cat_users u ON u.user_id = h.changed_by_user_id
+        WHERE h.project_id = :project_id AND h.annotation_id = :annotation_id
+        ORDER BY h.changed_at DESC, h.history_id DESC
+        """,
+        {"project_id": project_id, "annotation_id": annotation_id},
+    )
+    entries = [_normalize_history_row(r) for r in rows]
+    return {"success": True, "count": len(entries), "history": entries}
+
+
+@router.post("/projects/{project_id}/annotations/{annotation_id}/history/{history_id}/restore")
+def restore_annotation_version(
+    project_id: int,
+    annotation_id: int,
+    history_id: int,
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Put an annotation back to a saved earlier state (and undelete it).
+
+    Goes through a normal versioned UPDATE, so the state being replaced is
+    itself captured in history and the restore can be undone the same way.
+    If the row is gone entirely (hard-deleted by the old bulk-replace), the
+    content is re-created as a new annotation.
+    """
+    _ensure_oracle_mode()
+    _require_project_role(project_id, current_user, "editor")
+
+    snap = fetch_one(
+        """
+        SELECT * FROM cat_annotation_history
+        WHERE history_id = :history_id AND project_id = :project_id AND annotation_id = :annotation_id
+        """,
+        {"history_id": history_id, "project_id": project_id, "annotation_id": annotation_id},
+    )
+    if not snap:
+        raise HTTPException(status_code=404, detail="History entry not found")
+
+    current = fetch_one(
+        "SELECT annotation_id FROM cat_annotations WHERE project_id = :project_id AND annotation_id = :annotation_id",
+        {"project_id": project_id, "annotation_id": annotation_id},
+    )
+    if current:
+        execute(
+            """
+            UPDATE cat_annotations
+            SET feature_geojson = :feature_geojson,
+                properties_json = :properties_json,
+                deleted_at = NULL,
+                updated_at = CURRENT_TIMESTAMP,
+                last_mod_by_user_id = :last_mod_by_user_id,
+                version = NVL(version, 1) + 1
+            WHERE project_id = :project_id AND annotation_id = :annotation_id
+            """,
+            {
+                "feature_geojson": snap.get("feature_geojson"),
+                "properties_json": snap.get("properties_json"),
+                "last_mod_by_user_id": current_user["user_id"],
+                "project_id": project_id,
+                "annotation_id": annotation_id,
+            },
+        )
+        restored_id = annotation_id
+    else:
+        restored_id = execute_returning_id(
+            """
+            INSERT INTO cat_annotations (
+                project_id, feature_geojson, properties_json, created_by, created_by_user_id, last_mod_by_user_id
+            ) VALUES (
+                :project_id, :feature_geojson, :properties_json, :created_by, :created_by_user_id, :last_mod_by_user_id
+            ) RETURNING annotation_id INTO :annotation_id
+            """,
+            {
+                "project_id": project_id,
+                "feature_geojson": snap.get("feature_geojson"),
+                "properties_json": snap.get("properties_json"),
+                "created_by": snap.get("created_by"),
+                "created_by_user_id": snap.get("created_by_user_id"),
+                "last_mod_by_user_id": current_user["user_id"],
+            },
+            id_column="annotation_id",
+        )
+
+    _log_activity(
+        project_id,
+        current_user["user_id"],
+        "annotation_version_restored",
+        {"annotation_id": restored_id, "from_history_id": history_id, "original_annotation_id": annotation_id},
+    )
+    row = fetch_one("SELECT * FROM cat_annotations WHERE annotation_id = :annotation_id", {"annotation_id": restored_id})
+    return {"success": True, "annotation": _normalize_annotation_row(row), "recreated": restored_id != annotation_id}
 
 
 @router.post("/projects/{project_id}/annotations/bulk-replace")
@@ -1523,46 +1869,18 @@ def bulk_replace_annotations(
     payload: AnnotationBulkReplace,
     current_user: Dict[str, Any] = Depends(require_auth),
 ) -> Dict[str, Any]:
+    """Removed. This hard-DELETEd every annotation in the project (every
+    user's, plus soft-deleted history) and re-inserted only the caller's
+    copy — the tab-close save beacon and "Clear all" both went through it and
+    it was the main cause of lost and resurrected annotations. Kept as a 410
+    so tabs still running the old page JS get a refusal, not a wipe."""
     _ensure_oracle_mode()
-
-    project = fetch_one("SELECT project_id FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
     _require_project_role(project_id, current_user, "editor")
-
-    insert_sql = """
-        INSERT INTO cat_annotations (
-            project_id, asset_id, feature_geojson, properties_json, created_by, created_by_user_id
-        ) VALUES (
-            :project_id, :asset_id, :feature_geojson, :properties_json, :created_by, :created_by_user_id
-        )
-    """
-
-    with get_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("DELETE FROM cat_annotations WHERE project_id = :project_id", {"project_id": project_id})
-
-            for ann in payload.annotations:
-                cursor.execute(
-                    insert_sql,
-                    {
-                        "project_id": project_id,
-                        "asset_id": ann.asset_id,
-                        "feature_geojson": json.dumps(ann.feature),
-                        "properties_json": json.dumps(ann.properties),
-                        "created_by": ann.created_by or current_user.get("display_name"),
-                        "created_by_user_id": current_user["user_id"],
-                    },
-                )
-        conn.commit()
-
-    rows = fetch_all(
-        "SELECT * FROM cat_annotations WHERE project_id = :project_id ORDER BY created_at ASC",
-        {"project_id": project_id},
+    _log_activity(project_id, current_user["user_id"], "annotations_bulk_replace_refused", {"count": len(payload.annotations)})
+    raise HTTPException(
+        status_code=410,
+        detail="bulk-replace has been removed; annotations are saved individually. Reload the page.",
     )
-    normalized = [_normalize_annotation_row(r) for r in rows]
-    _log_activity(project_id, current_user["user_id"], "annotations_bulk_replaced", {"count": len(normalized)})
-    return {"success": True, "count": len(normalized), "annotations": normalized}
 
 
 @router.post("/projects/{project_id}/annotations/bulk-create")
@@ -1584,20 +1902,28 @@ def bulk_create_annotations(
 
     insert_sql = """
         INSERT INTO cat_annotations (
-            project_id, asset_id, feature_geojson, properties_json, created_by, created_by_user_id
+            project_id, asset_id, feature_geojson, properties_json, created_by, created_by_user_id, client_uuid
         ) VALUES (
-            :project_id, :asset_id, :feature_geojson, :properties_json, :created_by, :created_by_user_id
+            :project_id, :asset_id, :feature_geojson, :properties_json, :created_by, :created_by_user_id, :client_uuid
         ) RETURNING annotation_id INTO :annotation_id
     """
 
     # Each insert uses its own execute_returning_id() call (own connection +
-    # commit) rather than one shared cursor/transaction like bulk-replace,
-    # because this endpoint is purely additive: inserts are independent of
-    # each other, so a partial failure mid-batch (some AI detections saved,
-    # others not) is acceptable here — there's no destructive step (no
-    # DELETE) that a shared transaction would need to protect.
+    # commit): the endpoint is purely additive, so a partial failure
+    # mid-batch leaves nothing destroyed — and with client_uuids the client
+    # can simply re-send the whole batch: items that already made it are
+    # recognised and returned, not inserted twice.
     inserted_ids: List[int] = []
     for ann in payload.annotations:
+        try:
+            existing = _existing_by_client_uuid(project_id, ann.client_uuid)
+        except HTTPException as exc:
+            if exc.status_code == 410:
+                continue  # deleted since the first attempt — leave it deleted
+            raise
+        if existing:
+            inserted_ids.append(existing["annotation_id"])
+            continue
         annotation_id = execute_returning_id(
             insert_sql,
             {
@@ -1607,6 +1933,7 @@ def bulk_create_annotations(
                 "properties_json": json.dumps(ann.properties),
                 "created_by": ann.created_by or current_user.get("display_name"),
                 "created_by_user_id": current_user["user_id"],
+                "client_uuid": ann.client_uuid,
             },
             id_column="annotation_id",
         )
@@ -1680,11 +2007,19 @@ def annotations_geojson(
                 # The bare geometry, not normalized["feature"] (a whole
                 # nested Feature) — see _normalize_annotation_row.
                 "geometry": normalized.get("geometry"),
+                "id": normalized.get("annotation_id"),
+                # Server-owned fields go LAST so a stale copy stored inside
+                # properties_json can't override the real id; version is
+                # needed by the client's optimistic locking (without it every
+                # refreshed annotation was assumed version 1 and the next PUT
+                # 409'd).
                 "properties": {
+                    **(normalized.get("properties") or {}),
                     "annotation_id": normalized.get("annotation_id"),
+                    "version": normalized.get("version") or 1,
+                    "client_uuid": normalized.get("client_uuid"),
                     "created_by_user_id": normalized.get("created_by_user_id"),
                     "creator_display_name": normalized.get("creator_display_name") or normalized.get("creator_username"),
-                    **(normalized.get("properties") or {}),
                 },
             }
         )
@@ -1870,6 +2205,70 @@ def _polygon_max_diameter_line(geometry: Dict[str, Any]) -> Optional[Dict[str, A
         return None
 
 
+def _chunked_in(ids: List[Any], size: int = 500):
+    """Yield (in_clause, binds) pairs for id lists of any length. Oracle rejects
+    an IN list longer than 1000 expressions (ORA-01795)."""
+    ids = list(ids)
+    for i in range(0, len(ids), size):
+        chunk = ids[i:i + size]
+        binds = {f"pid{j}": pid for j, pid in enumerate(chunk)}
+        yield ", ".join(f":{k}" for k in binds), binds
+
+
+def _load_species_lookup() -> Dict[str, Dict[str, Any]]:
+    # {spcode: {"name": taxon_name, "genus": genus}}. The table may be empty;
+    # unknown/absent spcodes fall back to the code as the name.
+    lookup: Dict[str, Dict[str, Any]] = {}
+    try:
+        for s in fetch_all("SELECT spcode, taxon_name, genus FROM cat_coral_species"):
+            code = s.get("spcode")
+            if code:
+                lookup[code] = {"name": s.get("taxon_name"), "genus": s.get("genus")}
+    except Exception:
+        lookup = {}
+    return lookup
+
+
+def _load_aggregate_inputs(project_ids: List[int]):
+    """One pass over the database for any number of projects: every live
+    annotation (with its project_id), the species lookup, and each project's
+    active-asset EPSGs. Callers group in memory — the QC page used to run all
+    of this once for the rollup and then again for every single project."""
+    rows: List[Dict[str, Any]] = []
+    epsgs_by_project: Dict[int, List[Optional[int]]] = {}
+    for in_clause, binds in _chunked_in(project_ids):
+        rows.extend(fetch_all(
+            "SELECT project_id, feature_geojson, properties_json FROM cat_annotations "
+            f"WHERE project_id IN ({in_clause}) AND deleted_at IS NULL",
+            binds,
+        ))
+        try:
+            for a in fetch_all(
+                "SELECT project_id, source_epsg, target_epsg FROM cat_project_assets "
+                f"WHERE project_id IN ({in_clause}) AND NVL(is_active, 1) = 1",
+                binds,
+            ):
+                epsg = None
+                for key in ("target_epsg", "source_epsg"):
+                    v = a.get(key)
+                    if v is not None:
+                        try:
+                            epsg = int(v)
+                            break
+                        except (TypeError, ValueError):
+                            pass
+                epsgs_by_project.setdefault(a["project_id"], []).append(epsg)
+        except Exception:
+            epsgs_by_project = {}
+    return rows, _load_species_lookup(), epsgs_by_project
+
+
+def _is_geographic(epsgs: List[Optional[int]]) -> bool:
+    # See the area-unit note in _aggregate_rows: metric only when EVERY active
+    # asset is trustworthy geographic (EPSG 4326).
+    return bool(epsgs) and all(e == 4326 for e in epsgs)
+
+
 def aggregate_annotations(project_ids: List[int]) -> Dict[str, Any]:
     """Aggregate non-deleted annotations across one or more projects.
 
@@ -1879,81 +2278,25 @@ def aggregate_annotations(project_ids: List[int]) -> Dict[str, Any]:
     fully defensive — a single malformed annotation is counted toward
     annotation_count but can never abort or 500 the whole report.
     """
-    empty: Dict[str, Any] = {
-        "annotation_count": 0,
-        "by_species": [],
-        "by_condition": [],
-        "by_shape_type": [],
-        "by_unrecognized_species": [],
-        "total_area": {"value": 0.0, "unit": "relative", "computable_count": 0, "missing_count": 0},
-        "total_length": {"value": 0.0, "unit": "relative", "computable_count": 0, "missing_count": 0},
-        "missing_fields": {"spcode": 0, "con_1": 0},
-    }
     if not project_ids:
-        return empty
+        return _aggregate_rows([], {}, False)
+    rows, species_lookup, epsgs_by_project = _load_aggregate_inputs(project_ids)
+    all_epsgs = [e for pid in project_ids for e in epsgs_by_project.get(pid, [])]
+    return _aggregate_rows(rows, species_lookup, _is_geographic(all_epsgs))
 
-    # Safe IN-clause: one bind per id (:pid0, :pid1, …) — never string-interpolate ids.
-    id_binds = {f"pid{i}": pid for i, pid in enumerate(project_ids)}
-    in_clause = ", ".join(f":{k}" for k in id_binds)
 
-    rows = fetch_all(
-        "SELECT feature_geojson, properties_json FROM cat_annotations "
-        f"WHERE project_id IN ({in_clause}) AND deleted_at IS NULL",
-        id_binds,
-    )
+def _aggregate_rows(rows: List[Dict[str, Any]], species_lookup: Dict[str, Dict[str, Any]], geographic: bool) -> Dict[str, Any]:
+    """The per-row aggregation behind aggregate_annotations(), on rows already
+    fetched — so one fetch can feed a rollup and every per-project breakdown.
 
-    # Species lookup {spcode: {"name": taxon_name, "genus": genus}}. The table
-    # may be empty; unknown/absent spcodes fall back to the code as the name.
-    species_lookup: Dict[str, Dict[str, Any]] = {}
-    try:
-        for s in fetch_all("SELECT spcode, taxon_name, genus FROM cat_coral_species"):
-            code = s.get("spcode")
-            if code:
-                species_lookup[code] = {"name": s.get("taxon_name"), "genus": s.get("genus")}
-    except Exception:
-        species_lookup = {}
-
-    # --- Area unit decision (deliberate; see note) -------------------------
-    # A metric (m^2) area is only honest when the source raster is truly
-    # georeferenced AND the stored coordinates are real lng/lat degrees. The QA
-    # fixture (and any LOCAL_CS COG) has a NULL/unknown asset EPSG, so its
-    # coordinates are relabeled pixel space — a computed m^2 would be
-    # meaningless. We therefore default to a planar shoelace area in the raw
-    # coordinate units labeled unit="relative", and only switch to a spherical
-    # geodesic area in m^2 when the active asset carries a trustworthy
-    # geographic EPSG (4326 = true lng/lat degrees). We never present a
-    # possibly-wrong m^2. Projected EPSGs are left as "relative" here because we
-    # cannot reliably tell (without pyproj) whether the stored coords are meters
-    # or degrees.
-    area_unit = "relative"
-    geographic = False
-    try:
-        asset_rows = fetch_all(
-            "SELECT source_epsg, target_epsg FROM cat_project_assets "
-            f"WHERE project_id IN ({in_clause}) AND NVL(is_active, 1) = 1",
-            id_binds,
-        )
-        # Resolve ONE epsg per active asset (prefer target, then source). An
-        # asset with no resolvable epsg disqualifies the whole set: going metric
-        # requires EVERY active asset to be trustworthy geographic, otherwise a
-        # mixed project (one 4326 asset + one null/pixel-space asset) — or a
-        # future multi-project rollup — would mislabel pixel areas as m^2.
-        def _resolve_epsg(a):
-            for key in ("target_epsg", "source_epsg"):
-                v = a.get(key)
-                if v is not None:
-                    try:
-                        return int(v)
-                    except (TypeError, ValueError):
-                        pass
-            return None
-        resolved = [_resolve_epsg(a) for a in asset_rows]
-        if resolved and all(e == 4326 for e in resolved):
-            area_unit = "m^2"
-            geographic = True
-    except Exception:
-        area_unit = "relative"
-        geographic = False
+    Area unit (deliberate): a metric (m^2) area is only honest when the source
+    raster is truly georeferenced AND the stored coordinates are real lng/lat
+    degrees. LOCAL_CS / unknown-EPSG rasters store relabeled pixel space, so
+    by default a planar shoelace area is reported with unit="relative"; only
+    when every active asset is EPSG 4326 (geographic=True) is a spherical
+    geodesic area in m^2 used. We never present a possibly-wrong m^2.
+    """
+    area_unit = "m^2" if geographic else "relative"
 
     species_counts: Dict[str, int] = {}
     condition_counts: Dict[str, int] = {}
@@ -2544,13 +2887,17 @@ def generate_transect_layers(
                 "properties_json": json.dumps(properties),
             })
         if rows:
-            execute_many(
-                """
-                INSERT INTO cat_overlay_features (layer_id, feature_geojson, properties_json)
-                VALUES (:layer_id, :feature_geojson, :properties_json)
-                """,
-                rows,
-            )
+            try:
+                execute_many(
+                    """
+                    INSERT INTO cat_overlay_features (layer_id, feature_geojson, properties_json)
+                    VALUES (:layer_id, :feature_geojson, :properties_json)
+                    """,
+                    rows,
+                )
+            except Exception:
+                _drop_failed_layer(layer_id)
+                raise
 
         layer = fetch_one("SELECT * FROM cat_overlay_layers WHERE layer_id = :layer_id", {"layer_id": layer_id})
         return _normalize_layer_row(layer)
@@ -2562,12 +2909,17 @@ def generate_transect_layers(
         {"color": "#ff8c00", "weight": 3, "opacity": 0.9},
         transect_features,
     )
-    segment_layer = _create_layer(
-        f"Segments ({stamp})",
-        "segment",
-        {"color": "#1e90ff", "weight": 1, "opacity": 0.8, "fillOpacity": 0.25},
-        segment_features,
-    )
+    try:
+        segment_layer = _create_layer(
+            f"Segments ({stamp})",
+            "segment",
+            {"color": "#1e90ff", "weight": 1, "opacity": 0.8, "fillOpacity": 0.25},
+            segment_features,
+        )
+    except Exception:
+        # All or nothing: don't leave a transect without its segments.
+        _drop_failed_layer(transect_layer["layer_id"])
+        raise
 
     return {"success": True, "transect_layer": transect_layer, "segment_layer": segment_layer}
 
@@ -2688,22 +3040,16 @@ def buffer_overlay_layer(
     except ImportError as exc:
         raise HTTPException(status_code=500, detail=f"Missing required package: {exc}")
 
-    new_layer_name = payload.new_layer_name or f"{layer['layer_name']} (buffered {payload.distance_m}m)"
-    new_layer_id = execute_returning_id(
-        """
-        INSERT INTO cat_overlay_layers (project_id, layer_name, layer_type, style_json)
-        VALUES (:project_id, :layer_name, 'derived', :style_json)
-        RETURNING layer_id INTO :layer_id
-        """,
-        {"project_id": project_id, "layer_name": new_layer_name, "style_json": json.dumps({})},
-        id_column="layer_id",
-    )
-
-    buffered_count = 0
+    # Geometry work first (a bad geometry is skipped and counted), then the
+    # layer + all its features in one go, so a DB failure can't leave a
+    # partial layer. (DB errors used to be swallowed per feature too.)
+    out_features = []
+    skipped = 0
     for row in rows:
         try:
             geom_dict = _parse_json_field(row.get("feature_geojson"), default=None)
             if not geom_dict:
+                skipped += 1
                 continue
             geom = shape(geom_dict)
             centroid = geom.centroid
@@ -2712,26 +3058,18 @@ def buffer_overlay_layer(
             to_wgs84 = Transformer.from_crs(utm_epsg, 4326, always_xy=True)
             buffered_utm = shapely_transform(to_utm.transform, geom).buffer(payload.distance_m)
             buffered_wgs84 = shapely_transform(to_wgs84.transform, buffered_utm)
-
-            execute(
-                """
-                INSERT INTO cat_overlay_features (layer_id, feature_geojson, properties_json)
-                VALUES (:layer_id, :feature_geojson, :properties_json)
-                """,
-                {
-                    "layer_id": new_layer_id,
-                    "feature_geojson": json.dumps(mapping(buffered_wgs84)),
-                    "properties_json": row.get("properties_json"),
-                },
-            )
-            buffered_count += 1
+            out_features.append((json.dumps(mapping(buffered_wgs84)), row.get("properties_json")))
         except Exception:
-            continue
+            skipped += 1
+
+    new_layer_name = payload.new_layer_name or f"{layer['layer_name']} (buffered {payload.distance_m}m)"
+    new_layer_id = _create_derived_layer(project_id, new_layer_name, out_features)
 
     _log_activity(project_id, current_user["user_id"], "overlay_layer_buffered",
                   {"source_layer_id": layer_id, "new_layer_id": new_layer_id, "distance_m": payload.distance_m})
     new_layer = fetch_one("SELECT * FROM cat_overlay_layers WHERE layer_id = :layer_id", {"layer_id": new_layer_id})
-    return {"success": True, "layer": _normalize_layer_row(new_layer), "feature_count": buffered_count}
+    return {"success": True, "layer": _normalize_layer_row(new_layer),
+            "feature_count": len(out_features), "skipped_count": skipped}
 
 
 @router.post("/projects/{project_id}/overlay-layers/{layer_id}/clip")
@@ -2791,45 +3129,29 @@ def clip_overlay_layer(
         raise HTTPException(status_code=400, detail="Clip layer has no valid geometries")
     clip_union = unary_union(clip_geoms)
 
-    new_layer_name = payload.new_layer_name or f"{layer['layer_name']} (clipped)"
-    new_layer_id = execute_returning_id(
-        """
-        INSERT INTO cat_overlay_layers (project_id, layer_name, layer_type, style_json)
-        VALUES (:project_id, :layer_name, 'derived', :style_json)
-        RETURNING layer_id INTO :layer_id
-        """,
-        {"project_id": project_id, "layer_name": new_layer_name, "style_json": json.dumps({})},
-        id_column="layer_id",
-    )
-
-    clipped_count = 0
+    out_features = []
+    skipped = 0
     for row in source_rows:
         try:
             geom_dict = _parse_json_field(row.get("feature_geojson"), default=None)
             if not geom_dict:
+                skipped += 1
                 continue
             intersection = shape(geom_dict).intersection(clip_union)
             if intersection.is_empty:
-                continue
-            execute(
-                """
-                INSERT INTO cat_overlay_features (layer_id, feature_geojson, properties_json)
-                VALUES (:layer_id, :feature_geojson, :properties_json)
-                """,
-                {
-                    "layer_id": new_layer_id,
-                    "feature_geojson": json.dumps(mapping(intersection)),
-                    "properties_json": row.get("properties_json"),
-                },
-            )
-            clipped_count += 1
+                continue  # outside the clip area: expected, not an error
+            out_features.append((json.dumps(mapping(intersection)), row.get("properties_json")))
         except Exception:
-            continue
+            skipped += 1
+
+    new_layer_name = payload.new_layer_name or f"{layer['layer_name']} (clipped)"
+    new_layer_id = _create_derived_layer(project_id, new_layer_name, out_features)
 
     _log_activity(project_id, current_user["user_id"], "overlay_layer_clipped",
                   {"source_layer_id": layer_id, "clip_layer_id": payload.clip_layer_id, "new_layer_id": new_layer_id})
     new_layer = fetch_one("SELECT * FROM cat_overlay_layers WHERE layer_id = :layer_id", {"layer_id": new_layer_id})
-    return {"success": True, "layer": _normalize_layer_row(new_layer), "feature_count": clipped_count}
+    return {"success": True, "layer": _normalize_layer_row(new_layer),
+            "feature_count": len(out_features), "skipped_count": skipped}
 
 
 @router.post("/projects/{project_id}/overlay-layers/upload-shapefile")
@@ -2913,33 +3235,39 @@ async def upload_shapefile_to_layer(
                 id_column="layer_id",
             )
 
-            # Bulk import features
-            features_data = []
-            for idx, row in gdf.iterrows():
-                geom = row.geometry
-                properties = {k: v for k, v in row.items() if k != 'geometry'}
-                
-                # Convert to GeoJSON
-                feature_geojson = {
-                    "type": "Feature",
-                    "geometry": json.loads(gpd.GeoSeries([geom]).to_json())['features'][0]['geometry'],
-                    "properties": properties
-                }
+            # Bulk import features. If anything fails from here on, drop the
+            # layer just created (features cascade) so a failed upload doesn't
+            # leave an empty or partial layer behind.
+            try:
+                features_data = []
+                for idx, row in gdf.iterrows():
+                    geom = row.geometry
+                    properties = {k: v for k, v in row.items() if k != 'geometry'}
 
-                features_data.append({
-                    "layer_id": layer_id,
-                    "feature_geojson": json.dumps(feature_geojson, default=_numpy_safe_json),
-                    "properties_json": json.dumps(properties, default=_numpy_safe_json)
-                })
+                    # Convert to GeoJSON
+                    feature_geojson = {
+                        "type": "Feature",
+                        "geometry": json.loads(gpd.GeoSeries([geom]).to_json())['features'][0]['geometry'],
+                        "properties": properties
+                    }
 
-            if features_data:
-                execute_many(
-                    """
-                    INSERT INTO cat_overlay_features (layer_id, feature_geojson, properties_json)
-                    VALUES (:layer_id, :feature_geojson, :properties_json)
-                    """,
-                    features_data
-                )
+                    features_data.append({
+                        "layer_id": layer_id,
+                        "feature_geojson": json.dumps(feature_geojson, default=_numpy_safe_json),
+                        "properties_json": json.dumps(properties, default=_numpy_safe_json)
+                    })
+
+                if features_data:
+                    execute_many(
+                        """
+                        INSERT INTO cat_overlay_features (layer_id, feature_geojson, properties_json)
+                        VALUES (:layer_id, :feature_geojson, :properties_json)
+                        """,
+                        features_data
+                    )
+            except Exception:
+                _drop_failed_layer(layer_id)
+                raise
 
             return {
                 "success": True,
@@ -2950,9 +3278,49 @@ async def upload_shapefile_to_layer(
                 "message": f"Imported {len(features_data)} features from {layer_name}"
             }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        import traceback
-        raise HTTPException(status_code=500, detail=f"Error processing shapefile: {str(e)}\n{traceback.format_exc()}")
+        # Full traceback to the server log, not to the browser.
+        logger.exception("Shapefile upload failed for project %s", project_id)
+        raise HTTPException(status_code=500, detail=f"Error processing shapefile: {e}")
+
+
+def _create_derived_layer(project_id: int, layer_name: str, features: List[Tuple[str, Any]]) -> int:
+    """Create a 'derived' overlay layer with its features (feature_geojson,
+    properties_json pairs); if the feature insert fails, the layer is removed
+    again and the error raised."""
+    new_layer_id = execute_returning_id(
+        """
+        INSERT INTO cat_overlay_layers (project_id, layer_name, layer_type, style_json)
+        VALUES (:project_id, :layer_name, 'derived', :style_json)
+        RETURNING layer_id INTO :layer_id
+        """,
+        {"project_id": project_id, "layer_name": layer_name, "style_json": json.dumps({})},
+        id_column="layer_id",
+    )
+    if features:
+        try:
+            execute_many(
+                """
+                INSERT INTO cat_overlay_features (layer_id, feature_geojson, properties_json)
+                VALUES (:layer_id, :feature_geojson, :properties_json)
+                """,
+                [{"layer_id": new_layer_id, "feature_geojson": g, "properties_json": p} for g, p in features],
+            )
+        except Exception:
+            _drop_failed_layer(new_layer_id)
+            raise
+    return new_layer_id
+
+
+def _drop_failed_layer(layer_id: int) -> None:
+    """Remove a layer whose feature import failed part-way (its features go
+    with it via ON DELETE CASCADE). Never masks the original error."""
+    try:
+        execute("DELETE FROM cat_overlay_layers WHERE layer_id = :layer_id", {"layer_id": layer_id})
+    except Exception:
+        logger.exception("Could not remove partially imported overlay layer %s", layer_id)
 
 
 def _import_shapefile_from_dir(
@@ -3001,29 +3369,33 @@ def _import_shapefile_from_dir(
         id_column="layer_id",
     )
 
-    features_data = []
-    for idx, row in gdf.iterrows():
-        geom = row.geometry
-        properties = {k: v for k, v in row.items() if k != 'geometry'}
-        feature_geojson = {
-            "type": "Feature",
-            "geometry": json.loads(gpd.GeoSeries([geom]).to_json())['features'][0]['geometry'],
-            "properties": properties
-        }
-        features_data.append({
-            "layer_id": layer_id,
-            "feature_geojson": json.dumps(feature_geojson, default=_numpy_safe_json),
-            "properties_json": json.dumps(properties, default=_numpy_safe_json)
-        })
+    try:
+        features_data = []
+        for idx, row in gdf.iterrows():
+            geom = row.geometry
+            properties = {k: v for k, v in row.items() if k != 'geometry'}
+            feature_geojson = {
+                "type": "Feature",
+                "geometry": json.loads(gpd.GeoSeries([geom]).to_json())['features'][0]['geometry'],
+                "properties": properties
+            }
+            features_data.append({
+                "layer_id": layer_id,
+                "feature_geojson": json.dumps(feature_geojson, default=_numpy_safe_json),
+                "properties_json": json.dumps(properties, default=_numpy_safe_json)
+            })
 
-    if features_data:
-        execute_many(
-            """
-            INSERT INTO cat_overlay_features (layer_id, feature_geojson, properties_json)
-            VALUES (:layer_id, :feature_geojson, :properties_json)
-            """,
-            features_data
-        )
+        if features_data:
+            execute_many(
+                """
+                INSERT INTO cat_overlay_features (layer_id, feature_geojson, properties_json)
+                VALUES (:layer_id, :feature_geojson, :properties_json)
+                """,
+                features_data
+            )
+    except Exception:
+        _drop_failed_layer(layer_id)
+        raise
 
     return {
         "success": True,
@@ -3075,8 +3447,50 @@ async def upload_shapefile_loose_files(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        raise HTTPException(status_code=500, detail=f"Error processing shapefile files: {str(e)}\n{traceback.format_exc()}")
+        logger.exception("Shapefile upload failed for project %s", project_id)
+        raise HTTPException(status_code=500, detail=f"Error processing shapefile files: {e}")
+
+
+# Must be registered BEFORE "/overlay-layers/{layer_id}": routes match in
+# order, and that one would take "reorder" as a layer id and 422 (which is
+# what happened — every layer-management Save with a changed order failed,
+# losing its show/hide changes too).
+class _LayerOrderItem(BaseModel):
+    layer_id: int
+    display_order: int
+
+
+class LayerReorder(BaseModel):
+    layer_orders: List[_LayerOrderItem] = Field(min_length=1)
+
+
+@router.put("/projects/{project_id}/overlay-layers/reorder")
+def reorder_overlay_layers(
+    project_id: int,
+    payload: LayerReorder,
+    _current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Set display_order for the project's overlay layers, all-or-nothing."""
+    _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "editor")
+
+    rows = [
+        {"project_id": project_id, "layer_id": item.layer_id, "display_order": item.display_order}
+        for item in payload.layer_orders
+    ]
+    with get_connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    "UPDATE cat_overlay_layers SET display_order = :display_order "
+                    "WHERE project_id = :project_id AND layer_id = :layer_id",
+                    rows,
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return {"success": True, "updated_count": len(rows)}
 
 
 @router.put("/projects/{project_id}/overlay-layers/{layer_id}")
@@ -3364,36 +3778,6 @@ def resize_overlay_feature_width(
     }
 
 
-@router.put("/projects/{project_id}/overlay-layers/reorder")
-def reorder_overlay_layers(
-    project_id: int,
-    payload: Dict[str, Any],
-    _current_user: Dict[str, Any] = Depends(require_auth),
-) -> Dict[str, Any]:
-    """Reorder overlay layers by updating display_order"""
-    _ensure_oracle_mode()
-    _require_project_role(project_id, _current_user, "editor")
-
-    # Expect payload: {"layer_orders": [{"layer_id": 1, "display_order": 0}, ...]}
-    layer_orders = payload.get("layer_orders", [])
-    
-    if not layer_orders:
-        raise HTTPException(status_code=400, detail="No layer orders provided")
-
-    # Update each layer's display_order
-    for item in layer_orders:
-        execute(
-            "UPDATE cat_overlay_layers SET display_order = :display_order WHERE project_id = :project_id AND layer_id = :layer_id",
-            {
-                "project_id": project_id,
-                "layer_id": item["layer_id"],
-                "display_order": item["display_order"]
-            }
-        )
-
-    return {"success": True, "updated_count": len(layer_orders)}
-
-
 @router.post("/projects/{project_id}/sessions/start")
 def start_session(
     project_id: int, payload: SessionStart, _current_user: Dict[str, Any] = Depends(require_auth)
@@ -3404,6 +3788,11 @@ def start_session(
     project = fetch_one("SELECT project_id FROM cat_projects WHERE project_id = :project_id", {"project_id": project_id})
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Sessions belong to the logged-in account (the page used to send the
+    # Analyst field, often still empty = "unknown" when the project loads,
+    # so everyone's time piled up under one name and totals never matched).
+    username = (_current_user.get("username") or payload.username or "unknown")[:120]
 
     # Auto-close stale sessions (no heartbeat for >2h) across all users on this project (4c)
     execute(
@@ -3423,8 +3812,19 @@ def start_session(
         SET is_active = 0, end_time = CURRENT_TIMESTAMP
         WHERE project_id = :project_id AND username = :username AND is_active = 1
         """,
-        {"project_id": project_id, "username": payload.username},
+        {"project_id": project_id, "username": username},
     )
+
+    # This person's time on this project from earlier sessions, so the page's
+    # "Total" continues instead of restarting from zero on every load.
+    prior = fetch_one(
+        """
+        SELECT NVL(SUM(total_seconds), 0) AS total_seconds, NVL(SUM(annotation_count), 0) AS annotation_count
+        FROM cat_annotation_sessions
+        WHERE project_id = :project_id AND username = :username
+        """,
+        {"project_id": project_id, "username": username},
+    ) or {}
 
     session_id = execute_returning_id(
         """
@@ -3434,12 +3834,17 @@ def start_session(
             :project_id, :username, 1
         ) RETURNING session_id INTO :session_id
         """,
-        {"project_id": project_id, "username": payload.username},
+        {"project_id": project_id, "username": username},
         id_column="session_id",
     )
 
     session = fetch_one("SELECT * FROM cat_annotation_sessions WHERE session_id = :session_id", {"session_id": session_id})
-    return {"success": True, "session": session}
+    return {
+        "success": True,
+        "session": session,
+        "prior_total_seconds": int(prior.get("total_seconds") or 0),
+        "prior_annotation_count": int(prior.get("annotation_count") or 0),
+    }
 
 
 @router.put("/projects/{project_id}/sessions/{session_id}")
@@ -3470,6 +3875,9 @@ def update_session(
     if payload.is_active is not None:
         fields.append("is_active = :is_active")
         params["is_active"] = 1 if payload.is_active else 0
+    if fields:
+        # A progress update also keeps the session from being auto-closed.
+        fields.append("last_heartbeat = CURRENT_TIMESTAMP")
 
     if fields:
         execute(
@@ -3542,6 +3950,7 @@ def session_stats(
     project_id: int, username: Optional[str] = None, _current_user: Dict[str, Any] = Depends(require_auth)
 ) -> Dict[str, Any]:
     _ensure_oracle_mode()
+    _require_project_role(project_id, _current_user, "viewer")
 
     if username:
         sql = """
@@ -3572,3 +3981,339 @@ def session_stats(
         "username": username,
         "stats": totals,
     }
+
+
+# ---------------------------------------------------------------------------
+# Team-lead compare view: several projects from the same site, layered.
+# Read-only. Uses the same "all projects" visibility every signed-in user
+# already has on the Project Manager.
+# ---------------------------------------------------------------------------
+
+@router.get("/compare/sites")
+def compare_sites(current_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
+    """Sites that have at least one project, with how many projects and
+    annotations each has — the compare page's site picker."""
+    _ensure_oracle_mode()
+    rows = fetch_all(
+        """
+        SELECT UPPER(TRIM(p.site)) AS site,
+               COUNT(DISTINCT p.project_id) AS project_count,
+               COUNT(a.annotation_id) AS annotation_count
+        FROM cat_projects p
+        LEFT JOIN cat_annotations a ON a.project_id = p.project_id AND a.deleted_at IS NULL
+        WHERE p.site IS NOT NULL AND TRIM(p.site) IS NOT NULL
+        GROUP BY UPPER(TRIM(p.site))
+        ORDER BY UPPER(TRIM(p.site))
+        """
+    )
+    return {"success": True, "sites": rows}
+
+
+@router.get("/compare/site-projects")
+def compare_site_projects(site: str, current_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
+    """Every project at one site, with its annotators (and their counts) and
+    its imagery, so the page can layer them over one map."""
+    _ensure_oracle_mode()
+    site_key = (site or "").strip().upper()
+    if not site_key:
+        raise HTTPException(status_code=400, detail="site is required")
+
+    projects = fetch_all(
+        """
+        SELECT p.project_id, p.project_name, p.site, p.year_num AS year, p.cruise, p.created_at,
+               owner.display_name AS owner_display_name, owner.username AS owner_username
+        FROM cat_projects p
+        LEFT JOIN cat_users owner ON owner.user_id = p.owner_user_id
+        WHERE UPPER(TRIM(p.site)) = :site
+        ORDER BY p.year_num DESC NULLS LAST, p.created_at DESC
+        """,
+        {"site": site_key},
+    )
+    if not projects:
+        return {"success": True, "site": site_key, "projects": []}
+
+    ids = [p["project_id"] for p in projects]
+    by_id = {p["project_id"]: dict(p, annotators=[], assets=[], annotation_count=0) for p in projects}
+
+    # Chunked IN lists: Oracle caps them at 1000 expressions.
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        binds = {f"p{j}": pid for j, pid in enumerate(chunk)}
+        in_sql = ", ".join(f":{k}" for k in binds)
+        for row in fetch_all(
+            f"""
+            SELECT a.project_id,
+                   a.created_by_user_id AS user_id,
+                   NVL(u.display_name, NVL(u.username, NVL(a.created_by, 'Unknown'))) AS annotator,
+                   COUNT(*) AS annotation_count
+            FROM cat_annotations a
+            LEFT JOIN cat_users u ON u.user_id = a.created_by_user_id
+            WHERE a.project_id IN ({in_sql}) AND a.deleted_at IS NULL
+            GROUP BY a.project_id, a.created_by_user_id,
+                     NVL(u.display_name, NVL(u.username, NVL(a.created_by, 'Unknown')))
+            ORDER BY COUNT(*) DESC
+            """,
+            binds,
+        ):
+            entry = by_id[row["project_id"]]
+            entry["annotators"].append(
+                {"user_id": row["user_id"], "annotator": row["annotator"], "annotation_count": row["annotation_count"]}
+            )
+            entry["annotation_count"] += int(row["annotation_count"] or 0)
+        for row in fetch_all(
+            f"""
+            SELECT project_id, asset_id, asset_name, asset_type, cog_url
+            FROM cat_project_assets
+            WHERE project_id IN ({in_sql}) AND NVL(is_active, 1) = 1
+            ORDER BY asset_id
+            """,
+            binds,
+        ):
+            by_id[row["project_id"]]["assets"].append(
+                {k: row[k] for k in ("asset_id", "asset_name", "asset_type", "cog_url")}
+            )
+
+    return {"success": True, "site": site_key, "projects": [by_id[pid] for pid in ids]}
+
+
+# ---------------------------------------------------------------------------
+# Time & activity report: who spent how long on what, plus a friendly
+# leaderboard. Read-only; same all-projects visibility as the project list.
+# ---------------------------------------------------------------------------
+
+def _activity_filters(project_id: Optional[int], site: Optional[str], days: Optional[int], alias: str, time_col: str):
+    conds: List[str] = []
+    params: Dict[str, Any] = {}
+    if project_id is not None:
+        conds.append(f"{alias}.project_id = :project_id")
+        params["project_id"] = project_id
+    if site and site.strip():
+        conds.append("UPPER(TRIM(p.site)) = :site")
+        params["site"] = site.strip().upper()
+    if days:
+        conds.append(f"{alias}.{time_col} >= SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')")
+        params["days"] = max(1, min(int(days), 3650))
+    return (" AND " + " AND ".join(conds)) if conds else "", params
+
+
+def _day_of(value: Any) -> Any:
+    return value.date() if hasattr(value, "date") else str(value)[:10]
+
+
+@router.get("/activity/report")
+def activity_report(
+    project_id: Optional[int] = None,
+    site: Optional[str] = None,
+    days: Optional[int] = None,
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Time per annotator and project, recent sessions and leaderboards.
+
+    Session time comes from cat_annotation_sessions (active time the page
+    reports every minute); annotation counts from cat_annotations by the
+    account that created them. Filters: one project, one site, last N days.
+    """
+    _ensure_oracle_mode()
+
+    s_where, s_params = _activity_filters(project_id, site, days, "s", "start_time")
+    sessions = fetch_all(
+        f"""
+        SELECT s.session_id, s.project_id, p.project_name, p.site, s.username,
+               u.user_id, NVL(u.display_name, s.username) AS annotator,
+               s.start_time, s.end_time, NVL(s.total_seconds, 0) AS total_seconds,
+               NVL(s.annotation_count, 0) AS annotation_count, s.is_active, s.last_heartbeat
+        FROM cat_annotation_sessions s
+        JOIN cat_projects p ON p.project_id = s.project_id
+        LEFT JOIN cat_users u ON LOWER(u.username) = LOWER(s.username)
+        WHERE 1=1 {s_where}
+        ORDER BY s.start_time DESC
+        """,
+        s_params,
+    )
+
+    # Who is annotating right now: a live session that reported in the last
+    # 10 minutes (the page reports every minute while its timer runs).
+    now_row = fetch_one(
+        f"""
+        SELECT COUNT(DISTINCT LOWER(s.username)) AS n
+        FROM cat_annotation_sessions s
+        JOIN cat_projects p ON p.project_id = s.project_id
+        WHERE s.is_active = 1 AND s.last_heartbeat >= SYSTIMESTAMP - INTERVAL '10' MINUTE {s_where}
+        """,
+        s_params,
+    ) or {}
+    active_now = int(now_row.get("n") or 0)
+    # Every page load opens a session; ones that never recorded any time
+    # (quick look, reload) would only pad counts and averages.
+    sessions = [s for s in sessions if int(s.get("total_seconds") or 0) > 0 or s.get("is_active") == 1]
+
+    a_where, a_params = _activity_filters(project_id, site, days, "a", "created_at")
+    created = fetch_all(
+        f"""
+        SELECT a.project_id, p.project_name, p.site, a.created_by_user_id AS user_id,
+               NVL(u.display_name, NVL(u.username, NVL(a.created_by, 'Unknown'))) AS annotator,
+               COUNT(*) AS annotations,
+               COUNT(DISTINCT TRUNC(a.created_at)) AS days_active,
+               MAX(a.created_at) AS last_created
+        FROM cat_annotations a
+        JOIN cat_projects p ON p.project_id = a.project_id
+        LEFT JOIN cat_users u ON u.user_id = a.created_by_user_id
+        WHERE a.deleted_at IS NULL {a_where}
+        GROUP BY a.project_id, p.project_name, p.site, a.created_by_user_id,
+                 NVL(u.display_name, NVL(u.username, NVL(a.created_by, 'Unknown')))
+        """,
+        a_params,
+    )
+
+    # Distinct calendar days each person created annotations on (across all
+    # projects in scope; summing per-project counts would double-count days).
+    days_by_user: Dict[Any, int] = {}
+    for row in fetch_all(
+        f"""
+        SELECT a.created_by_user_id AS user_id, COUNT(DISTINCT TRUNC(a.created_at)) AS days_active
+        FROM cat_annotations a
+        JOIN cat_projects p ON p.project_id = a.project_id
+        WHERE a.deleted_at IS NULL {a_where}
+        GROUP BY a.created_by_user_id
+        """,
+        a_params,
+    ):
+        days_by_user[row["user_id"]] = int(row["days_active"] or 0)
+
+    # Distinct species per annotator needs JSON_VALUE over the properties
+    # CLOB, which is not available on every Oracle setup: optional extra.
+    species_by_user: Dict[Any, int] = {}
+    try:
+        for row in fetch_all(
+            f"""
+            SELECT a.created_by_user_id AS user_id,
+                   COUNT(DISTINCT UPPER(TRIM(JSON_VALUE(a.properties_json, '$.spcode')))) AS species
+            FROM cat_annotations a
+            JOIN cat_projects p ON p.project_id = a.project_id
+            WHERE a.deleted_at IS NULL {a_where}
+            GROUP BY a.created_by_user_id
+            """,
+            a_params,
+        ):
+            species_by_user[row["user_id"]] = int(row["species"] or 0)
+    except Exception as exc:  # depends on DB features
+        logger.info("Species-variety stat unavailable: %s", exc)
+
+    # ---- per annotator ----------------------------------------------------
+    people: Dict[str, Dict[str, Any]] = {}
+
+    def person(user_id: Any, name: str) -> Dict[str, Any]:
+        key = f"u{user_id}" if user_id is not None else f"n{(name or 'Unknown').lower()}"
+        if key not in people:
+            people[key] = {
+                "user_id": user_id, "annotator": name or "Unknown", "total_seconds": 0, "sessions": 0,
+                "longest_session_seconds": 0, "annotations": 0, "projects": set(), "session_days": set(),
+                "annotation_days": 0, "last_active": None, "species": species_by_user.get(user_id),
+            }
+        return people[key]
+
+    def later(a: Any, b: Any) -> Any:
+        if a is None:
+            return b
+        if b is None:
+            return a
+        return a if a >= b else b
+
+    for s in sessions:
+        p = person(s["user_id"], s["annotator"])
+        secs = int(s["total_seconds"] or 0)
+        p["total_seconds"] += secs
+        p["sessions"] += 1 if secs > 0 else 0  # a live session with no time yet isn't counted in averages
+        p["longest_session_seconds"] = max(p["longest_session_seconds"], secs)
+        p["projects"].add(s["project_id"])
+        if s.get("start_time") is not None and secs > 0:
+            p["session_days"].add(_day_of(s["start_time"]))
+        p["last_active"] = later(p["last_active"], s.get("last_heartbeat") or s.get("start_time"))
+    for c in created:
+        p = person(c["user_id"], c["annotator"])
+        p["annotations"] += int(c["annotations"] or 0)
+        p["annotation_days"] = days_by_user.get(c["user_id"], p["annotation_days"])
+        p["projects"].add(c["project_id"])
+        p["last_active"] = later(p["last_active"], c.get("last_created"))
+
+    annotators = []
+    for p in people.values():
+        hours = p["total_seconds"] / 3600.0
+        annotators.append({
+            "user_id": p["user_id"],
+            "annotator": p["annotator"],
+            "total_seconds": p["total_seconds"],
+            "sessions": p["sessions"],
+            "avg_session_seconds": int(p["total_seconds"] / p["sessions"]) if p["sessions"] else 0,
+            "longest_session_seconds": p["longest_session_seconds"],
+            "annotations": p["annotations"],
+            "annotations_per_hour": round(p["annotations"] / hours, 1) if hours >= 0.25 else None,
+            "seconds_per_annotation": int(p["total_seconds"] / p["annotations"]) if p["annotations"] and p["total_seconds"] else None,
+            "projects": len(p["projects"]),
+            "days_active": max(len(p["session_days"]), p["annotation_days"]),
+            "species": p["species"],
+            "last_active": p["last_active"],
+        })
+    annotators.sort(key=lambda r: (r["total_seconds"], r["annotations"]), reverse=True)
+
+    # ---- per project ------------------------------------------------------
+    projects: Dict[int, Dict[str, Any]] = {}
+
+    def project_row(pid: int, name: Any, site_name: Any) -> Dict[str, Any]:
+        return projects.setdefault(pid, {"project_id": pid, "project_name": name, "site": site_name,
+                                         "total_seconds": 0, "sessions": 0, "annotations": 0, "annotators": set()})
+
+    for s in sessions:
+        pr = project_row(s["project_id"], s["project_name"], s["site"])
+        pr["total_seconds"] += int(s["total_seconds"] or 0)
+        pr["sessions"] += 1
+        pr["annotators"].add(s["annotator"])
+    for c in created:
+        pr = project_row(c["project_id"], c["project_name"], c["site"])
+        pr["annotations"] += int(c["annotations"] or 0)
+        pr["annotators"].add(c["annotator"])
+    project_rows = []
+    for pr in projects.values():
+        row = dict(pr)
+        row["annotators"] = sorted(a for a in pr["annotators"] if a)
+        project_rows.append(row)
+    project_rows.sort(key=lambda r: (r["total_seconds"], r["annotations"]), reverse=True)
+
+    # ---- leaderboards -----------------------------------------------------
+    def top(key: str, label: str, fmt: str, min_filter=None, n: int = 5) -> Dict[str, Any]:
+        pool = [a for a in annotators if a.get(key) and (min_filter is None or min_filter(a))]
+        pool.sort(key=lambda a: a[key], reverse=True)
+        return {"key": key, "label": label, "format": fmt,
+                "entries": [{"annotator": a["annotator"], "value": a[key]} for a in pool[:n]]}
+
+    leaderboards = [
+        top("total_seconds", "⏱️ Most time annotating", "duration"),
+        top("annotations", "🪸 Most annotations", "count"),
+        top("annotations_per_hour", "⚡ Fastest pace (annotations / hour)", "rate",
+            min_filter=lambda a: a["annotations"] >= 10),
+        top("longest_session_seconds", "🏃 Longest single session", "duration"),
+        top("species", "🔎 Most species recorded", "count"),
+        top("days_active", "📅 Most days active", "count"),
+        top("projects", "🗺️ Most projects worked on", "count"),
+    ]
+
+    return jsonable_encoder({
+        "success": True,
+        "filters": {"project_id": project_id, "site": site, "days": days},
+        "totals": {
+            "total_seconds": sum(a["total_seconds"] for a in annotators),
+            "annotations": sum(a["annotations"] for a in annotators),
+            "sessions": len(sessions),
+            "annotators": len(annotators),
+            "projects": len(project_rows),
+            "active_now": active_now,
+        },
+        "annotators": annotators,
+        "projects": project_rows,
+        "leaderboards": leaderboards,
+        "recent_sessions": [
+            {k: s.get(k) for k in ("session_id", "project_id", "project_name", "site", "annotator", "start_time",
+                                   "end_time", "total_seconds", "annotation_count", "is_active")}
+            for s in sessions[:100]
+        ],
+    })

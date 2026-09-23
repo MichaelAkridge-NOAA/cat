@@ -54,7 +54,6 @@
     { field: 'morph_code',    label: 'Morph',         sortable: true,  batchFill: true,  visible: true  },
     { field: 'old_dead',      label: 'Old Dead %',    sortable: true,  batchFill: true,  visible: false },
     { field: 'remnant',       label: 'Remnant',       sortable: true,  batchFill: true,  visible: false },
-    { field: 'fragment',      label: 'Fragment',      sortable: true,  batchFill: true,  visible: false },
     { field: 'ex_bound',      label: 'Ex Bound',      sortable: true,  batchFill: true,  visible: false },
     { field: 'no_colony',     label: 'No Colony',     sortable: true,  batchFill: true,  visible: false },
     { field: 'seglength',     label: 'Seg Length',     sortable: true,  batchFill: true,  visible: false },
@@ -116,8 +115,24 @@
     // We hook into updateAnnotationTable to re-apply sort after table refresh
     const origUpdate = window.updateAnnotationTable;
     if (typeof origUpdate === 'function') {
+      let _deferredRebuild = null;
       window.updateAnnotationTable = function () {
+        // Never rebuild the table under an open cell editor: an autosave
+        // finishing mid-edit used to wipe the editor (and what was being
+        // typed), and broke Tab-to-next-cell. Retry once the edit is done.
+        if (document.querySelector('#annotationTable td.editing')) {
+          if (!_deferredRebuild) {
+            _deferredRebuild = setInterval(() => {
+              if (document.querySelector('#annotationTable td.editing')) return;
+              clearInterval(_deferredRebuild);
+              _deferredRebuild = null;
+              window.updateAnnotationTable();
+            }, 300);
+          }
+          return;
+        }
         origUpdate.apply(this, arguments);
+        if (typeof window.catRefreshRowSaveStates === 'function') window.catRefreshRowSaveStates();
         injectRowCheckboxes();          // add checkbox column (must be first)
         applyColumnVisibility();
         applySortableHeaders();
@@ -460,10 +475,46 @@
 
       // Only activate if we have a focused cell or the table is focused
       const activeCell = table.querySelector('td.kb-focus');
-      if (!activeCell && document.activeElement.tagName !== 'TD') return;
-      if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT') {
-        // Allow Enter/Tab to move to next cell after editing
-        if (e.key === 'Enter' || e.key === 'Tab') {
+      // The element being edited is the event's target (more reliable than
+      // document.activeElement, which isn't the input if the window lost focus).
+      const editingEl = (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT'))
+        ? e.target : document.activeElement;
+      const editingInTable = !!(editingEl && (editingEl.tagName === 'INPUT' || editingEl.tagName === 'SELECT') &&
+        editingEl.closest && editingEl.closest('#annotationTable'));
+      // A key from an editor that has already closed itself on this same
+      // keypress (e.g. species autocomplete saves on Enter and swaps the input
+      // for text) arrives with a detached input as target. It was handled —
+      // don't treat it as "Enter on the focused cell" and reopen the editor.
+      const fromEditor = !!(e.target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName));
+      if (fromEditor && !editingInTable) return;
+      if (!editingInTable && !activeCell && document.activeElement.tagName !== 'TD') return;
+      // Typing in any other field (form, filter box…): leave the keys alone.
+      const ae = document.activeElement;
+      if (!editingInTable && ae && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+      if (editingInTable) {
+        // Tab / Shift+Tab while editing: save this cell, then open the
+        // next / previous EDITABLE cell's editor (spreadsheet-style).
+        if (e.key === 'Tab') {
+          const td = editingEl.closest('td');
+          if (td && td.dataset && td.dataset.field) {
+            e.preventDefault();
+            const target = _neighbourEditableKey(table, td, e.shiftKey);
+            // Commit the edit (may rebuild the table). The species
+            // autocomplete may already have saved on this same Tab.
+            if (editingEl.isConnected) {
+              if (document.activeElement === editingEl) editingEl.blur();
+              // blur() fires no event when the window itself isn't focused;
+              // if the cell is still in edit mode, commit it explicitly.
+              if (editingEl.isConnected && td.classList.contains('editing')) {
+                editingEl.dispatchEvent(new FocusEvent('blur'));
+              }
+            }
+            if (target) setTimeout(() => _focusEditableByKey(target, true), 0);
+          }
+          return;
+        }
+        // Allow Enter to move down after editing
+        if (e.key === 'Enter') {
           e.preventDefault();
           const td = document.activeElement.closest('td');
           if (td) {
@@ -491,6 +542,22 @@
       }
 
       e.preventDefault();
+
+      // Tab on a focused (not editing) cell: move to the next / previous
+      // editable cell. It used to be swallowed and do nothing.
+      if (e.key === 'Tab') {
+        const from = activeCell || (document.activeElement.tagName === 'TD' ? document.activeElement : null);
+        const target = from ? _neighbourEditableKey(table, from, e.shiftKey) : null;
+        if (target) _focusEditableByKey(target, false);
+        return;
+      }
+      // Enter on a focused editable cell opens its editor.
+      if (e.key === 'Enter' && activeCell && activeCell.classList.contains('editable') &&
+          typeof window.makeTableCellEditable === 'function') {
+        window.makeTableCellEditable(activeCell);
+        return;
+      }
+
       const tbody = table.querySelector('tbody');
       if (!tbody) return;
       const rows = Array.from(tbody.querySelectorAll('tr'));
@@ -530,6 +597,48 @@
       kbRow = rows.indexOf(row);
       kbCol = Array.from(row.cells).indexOf(td);
     });
+  }
+
+  // Tab order = editable cells only, row by row. Cells are identified by
+  // (annotation index, field) rather than DOM position, because committing
+  // an edit rebuilds the whole table — the old code looked the row up again
+  // afterwards, got -1, and jumped to row 0.
+  function _neighbourEditableKey(table, fromTd, backwards) {
+    const cells = Array.from(table.querySelectorAll('tbody td.editable'));
+    if (cells.length === 0) return null;
+    // If the table was rebuilt under us, find the same cell in the new one.
+    if (!fromTd.isConnected && fromTd.dataset && fromTd.dataset.field) {
+      const again = table.querySelector(`tbody td.editable[data-index="${fromTd.dataset.index}"][data-field="${fromTd.dataset.field}"]`);
+      if (again) fromTd = again;
+    }
+    let i = cells.indexOf(fromTd);
+    if (i === -1) {
+      // Starting from a non-editable cell: take the nearest editable one
+      // after (or before) it in document order.
+      const pos = (c) => fromTd.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING;
+      const next = backwards ? [...cells].reverse().find(c => !pos(c)) : cells.find(c => pos(c));
+      return next ? { index: next.dataset.index, field: next.dataset.field } : null;
+    }
+    const target = cells[i + (backwards ? -1 : 1)];
+    return target ? { index: target.dataset.index, field: target.dataset.field } : null;
+  }
+
+  function _focusEditableByKey(key, openEditor) {
+    const table = document.getElementById('annotationTable');
+    if (!table || !key) return;
+    const td = table.querySelector(`tbody td.editable[data-index="${key.index}"][data-field="${key.field}"]`);
+    if (!td) return;
+    table.querySelectorAll('td.kb-focus').forEach(c => c.classList.remove('kb-focus'));
+    td.classList.add('kb-focus');
+    td.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const rows = Array.from(table.querySelectorAll('tbody tr'));
+    kbRow = rows.indexOf(td.parentElement);
+    kbCol = Array.from(td.parentElement.cells).indexOf(td);
+    if (openEditor && typeof window.makeTableCellEditable === 'function') {
+      window.makeTableCellEditable(td);
+    } else {
+      td.focus();
+    }
   }
 
   function navigateToCell(table, rowIdx, colIdx) {
@@ -808,8 +917,16 @@
   const CONFIGURED_DROPDOWN_FIELDS = ['morph_code', 'transect', 'segment', 'juvenile', 'no_colony', 'remnant', 'ex_bound'];
   const BLANK_FIRST_FIELDS = { morph_code: true, transect: true, segment: true };
 
+  // Fixed dropdown fields, plus cause/condition/severity once a team lead
+  // has given them a list (annotation-runtime-field-options.js).
+  function _isDropdownField(field) {
+    if (window.CatFieldOptions) return window.CatFieldOptions.isSelectField(field);
+    return CONFIGURED_DROPDOWN_FIELDS.includes(field);
+  }
+
   function _configuredDropdownOptionsHtml(field) {
-    const opts = (window.CatFieldOptions ? window.CatFieldOptions.get(field) : []) || [];
+    if (window.CatFieldOptions) return window.CatFieldOptions.buildOptionsHtml(field, '');
+    const opts = [];
     const blank = BLANK_FIRST_FIELDS[field] ? '<option value="">- Select -</option>' : '';
     return blank + opts.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
   }
@@ -819,10 +936,11 @@
     document.getElementById('batchFillColName').textContent = label;
     const container = document.getElementById('batchFillInputContainer');
 
-    if (CONFIGURED_DROPDOWN_FIELDS.includes(field)) {
+    if (_isDropdownField(field)) {
       container.innerHTML = `<select id="batchFillValue" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;">${_configuredDropdownOptionsHtml(field)}</select>`;
     } else {
       container.innerHTML = `<input type="text" id="batchFillValue" placeholder="Enter value for all rows" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;">`;
+      if (window.CatFieldOptions) window.CatFieldOptions.attachSuggestions(document.getElementById('batchFillValue'), field);
     }
 
     // Wire apply button
@@ -849,27 +967,28 @@
     if (typeof annotations === 'undefined') return;
 
     let count = 0;
-    annotations.forEach((ann) => {
-      const props = ann.properties || ann;
-      const currentVal = props[currentBatchField] || '';
-
-      if (scope === 'empty' && currentVal !== '') return; // skip non-empty
-
-      props[currentBatchField] = value;
-      // Also update flat top-level field so table display and Oracle save stay in sync
+    // Flat fields are what gets saved; keep any nested copy in step. Each
+    // changed annotation is marked pending — batch fill used to only flip
+    // the page-wide flag, so autosave skipped every row it touched.
+    const applyTo = (ann) => {
+      const currentVal = ann[currentBatchField] ?? '';
+      if (scope === 'empty' && currentVal !== '') return false; // skip non-empty
       ann[currentBatchField] = value;
-      count++;
+      if (ann.properties && typeof ann.properties === 'object') ann.properties[currentBatchField] = value;
+      if (ann._syncStatus === 'synced') ann._syncStatus = 'pending';
+      return true;
+    };
+    const touched = new Set();
+    annotations.forEach((ann) => {
+      if (applyTo(ann)) { touched.add(ann); count++; }
     });
 
-    // Sync to layers
+    // Layers whose annotation isn't in the table array (shouldn't happen, but
+    // never leave a layer out of step with what's saved)
     if (typeof drawnItems !== 'undefined') {
       drawnItems.eachLayer(layer => {
-        if (layer.annotationData) {
-          const props = layer.annotationData.properties || layer.annotationData;
-          if (scope === 'all' || !props[currentBatchField]) {
-            props[currentBatchField] = value;
-          }
-        }
+        const ann = layer.annotationData;
+        if (ann && !touched.has(ann)) applyTo(ann);
       });
     }
 
@@ -877,6 +996,7 @@
     if (typeof hasUnsavedChanges !== 'undefined') {
       hasUnsavedChanges = true;
     }
+    if (count > 0 && typeof saveProject === "function") saveProject();
 
     // Update table
     if (typeof updateAnnotationTable === 'function') {
@@ -1220,7 +1340,7 @@
       }
       if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
       if (isOracle && deleted.length > 0 && window._catChannel) {
-        window._catChannel.postMessage({ type: 'annotations-changed' });
+        window._catChannel.postMessage({ type: 'annotations-changed', project_id: (typeof currentProject !== 'undefined' && currentProject) ? currentProject.project_id : null });
       }
 
       if (failed.length > 0) {
@@ -1235,26 +1355,27 @@
   }
 
   // ===================================================================
-  //  BULK UPDATE MODAL — update a field across selected rows
+  //  BULK UPDATE MODAL — set one or more fields across the selected rows
   // ===================================================================
+  const BULK_NUMERIC_FIELDS = ['obs_year', 'old_dead', 'segment', 'juvenile', 'remnant', 'ex_bound', 'no_colony',
+    'rd_1', 'rd_2', 'rd_3', 'extent_1', 'extent_2', 'extent_3', 'sev_1', 'sev_2', 'sev_3', 'seglength', 'segwidth'];
+  const BU_INPUT_STYLE = 'width:100%; padding:7px 8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; box-sizing:border-box;';
+
   function injectBulkUpdateModal() {
     if (document.getElementById('v2BulkUpdateModal')) return;
     const modal = document.createElement('div');
     modal.className = 'batch-fill-modal';
     modal.id = 'v2BulkUpdateModal';
     modal.innerHTML = `
-      <div class="batch-fill-content" style="max-width:440px;">
-        <h3 style="margin:0 0 16px; font-size:16px; color:#1e293b;">
+      <div class="batch-fill-content" style="max-width:560px;">
+        <h3 style="margin:0 0 6px; font-size:16px; color:#1e293b;">
           Bulk Update <span id="bulkUpdateCount" style="color:#3b82f6;">0</span> rows
         </h3>
-        <div style="margin-bottom:12px;">
-          <label style="display:block; font-size:12px; font-weight:600; color:#374151; margin-bottom:4px;">Field to update:</label>
-          <select id="bulkUpdateField" style="width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;"></select>
+        <div style="font-size:11px; color:#64748b; margin-bottom:12px;">
+          Every field listed below is set on every selected row. Leave a value empty to clear that field. Ctrl+Z undoes the whole update.
         </div>
-        <div style="margin-bottom:16px;">
-          <label style="display:block; font-size:12px; font-weight:600; color:#374151; margin-bottom:4px;">New value:</label>
-          <div id="bulkUpdateInputContainer"></div>
-        </div>
+        <div id="bulkUpdateRows" style="display:flex; flex-direction:column; gap:8px; margin-bottom:10px;"></div>
+        <button type="button" id="bulkUpdateAddFieldBtn" style="padding:4px 10px; background:#f1f5f9; color:#334155; border:1px dashed #94a3b8; border-radius:4px; font-size:12px; cursor:pointer; margin-bottom:16px;">+ Add field</button>
         <div class="batch-fill-actions">
           <button class="btn btn-secondary" id="bulkUpdateCancelBtn">Cancel</button>
           <button class="btn btn-primary" id="bulkUpdateApplyBtn">Apply</button>
@@ -1265,49 +1386,88 @@
     modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('active'); });
     document.getElementById('bulkUpdateCancelBtn').addEventListener('click', () => modal.classList.remove('active'));
     document.getElementById('bulkUpdateApplyBtn').addEventListener('click', applyBulkUpdate);
-    document.getElementById('bulkUpdateField').addEventListener('change', buildBulkUpdateInput);
+    document.getElementById('bulkUpdateAddFieldBtn').addEventListener('click', () => _addBulkUpdateRow());
+    // Ctrl/Cmd+Enter applies from anywhere in the dialog.
+    modal.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); applyBulkUpdate(); }
+      else if (e.key === 'Escape') { e.stopPropagation(); modal.classList.remove('active'); }
+    });
+  }
+
+  function _bulkFieldColumns() { return COLUMNS.filter(c => c.batchFill); }
+
+  function _bulkChosenFields(exceptRow) {
+    return Array.from(document.querySelectorAll('#bulkUpdateRows .bu-row'))
+      .filter(r => r !== exceptRow)
+      .map(r => r.querySelector('.bu-field').value);
+  }
+
+  // Grey out fields already used by another row so each field appears once.
+  function _refreshBulkFieldOptions() {
+    document.querySelectorAll('#bulkUpdateRows .bu-row').forEach(row => {
+      const taken = new Set(_bulkChosenFields(row));
+      row.querySelectorAll('.bu-field option').forEach(o => { o.disabled = taken.has(o.value); });
+    });
+    const addBtn = document.getElementById('bulkUpdateAddFieldBtn');
+    if (addBtn) addBtn.style.display = _bulkChosenFields(null).length >= _bulkFieldColumns().length ? 'none' : '';
+  }
+
+  function _addBulkUpdateRow(field) {
+    const cols = _bulkFieldColumns();
+    const taken = new Set(_bulkChosenFields(null));
+    field = field || (cols.find(c => !taken.has(c.field)) || {}).field;
+    if (!field) return;
+    const row = document.createElement('div');
+    row.className = 'bu-row';
+    row.style.cssText = 'display:grid; grid-template-columns: 170px 1fr 28px; gap:8px; align-items:start;';
+    row.innerHTML = `
+      <select class="bu-field" style="${BU_INPUT_STYLE}">
+        ${cols.map(c => `<option value="${c.field}"${c.field === field ? ' selected' : ''}>${c.label}</option>`).join('')}
+      </select>
+      <div class="bu-value-wrap"></div>
+      <button type="button" class="bu-remove" title="Remove this field" style="height:32px; border:1px solid #e2e8f0; background:#fff; color:#94a3b8; border-radius:6px; cursor:pointer;">✕</button>`;
+    document.getElementById('bulkUpdateRows').appendChild(row);
+    row.querySelector('.bu-field').addEventListener('change', () => { _buildBulkValueInput(row); _refreshBulkFieldOptions(); });
+    row.querySelector('.bu-remove').addEventListener('click', () => {
+      row.remove();
+      if (!document.querySelector('#bulkUpdateRows .bu-row')) _addBulkUpdateRow();
+      _refreshBulkFieldOptions();
+    });
+    _buildBulkValueInput(row);
+    _refreshBulkFieldOptions();
   }
 
   function openBulkUpdateModal() {
-    if (selectedRows.size === 0) return;
+    if (selectedRows.size === 0 || window.catReadOnly) return;
+    injectBulkUpdateModal();
     document.getElementById('bulkUpdateCount').textContent = selectedRows.size;
-
-    // Populate field dropdown from batchFill-able columns
-    const select = document.getElementById('bulkUpdateField');
-    select.innerHTML = COLUMNS
-      .filter(c => c.batchFill)
-      .map(c => `<option value="${c.field}">${c.label}</option>`)
-      .join('');
-
-    buildBulkUpdateInput();
+    document.getElementById('bulkUpdateRows').innerHTML = '';
+    _addBulkUpdateRow();
     document.getElementById('bulkUpdateApplyBtn').textContent = `Apply to ${selectedRows.size} row${selectedRows.size !== 1 ? 's' : ''}`;
     document.getElementById('v2BulkUpdateModal').classList.add('active');
-    setTimeout(() => document.getElementById('bulkUpdateValue')?.focus(), 100);
   }
 
-  function buildBulkUpdateInput() {
-    const field = document.getElementById('bulkUpdateField').value;
-    const container = document.getElementById('bulkUpdateInputContainer');
-    const inputStyle = 'width:100%; padding:8px; border:1px solid #d1d5db; border-radius:6px; font-size:13px;';
-
-    if (CONFIGURED_DROPDOWN_FIELDS.includes(field)) {
-      container.innerHTML = `<select id="bulkUpdateValue" style="${inputStyle}">${_configuredDropdownOptionsHtml(field)}</select>`;
+  function _buildBulkValueInput(row) {
+    const field = row.querySelector('.bu-field').value;
+    const wrap = row.querySelector('.bu-value-wrap');
+    if (_isDropdownField(field)) {
+      wrap.innerHTML = `<select class="bu-value" style="${BU_INPUT_STYLE}">${_configuredDropdownOptionsHtml(field)}</select>`;
     } else if (field === 'spcode') {
-      container.innerHTML = `
+      wrap.innerHTML = `
         <div style="position:relative;">
-          <input type="text" id="bulkUpdateValue" placeholder="Search species code or name..." autocomplete="off" style="${inputStyle}">
-          <div id="bulkUpdateSpDropdown" style="display:none; position:absolute; left:0; right:0; top:100%; z-index:10000; background:#fff; border:1px solid #d1d5db; border-radius:0 0 6px 6px; box-shadow:0 4px 12px rgba(0,0,0,0.15); max-height:200px; overflow-y:auto;"></div>
+          <input type="text" class="bu-value" placeholder="Search species code or name..." autocomplete="off" style="${BU_INPUT_STYLE}">
+          <div class="bu-sp-dropdown" style="display:none; position:absolute; left:0; right:0; top:100%; z-index:10000; background:#fff; border:1px solid #d1d5db; border-radius:0 0 6px 6px; box-shadow:0 4px 12px rgba(0,0,0,0.15); max-height:200px; overflow-y:auto;"></div>
         </div>`;
-      _setupBulkSpeciesAutocomplete();
+      _setupBulkSpeciesAutocomplete(wrap.querySelector('.bu-value'), wrap.querySelector('.bu-sp-dropdown'));
     } else {
-      container.innerHTML = `<input type="text" id="bulkUpdateValue" placeholder="Enter value" style="${inputStyle}">`;
+      wrap.innerHTML = `<input type="text" class="bu-value" placeholder="New value (empty = clear)" style="${BU_INPUT_STYLE}">`;
+      // Team list (e.g. JUV_SUBSTRATE) or values used in this project.
+      if (window.CatFieldOptions) window.CatFieldOptions.attachSuggestions(wrap.querySelector('.bu-value'), field);
     }
-    setTimeout(() => document.getElementById('bulkUpdateValue')?.focus(), 50);
+    setTimeout(() => wrap.querySelector('.bu-value')?.focus(), 50);
   }
 
-  function _setupBulkSpeciesAutocomplete() {
-    const input = document.getElementById('bulkUpdateValue');
-    const dd = document.getElementById('bulkUpdateSpDropdown');
+  function _setupBulkSpeciesAutocomplete(input, dd) {
     if (!input || !dd) return;
     let timer = null, results = [], selIdx = 0;
 
@@ -1347,64 +1507,108 @@
       if (dd.style.display === 'none') return;
       if (e.key === 'ArrowDown') { e.preventDefault(); selIdx = Math.min(selIdx + 1, results.length - 1); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); selIdx = Math.max(selIdx - 1, 0); }
-      else if (e.key === 'Enter' && results[selIdx]) { e.preventDefault(); input.value = results[selIdx].code; dd.style.display = 'none'; return; }
-      else if (e.key === 'Escape') { dd.style.display = 'none'; return; }
+      else if (e.key === 'Enter' && !(e.ctrlKey || e.metaKey) && results[selIdx]) {
+        e.preventDefault(); input.value = results[selIdx].code; dd.style.display = 'none'; return;
+      }
+      else if (e.key === 'Escape') { e.stopPropagation(); dd.style.display = 'none'; return; }
       else return;
       dd.querySelectorAll('.bu-sp-item').forEach((el, i) => el.classList.toggle('bu-sp-sel', i === selIdx));
     });
   }
 
   function applyBulkUpdate() {
-    const field = document.getElementById('bulkUpdateField').value;
-    const valueEl = document.getElementById('bulkUpdateValue');
-    if (!field || !valueEl) return;
-    let value = valueEl.value;
-    if (document.body.classList.contains('v2-allcaps') && typeof value === 'string') value = value.toUpperCase();
-    if (typeof annotations === 'undefined') return;
+    if (typeof annotations === 'undefined' || window.catReadOnly) return;
+    const allCaps = document.body.classList.contains('v2-allcaps');
+    const changes = [];
+    document.querySelectorAll('#bulkUpdateRows .bu-row').forEach(row => {
+      const field = row.querySelector('.bu-field').value;
+      const valueEl = row.querySelector('.bu-value');
+      if (!field || !valueEl) return;
+      let value = valueEl.value;
+      if (allCaps && typeof value === 'string') value = value.toUpperCase();
+      // Store numbers the way the table's cell editor does.
+      if (BULK_NUMERIC_FIELDS.includes(field) && String(value).trim() !== '') {
+        const num = parseFloat(value);
+        if (!isNaN(num)) value = num;
+      }
+      changes.push({ field, value });
+    });
+    if (!changes.length) return;
 
-    let count = 0;
-    selectedRows.forEach(idx => {
-      if (idx < 0 || idx >= annotations.length) return;
-      const ann = annotations[idx];
-      ann[field] = value;
-      if (ann.properties) ann.properties[field] = value;
-      // Task 9 fix: mark dirty so the Task 8 differential auto-save (runAutoSave(),
-      // annotation-runtime-autosave.js) actually persists this edit. Bulk update only
-      // ever mutated the in-memory annotation/layer objects and set the page-wide
-      // hasUnsavedChanges flag; auto-save's own dirty check is per-annotation
-      // (`_syncStatus !== 'synced'`), which stayed 'synced' from the last save, so
-      // bulk-edited fields were silently never written to Oracle - confirmed via a
-      // bulk-edit-then-GET-/annotations round trip against project 21 before this fix.
-      if (ann._syncStatus === 'synced') ann._syncStatus = 'pending';
-      count++;
+    const targets = [];
+    selectedRows.forEach(idx => { if (annotations[idx]) targets.push(annotations[idx]); });
+    const snap = (typeof _undoSnapshot === 'function') ? _undoSnapshot : (a => JSON.parse(JSON.stringify(a)));
+    const undoItems = [];
+    targets.forEach(ann => {
+      const prev = snap(ann);
+      changes.forEach(({ field, value }) => {
+        ann[field] = value;
+        if (ann.properties) ann.properties[field] = value;
+      });
+      // Mark dirty so autosave persists it (its dirty check is per annotation).
+      ann._syncStatus = 'pending';
+      undoItems.push({ target: ann, prev, next: snap(ann) });
     });
 
-    // Sync to map layers, refresh labels, and update layer styles
+    // Restyle + relabel the touched shapes on the map.
     if (typeof drawnItems !== 'undefined') {
+      const touched = new Set(targets);
       const refreshLabels = typeof labelsVisible !== 'undefined' && labelsVisible
                          && typeof addLabelToAnnotation === 'function';
       drawnItems.eachLayer(layer => {
-        if (!layer.annotationData) return;
-        const annIdx = annotations.indexOf(layer.annotationData);
-        if (annIdx >= 0 && selectedRows.has(annIdx)) {
-          layer.annotationData[field] = value;
-          if (layer.annotationData.properties) layer.annotationData.properties[field] = value;
-          if (layer.annotationData._syncStatus === 'synced') layer.annotationData._syncStatus = 'pending';
-          if (refreshLabels) addLabelToAnnotation(layer);
-          // Update layer color when species completeness changes (orange ↔ blue)
-          if (field === 'spcode' && layer.setStyle && typeof getAnnotationLayerStyle === 'function') {
-            layer.setStyle(getAnnotationLayerStyle(layer.annotationData));
-          }
+        if (!touched.has(layer.annotationData)) return;
+        if (refreshLabels) addLabelToAnnotation(layer);
+        if (layer.setStyle && typeof getAnnotationLayerStyle === 'function') {
+          layer.setStyle(getAnnotationLayerStyle(layer.annotationData));
         }
       });
     }
 
+    const label = changes.length === 1 ? `"${changes[0].field}"` : `${changes.length} fields`;
+    if (typeof window.undoPushBatchEdit === 'function') window.undoPushBatchEdit(undoItems, `bulk update of ${label}`);
     if (typeof hasUnsavedChanges !== 'undefined') hasUnsavedChanges = true;
     selectedRows.clear();
     _lastCheckedIdx = -1;
     if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
+    updateSelectionUI();
     document.getElementById('v2BulkUpdateModal').classList.remove('active');
-    if (typeof showStatus === 'function') showStatus(`Updated "${field}" on ${count} row${count !== 1 ? 's' : ''}`, 'success');
+    if (typeof saveProject === 'function') saveProject();
+    if (typeof showStatus === 'function') showStatus(`Updated ${label} on ${targets.length} row${targets.length !== 1 ? 's' : ''}`, 'success');
+  }
+
+  // Shift/Ctrl/Cmd+click on an annotation on the map adds it to (or removes
+  // it from) the table selection instead of opening its popup — so shapes
+  // can be picked one by one on the map, alongside the lasso, then bulk
+  // updated. showAnnotationPopup() asks this first.
+  let _selectClickAt = 0;
+  document.addEventListener('click', (e) => {
+    _selectClickAt = (e.shiftKey || e.ctrlKey || e.metaKey) ? Date.now() : 0;
+  }, true);
+  window.catMapSelectClick = function (layer) {
+    if (!_selectClickAt || Date.now() - _selectClickAt > 500) return false;
+    _selectClickAt = 0;
+    if (typeof annotations === 'undefined' || !layer || !layer.annotationData) return false;
+    const idx = annotations.indexOf(layer.annotationData);
+    if (idx < 0) return false;
+    if (selectedRows.has(idx)) selectedRows.delete(idx); else selectedRows.add(idx);
+    _syncRowCheckboxes();
+    updateSelectionUI();
+    if (typeof showStatus === 'function') {
+      showStatus(`${selectedRows.size} selected — press B or "Bulk Update" to edit them`, 'info');
+    }
+    return true;
+  };
+
+  // Tick/untick the existing row checkboxes to match selectedRows without
+  // re-injecting them (injectRowCheckboxes adds a cell per call, so it may
+  // only run right after a tbody rebuild).
+  function _syncRowCheckboxes() {
+    document.querySelectorAll('#annotationTable tbody tr[data-index]').forEach(row => {
+      const on = selectedRows.has(parseInt(row.dataset.index, 10));
+      row.classList.toggle('bulk-selected', on);
+      const cb = row.querySelector('.row-select-cb');
+      if (cb) cb.checked = on;
+    });
   }
 
   // ===================================================================
@@ -1665,7 +1869,7 @@
     get selectedRows() { return selectedRows; },
     addToSelection(idx) { selectedRows.add(idx); },
     clearSelection() { selectedRows.clear(); _lastCheckedIdx = -1; },
-    refreshUI() { injectRowCheckboxes(); updateSelectionUI(); },
+    refreshUI() { _syncRowCheckboxes(); updateSelectionUI(); },
     openBulkUpdate() { openBulkUpdateModal(); },
   };
 

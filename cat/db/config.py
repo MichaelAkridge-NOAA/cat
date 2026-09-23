@@ -6,7 +6,7 @@ import os
 
 @dataclass(frozen=True)
 class DatabaseSettings:
-    storage_backend: str = "file"
+    storage_backend: str = "oracle"
     user: str = ""
     password: str = ""
     dsn: str = ""
@@ -24,7 +24,7 @@ def _parse_bool_env(name: str, default: bool = False) -> bool:
 
 def get_database_settings() -> DatabaseSettings:
     return DatabaseSettings(
-        storage_backend=os.getenv("CAT_STORAGE_BACKEND", "file").strip().lower(),
+        storage_backend=os.getenv("CAT_STORAGE_BACKEND", "oracle").strip().lower(),
         user=os.getenv("CAT_DB_USER", "").strip(),
         password=os.getenv("CAT_DB_PASSWORD", "").strip(),
         dsn=os.getenv("CAT_DB_DSN", "").strip(),

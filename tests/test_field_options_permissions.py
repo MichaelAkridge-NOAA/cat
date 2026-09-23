@@ -17,6 +17,7 @@ TEAM_LEAD = {"user_id": 2, "role": "team_lead"}
     ("get_all_field_options_for_management", True),
     ("set_field_option_enabled", True),
     ("add_field_option", True),
+    ("get_used_values", True),
 ])
 def test_every_route_is_guarded(route, requires_team_lead):
     fn = getattr(fo, route)
@@ -100,3 +101,36 @@ def test_disabled_options_are_excluded_from_the_annotator_endpoint(monkeypatch):
     monkeypatch.setattr("cat.db.oracle.fetch_all", lambda sql, params=None: rows)
     result = asyncio.run(fo.get_all_field_options(ANNOTATOR))
     assert [o["value"] for o in result["fields"]["morph_code"]] == ["BR"]
+
+
+def test_used_values_reads_every_member_field_of_a_group(monkeypatch):
+    """A group list ('rdcause') is built from all of its numbered fields, and
+    the SQL only ever names allowlisted properties."""
+    seen = {}
+    monkeypatch.setattr(fo, "is_oracle_backend_enabled", lambda: True)
+
+    def fake_fetch_all(sql, params=None):
+        seen["sql"] = sql
+        return [{"v": "SED", "n": 3}]
+
+    monkeypatch.setattr("cat.db.oracle.fetch_all", fake_fetch_all)
+    import asyncio
+    out = asyncio.run(fo.get_used_values("rdcause", TEAM_LEAD))
+    assert out["values"] == [{"value": "SED", "count": 3}]
+    for m in ("$.rdcause1", "$.rdcause2", "$.rdcause3"):
+        assert m in seen["sql"]
+    assert "deleted_at IS NULL" in seen["sql"]
+
+
+def test_used_values_rejects_unknown_field(monkeypatch):
+    monkeypatch.setattr(fo, "is_oracle_backend_enabled", lambda: True)
+    import asyncio
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(fo.get_used_values("x' OR 1=1 --", TEAM_LEAD))
+    assert exc.value.status_code == 404
+
+
+def test_group_lists_are_known_fields():
+    for g in ("rdcause", "con", "sev"):
+        assert g in fo.KNOWN_FIELDS
+        assert g in fo.FIELD_GROUP_MEMBERS

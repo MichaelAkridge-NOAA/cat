@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CAT: Time &amp; Activity</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1.0, width=device-width">
+  <link rel="stylesheet" href="css/cat-theme.css" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: var(--cat-font); background: var(--cat-surface-alt); color: var(--cat-ink); }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 24px 16px 40px; }
+    h1 { font-size: 24px; margin: 0 0 4px; }
+    .lede { color: var(--cat-ink-soft); font-size: 13px; margin: 0 0 18px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; padding: 12px; background: var(--cat-surface);
+      border: 1px solid var(--cat-border); border-radius: var(--cat-radius); margin-bottom: 18px; }
+    .filters label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--cat-ink-soft); }
+    .filters select { padding: 6px 8px; border: 1px solid var(--cat-border); border-radius: var(--cat-radius); font-size: 13px; min-width: 170px; }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .tile { background: var(--cat-surface); border: 1px solid var(--cat-border); border-radius: var(--cat-radius); padding: 12px 14px; }
+    .tile .k { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--cat-ink-soft); }
+    .tile .v { font-size: 26px; font-weight: 800; color: var(--cat-primary); margin-top: 4px; font-variant-numeric: tabular-nums; }
+    h2 { font-size: 16px; margin: 22px 0 10px; }
+    .boards { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+    .board { background: var(--cat-surface); border: 1px solid var(--cat-border); border-radius: var(--cat-radius); padding: 12px 14px; }
+    .board h3 { font-size: 13px; margin: 0 0 8px; }
+    .board ol { margin: 0; padding: 0; list-style: none; }
+    .board li { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; }
+    .board li .medal { width: 20px; text-align: center; }
+    .board li .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .board li .val { font-variant-numeric: tabular-nums; color: var(--cat-ink-soft); }
+    .board .empty { font-size: 12px; color: var(--cat-ink-soft); }
+    .tbl-wrap { background: var(--cat-surface); border: 1px solid var(--cat-border); border-radius: var(--cat-radius); overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--cat-border); white-space: nowrap; }
+    th { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--cat-ink-soft); background: var(--cat-surface-alt); }
+    td.n { text-align: right; font-variant-numeric: tabular-nums; }
+    tr:last-child td { border-bottom: none; }
+    .bar { height: 6px; background: var(--cat-primary); border-radius: 3px; opacity: .75; }
+    .live { color: #16a34a; font-weight: 600; }
+    #err { color: var(--cat-error); margin: 10px 0; }
+    .note { font-size: 12px; color: var(--cat-ink-soft); margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>⏱️ Time &amp; Activity</h1>
+    <p class="lede">Active annotating time (pauses excluded) and annotations per person and project, with a friendly leaderboard.</p>
+
+    <div class="filters">
+      <label>Period
+        <select id="fDays">
+          <option value="">All time</option>
+          <option value="1">Today</option>
+          <option value="7">Last 7 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="365">Last year</option>
+        </select>
+      </label>
+      <label>Site
+        <select id="fSite"><option value="">All sites</option></select>
+      </label>
+      <label>Project
+        <select id="fProject"><option value="">All projects</option></select>
+      </label>
+    </div>
+
+    <div id="err"></div>
+    <div class="tiles" id="tiles"></div>
+
+    <h2>🏆 Leaderboard</h2>
+    <div class="boards" id="boards"></div>
+
+    <h2>👥 By annotator</h2>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>Annotator</th><th style="width:28%;">Time</th><th class="n">Sessions</th><th class="n">Avg session</th>
+        <th class="n">Annotations</th><th class="n">Per hour</th><th class="n">Species</th><th class="n">Days</th><th class="n">Projects</th><th>Last active</th>
+      </tr></thead>
+      <tbody id="tPeople"></tbody>
+    </table></div>
+
+    <h2>🗺️ By project</h2>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Project</th><th>Site</th><th class="n">Time</th><th class="n">Sessions</th><th class="n">Annotations</th><th>Annotators</th></tr></thead>
+      <tbody id="tProjects"></tbody>
+    </table></div>
+
+    <h2>🕘 Recent sessions</h2>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Started</th><th>Annotator</th><th>Project</th><th class="n">Active time</th><th class="n">Annotations</th><th></th></tr></thead>
+      <tbody id="tSessions"></tbody>
+    </table></div>
+    <p class="note">Time is recorded by the annotation page while its timer runs (saved every minute and on close). Sessions from before this version were recorded under the Analyst field, so older time may appear under initials instead of an account.</p>
+  </div>
+
+  <script src="js/cat-nav.js"></script>
+  <script src="js/cat-auth.js"></script>
+  <script>
+    if (window.CatAuth) { CatAuth.requireLogin(); }
+  </script>
+  <script src="js/activity.js"></script>
+</body>
+</html>

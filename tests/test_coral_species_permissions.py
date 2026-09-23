@@ -113,6 +113,27 @@ def test_qc_species_lookup_is_untouched_by_the_floor():
     as 'unrecognized'."""
     import cat.api.db_projects as dbp
     import inspect
-    src = inspect.getsource(dbp.aggregate_annotations)
+    # The lookup is loaded once per QC/report request by _load_species_lookup
+    # (shared by aggregate_annotations and the batched QC endpoint).
+    src = inspect.getsource(dbp._load_species_lookup)
     assert "SELECT spcode, taxon_name, genus FROM cat_coral_species" in src
     assert "inactive_flag" not in src
+    assert "_load_aggregate_inputs" in inspect.getsource(dbp.aggregate_annotations)
+    assert "_load_species_lookup()" in inspect.getsource(dbp._load_aggregate_inputs)
+
+
+def test_species_toggle_reports_the_stored_value(monkeypatch):
+    """The page shows what the database stored, not what was clicked."""
+    import asyncio
+    import cat.api.coral_species as cs
+    import cat.db.oracle as oracle
+
+    monkeypatch.setattr(cs, "_is_db_available", lambda: True)
+    monkeypatch.setattr(cs, "_invalidate_species_caches", lambda: None)
+    monkeypatch.setattr(oracle, "execute", lambda sql, params=None: None)
+    # Row exists; after the UPDATE the stored flag says "disabled" (e.g. a
+    # concurrent change won) even though this request asked to enable it.
+    monkeypatch.setattr(oracle, "fetch_one", lambda sql, params=None: {"spcode": "ACUR", "inactive_flag": 1})
+
+    result = asyncio.run(cs.set_species_enabled("ACUR", cs.SpeciesEnabledUpdate(enabled=True), _current_user={"role": "admin"}))
+    assert result["enabled"] is False

@@ -178,7 +178,7 @@
     // ================================================================
     window.openAutoSaveSettings = function () {
       const s = _loadJson(AS_KEY, AUTOSAVE_DEFAULTS);
-      document.getElementById('asEnabled').checked = s.enabled;
+      document.getElementById('asEnabled').checked = true; // always on
       document.querySelectorAll('input[name="asInterval"]').forEach(r => {
         r.checked = (parseInt(r.value, 10) === s.intervalMs);
       });
@@ -249,7 +249,10 @@
         // Stop existing
         if (typeof stopAutoSave === 'function') stopAutoSave();
 
-        if (s.enabled) {
+        // Always on in database mode: turning auto-save off meant nothing
+        // saved new drawings until a manual Save, and was one of the ways
+        // work was lost. The interval setting is still honoured.
+        {
           // Restart with new interval
           if (typeof autoSaveIntervalId !== 'undefined') {
             autoSaveIntervalId = setInterval(function () {

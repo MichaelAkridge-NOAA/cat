@@ -552,4 +552,9 @@ async def set_species_enabled(
         {"flag": 0 if payload.enabled else 1, "spcode": code},
     )
     _invalidate_species_caches()
-    return {"success": True, "code": code, "enabled": payload.enabled}
+    # Report what is actually stored, so the page shows the truth.
+    stored = fetch_one(
+        "SELECT NVL(inactive_flag, 0) AS inactive_flag FROM cat_coral_species WHERE spcode = :spcode",
+        {"spcode": code},
+    ) or {}
+    return {"success": True, "code": code, "enabled": not bool(stored.get("inactive_flag", 0 if payload.enabled else 1))}

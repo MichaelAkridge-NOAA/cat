@@ -29,6 +29,12 @@
     get history()  { return bulkDrawHistory; },
     get sessionAnnotationIndices() { return bulkSessionAnnotationIndices; },
     get sessionAnnotations() { return bulkSessionAnnotations; },
+    // Stop the bulk draw handler without leaving bulk mode (another tool
+    // was picked; the next bulk draw re-arms it).
+    stopDrawing() {
+      if (_activateTimeout) { clearTimeout(_activateTimeout); _activateTimeout = null; }
+      if (_activeDrawHandler) { try { _activeDrawHandler.disable(); } catch (_) {} _activeDrawHandler = null; }
+    },
   };
 
   // ===================================================================
@@ -247,15 +253,11 @@
           // (avoids orphan layers if annotation construction throws)
           drawnItems.addLayer(layer);
 
-          // Style it as a "pending-data" annotation (orange-ish)
+          // Style it as a "pending-data" annotation (orange-ish), at the
+          // user's line width / opacity rather than a fixed 7px.
           if (layer.setStyle) {
-            layer.setStyle({
-              color: '#f59e0b',
-              weight: 7,
-              opacity: 0.85,
-              fillOpacity: 0.25,
-              dashArray: '8 4'
-            });
+            const pendingStyle = { color: '#f59e0b', weight: 7, opacity: 0.85, fillOpacity: 0.25, dashArray: '8 4' };
+            layer.setStyle(typeof applyAnnotationDisplay === 'function' ? applyAnnotationDisplay(pendingStyle) : pendingStyle);
           }
 
           // Add click handler for editing -- every other annotation-creation
@@ -517,6 +519,19 @@
 
     if (typeof hasUnsavedChanges !== 'undefined') {
       hasUnsavedChanges = true;
+    }
+
+    // If it was already saved, delete it on the server too — this undo used
+    // to be local-only, so the line came back on the next refresh. (A line
+    // whose create is still in flight is deleted by autosave once the id
+    // comes back.)
+    if (annotationToRemove && typeof isOracleProjectMode === 'function' && isOracleProjectMode() &&
+        typeof getDbAnnotationId === 'function' && getDbAnnotationId(annotationToRemove) &&
+        typeof deleteAnnotationFromDb === 'function') {
+      deleteAnnotationFromDb(annotationToRemove).catch(err => {
+        console.warn('Undo delete failed on server:', err);
+        if (typeof showStatus === 'function') showStatus(`❌ Undo removed the line here but the server delete failed: ${err.message}`, 'error');
+      });
     }
 
     updateBulkBannerCount();

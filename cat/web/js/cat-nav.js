@@ -28,6 +28,8 @@
     { href: '/project_creator.html', label: 'Projects', icon: 'folder' },
     { href: '/converter', label: 'Converter', icon: 'layers' },
     { href: '/qc', label: 'QC', icon: 'check-circle' },
+    { href: '/compare', label: 'Compare', icon: 'layers' },
+    { href: '/activity', label: 'Activity', icon: 'clock' },
     { href: '/export', label: 'Export', icon: 'download' }
   ];
   var SECONDARY = { href: '/docs', label: 'API Docs', icon: 'book-open' };

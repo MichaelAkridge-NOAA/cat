@@ -13,7 +13,8 @@
     let projectAnnotations = [];
     let hasUnsavedChanges = false;
     let lastSaveTime = null;
-    let storageBackend = 'file';
+    // The Oracle database is the only backend (file mode was removed).
+    let storageBackend = 'oracle';
     let currentDbSessionId = null;
     let autoSaveIntervalId = null;
     const AUTO_SAVE_INTERVAL_MS = 30000; // 30 seconds
@@ -70,14 +71,48 @@
         display.textContent = formatTime(timerState.elapsedSeconds);
       }
       
-      // Update total session time
-      if (totalDisplay && timerState.sessionStartTime) {
-        const now = Date.now();
-        const sessionElapsed = Math.floor((now - timerState.sessionStartTime) / 1000);
-        timerState.totalSessionSeconds = sessionElapsed;
-        totalDisplay.textContent = formatTotalTime(sessionElapsed);
+      // Total = this person's earlier time on the project + ACTIVE time in
+      // this session (pauses excluded). It used to be wall-clock time since
+      // the page loaded, pauses included, and restarted at zero on reload.
+      timerState.totalSessionSeconds = timerState.elapsedSeconds;
+      if (totalDisplay) {
+        totalDisplay.textContent = formatTotalTime((timerState.priorTotalSeconds || 0) + timerState.elapsedSeconds);
       }
     }
+
+    // Earlier sessions' total for this project, from the session-start call.
+    function setPriorSessionTotal(seconds) {
+      timerState.priorTotalSeconds = Math.max(0, parseInt(seconds, 10) || 0);
+      const totalBadge = document.getElementById('totalTimeDisplay');
+      const placeholder = document.getElementById('noTimePlaceholder');
+      if (timerState.priorTotalSeconds > 0) {
+        if (totalBadge) totalBadge.style.display = 'inline-block';
+        if (placeholder) placeholder.style.display = 'none';
+      }
+      updateTimerDisplay();
+    }
+    window.setPriorSessionTotal = setPriorSessionTotal;
+
+    // Save this session's active time to the server. Previously only a
+    // manual Save click did this, so a closed tab lost the session's time.
+    let _lastPersistedSeconds = -1;
+    function persistSessionTime(keepalive) {
+      if (typeof currentDbSessionId === 'undefined' || !currentDbSessionId || !currentProject?.project_id) return;
+      if (window.catReadOnly) return;
+      const seconds = timerState.elapsedSeconds || 0;
+      if (!keepalive && seconds === _lastPersistedSeconds) return;
+      _lastPersistedSeconds = seconds;
+      fetch(`${serverUrl}/api/db/projects/${currentProject.project_id}/sessions/${currentDbSessionId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ total_seconds: seconds, annotation_count: timerState.annotationCount || 0, is_active: true }),
+        keepalive: !!keepalive,
+        credentials: 'same-origin'
+      }).catch(() => { /* best effort — retried next minute */ });
+    }
+    window.persistSessionTime = persistSessionTime;
+    setInterval(() => persistSessionTime(false), 60000);
+    window.addEventListener('pagehide', () => persistSessionTime(true));
     
     function startSessionTimer() {
       // File mode: Start session timer locally (no database)
@@ -224,6 +259,7 @@
         clearInterval(timerState.displayInterval);
         timerState.displayInterval = null;
       }
+      persistSessionTime(false);
     }
     
     function incrementAnnotationCount() {
@@ -253,11 +289,11 @@
       try {
         const response = await catFetch(`${serverUrl}/api/config`, undefined, 'Loading app configuration');
         const config = await response.json();
-        if (config?.storage_backend) {
-          storageBackend = config.storage_backend;
+        // Kept only so a misconfigured server shows up in the console.
+        if (config?.storage_backend && config.storage_backend !== 'oracle') {
+          console.error(`Server reports storage_backend=${config.storage_backend}; CAT requires the Oracle database.`);
         }
-        console.log(`🧭 Storage backend: ${storageBackend}`);
       } catch (error) {
-        console.warn('Could not determine storage backend, defaulting to file mode:', error);
+        console.warn('Could not load app configuration:', error);
       }
     }

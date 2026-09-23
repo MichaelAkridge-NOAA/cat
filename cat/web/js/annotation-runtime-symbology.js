@@ -17,13 +17,22 @@
       label: 'Condition (con_1)',
       get: (a) => a && (a.con_1 || a.condition_1 ||
         (a.properties && (a.properties.con_1 || a.properties.condition_1)))
+    },
+    // Who drew it (the account that created the annotation), falling back to
+    // the typed analyst initials for older rows.
+    annotator: {
+      label: 'Annotator',
+      get: (a) => a && (a._creatorLabel || a.creator_display_name || a.created_by || a.analyst ||
+        (a.properties && (a.properties.analyst || a.properties.ANALYST)))
     }
   };
   // Distinct, colorblind-friendlier categorical palette (Okabe-Ito style extended).
   const PALETTE = [
     '#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
     '#46f0f0', '#f032e6', '#bcf60c', '#008080', '#9a6324',
-    '#800000', '#808000', '#000075', '#e6beff', '#fabebe'
+    '#800000', '#808000', '#000075', '#e6beff', '#fabebe',
+    '#ffd8b1', '#aaffc3', '#ffe119', '#1f77b4', '#d62728',
+    '#2ca02c', '#8c564b', '#17becf', '#7f7f7f'
   ];
   const MISSING_COLOR = '#9ca3af';
 
@@ -36,16 +45,25 @@
   } catch (_) { /* localStorage unavailable */ }
 
   const colorCache = {};
-  let nextColorIdx = 0;
+  let nextColorIdx = 0; // kept for the mode-switch reset below
 
+  // A value's colour is derived from the value itself (a small string hash
+  // into the palette), so a species or annotator has the SAME colour on every
+  // reload, for every user and in every project. It used to be handed out in
+  // first-seen order, so ACUR could be red today and green tomorrow.
   function colorFor(value) {
-    const key = String(value);
+    const key = String(value).trim().toUpperCase();
     if (!colorCache[key]) {
-      colorCache[key] = PALETTE[nextColorIdx % PALETTE.length];
-      nextColorIdx++;
+      let h = 2166136261; // FNV-1a
+      for (let i = 0; i < key.length; i++) {
+        h ^= key.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+      }
+      colorCache[key] = PALETTE[h % PALETTE.length];
     }
     return colorCache[key];
   }
+  window.catSymbologyColorForValue = colorFor;
 
   function normalizedValue(raw) {
     if (raw == null) return null;

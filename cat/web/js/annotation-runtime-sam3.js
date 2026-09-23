@@ -207,7 +207,9 @@
       const mode = document.getElementById('sam3ModeSelect')?.value || 'text';
       window.catSam3PendingMode = mode;
       if (typeof closeNavDropdowns === 'function') closeNavDropdowns();
-      new L.Draw.Rectangle(map, {}).enable();
+      if (typeof window.catStopAllDrawing === 'function') window.catStopAllDrawing();
+      window._catSam3Handler = new L.Draw.Rectangle(map, {});
+      window._catSam3Handler.enable();
       if (typeof showStatus === 'function') showStatus('Draw a rectangle over the area to segment', 'info');
     }
 

@@ -66,6 +66,7 @@
       return;
     }
     wireListenersOnce();
+    if (typeof window.catStopAllDrawing === 'function') window.catStopAllDrawing();
     stopMeasure();
     kind = newKind;
     window.catMeasureModeActive = true;

@@ -7,8 +7,8 @@
 # Handles auto-start on reboot and management commands
 # Auto-bootstrap: Creates CAT schema and ingests reference data on startup
 # =============================================================================
-SCRIPT_VERSION="14.0.0"
-CAT_BRANCH="cat_db_v14"
+SCRIPT_VERSION="17.0.0"
+CAT_BRANCH="cat_db_v17"
 CAT_INSTALL_VARIANT="${CAT_INSTALL_VARIANT:-base}"
 
 case "$CAT_INSTALL_VARIANT" in
@@ -717,20 +717,28 @@ fi
 echo "[Step 9/10] Starting CAT services for the first time..."
 cd "$CAT_INSTALL_DIR"
 
-# Check for stale partial Oracle data from a previous failed install
+# Existing Oracle data is NEVER deleted automatically. This block used to
+# `rm -rf oracle-data/*` (and `compose down -v`) whenever the Oracle container
+# simply wasn't running at install time — e.g. after a reboot — which wiped
+# every project and annotation. A genuinely broken partial install must now
+# be reset by hand, deliberately, with CAT_RESET_ORACLE_DATA=yes.
 ORACLE_DATA_DIR="$CAT_INSTALL_DIR/oracle-data"
 if [ -n "$(ls -A "$ORACLE_DATA_DIR" 2>/dev/null)" ]; then
-    # Directory has content but Oracle container is not currently running or healthy
-    ORACLE_RUNNING=$(docker inspect -f '{{.State.Running}}' database-oracle-free 2>/dev/null || echo "false")
-    if [ "$ORACLE_RUNNING" != "true" ]; then
-        echo "  ⚠️  oracle-data directory is non-empty from a previous install attempt."
-        echo "     Cleaning stale data to allow fresh Oracle initialization..."
-        cat_compose down -v 2>/dev/null || true
+    if [ "${CAT_RESET_ORACLE_DATA:-}" = "yes" ]; then
+        BACKUP_TGZ="$CAT_INSTALL_DIR/oracle-data-backup-$(date +%Y%m%d-%H%M%S).tgz"
+        echo "  ⚠️  CAT_RESET_ORACLE_DATA=yes — backing up oracle-data to $BACKUP_TGZ before reset..."
+        cat_compose down 2>/dev/null || true
+        sudo tar -czf "$BACKUP_TGZ" -C "$CAT_INSTALL_DIR" oracle-data || {
+            echo "  ERROR: backup failed — refusing to delete oracle-data"
+            exit 1
+        }
         sudo rm -rf "${ORACLE_DATA_DIR:?}"/*
-        # Re-apply correct ownership after wipe
         sudo chown 54321:54321 "$ORACLE_DATA_DIR"
         sudo chmod 750 "$ORACLE_DATA_DIR"
-        echo "  ✓ Stale Oracle data cleared"
+        echo "  ✓ oracle-data reset (backup kept at $BACKUP_TGZ)"
+    else
+        echo "  ✓ Existing oracle-data found — reusing it (no data is deleted)."
+        echo "     To force a fresh database, re-run with CAT_RESET_ORACLE_DATA=yes (a backup is taken first)."
     fi
 fi
 

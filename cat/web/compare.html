@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CAT: Compare Projects</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1.0, width=device-width">
+  <link rel="stylesheet" href="css/cat-theme.css" />
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body { font-family: var(--cat-font); background: var(--cat-surface-alt); color: var(--cat-ink); display: flex; flex-direction: column; }
+    .cmp-shell { flex: 1; display: flex; min-height: 0; }
+    .cmp-side {
+      width: 340px; flex: none; overflow-y: auto; background: var(--cat-surface);
+      border-right: 1px solid var(--cat-border); padding: 14px; display: flex; flex-direction: column; gap: 14px;
+    }
+    .cmp-side h1 { font-size: 18px; margin: 0; }
+    .cmp-side p.hint { font-size: 12px; color: var(--cat-ink-soft); margin: 4px 0 0; line-height: 1.45; }
+    .cmp-block { border: 1px solid var(--cat-border); border-radius: var(--cat-radius); padding: 10px; }
+    .cmp-block h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--cat-ink-soft); margin: 0 0 8px; }
+    .cmp-block select { width: 100%; padding: 6px 8px; border: 1px solid var(--cat-border); border-radius: var(--cat-radius); font-size: 13px; }
+    .cmp-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; }
+    .cmp-row .grow { flex: 1; min-width: 0; }
+    .cmp-row .sub { font-size: 11px; color: var(--cat-ink-soft); }
+    .cmp-row .count { font-size: 11px; color: var(--cat-ink-soft); font-variant-numeric: tabular-nums; }
+    .cmp-swatch { width: 14px; height: 14px; border-radius: 3px; flex: none; border: 1px solid rgba(0,0,0,0.15); }
+    .cmp-line { width: 26px; height: 0; border-top: 3px solid #334155; flex: none; }
+    .cmp-actions { display: flex; gap: 6px; }
+    .cmp-actions button { font-size: 11px; padding: 3px 8px; }
+    #cmpMap { flex: 1; min-width: 0; }
+    #cmpStatus { font-size: 12px; color: var(--cat-ink-soft); min-height: 16px; }
+    .cmp-empty { font-size: 12px; color: var(--cat-ink-soft); }
+    @media (max-width: 720px) {
+      .cmp-shell { flex-direction: column; }
+      .cmp-side { width: 100%; max-height: 45vh; border-right: none; border-bottom: 1px solid var(--cat-border); }
+      #cmpMap { min-height: 55vh; }
+    }
+  </style>
+</head>
+<body>
+  <div class="cmp-shell">
+    <aside class="cmp-side">
+      <div>
+        <h1>Compare projects</h1>
+        <p class="hint">Layer several projects from the same site on one map, coloured by annotator. Read-only — nothing can be changed here.</p>
+      </div>
+
+      <div class="cmp-block">
+        <h2>Site</h2>
+        <select id="cmpSite"><option value="">Loading sites…</option></select>
+      </div>
+
+      <div class="cmp-block">
+        <h2>Projects</h2>
+        <div class="cmp-actions" style="margin-bottom:6px;">
+          <button type="button" class="cat-btn cat-btn--secondary" id="cmpAllProjects">All</button>
+          <button type="button" class="cat-btn cat-btn--secondary" id="cmpNoProjects">None</button>
+        </div>
+        <div id="cmpProjects" class="cmp-empty">Pick a site.</div>
+      </div>
+
+      <div class="cmp-block">
+        <h2>Annotators</h2>
+        <div id="cmpAnnotators" class="cmp-empty">—</div>
+      </div>
+
+      <div class="cmp-block">
+        <h2>Imagery</h2>
+        <select id="cmpImagery"><option value="">None</option></select>
+      </div>
+
+      <div id="cmpStatus"></div>
+    </aside>
+    <div id="cmpMap"></div>
+  </div>
+
+  <script src="/vendor/leaflet/leaflet.js"></script>
+  <script src="js/cat-tile-queue.js?v=v17-perf"></script>
+  <script src="js/cat-nav.js"></script>
+  <script src="js/cat-auth.js"></script>
+  <script>
+    if (window.CatAuth) { CatAuth.requireLogin(); }
+  </script>
+  <script src="js/compare.js"></script>
+</body>
+</html>

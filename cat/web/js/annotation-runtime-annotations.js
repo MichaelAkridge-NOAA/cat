@@ -46,8 +46,10 @@
 
       // Helper to format yes/no/-1/0 fields
       const fmtBool = (v) => v == -1 ? 'Yes' : (v == 0 ? 'No' : '-');
-      const fmtPct = (v) => (v !== undefined && v !== null && v !== '') ? v + '%' : '-';
-      const fmtVal = (v) => (v !== undefined && v !== null && v !== '') ? v : '-';
+      // Values are user-typed and shared with every collaborator: escape.
+      const escH = (v) => (typeof catEscHtml === 'function') ? catEscHtml(v) : String(v);
+      const fmtPct = (v) => (v !== undefined && v !== null && v !== '') ? escH(v) + '%' : '-';
+      const fmtVal = (v) => (v !== undefined && v !== null && v !== '') ? escH(v) : '-';
 
       // Populate table with annotations — descending by ID (newest at top)
       const sortedIndices = annotations
@@ -66,8 +68,8 @@
         const colonyId = ann.colony_id || ann.COLONY_ID || ann.id || ann.ID || (index + 1);
 
         row.innerHTML = `
-          <td><strong>${colonyId}</strong></td>
-          <td>${(ann.geometry && ann.geometry.type) || ann.type || 'Polygon'}</td>
+          <td><strong>${escH(colonyId)}</strong></td>
+          <td>${escH((ann.geometry && ann.geometry.type) || ann.type || 'Polygon')}</td>
           <td class="editable" data-field="site" data-index="${index}">${fmtVal(ann.site)}</td>
           <td class="editable" data-field="spcode" data-index="${index}">${fmtVal(ann.spcode || ann.species_code || ann.SPCODE || ann.SPECIES_CODE)}</td>
           <td class="editable" data-field="juvenile" data-index="${index}">${fmtBool(ann.juvenile)}</td>
@@ -80,7 +82,6 @@
           <td class="editable" data-field="morph_code" data-index="${index}">${fmtVal(ann.morph_code)}</td>
           <td class="editable" data-field="old_dead" data-index="${index}">${fmtPct(ann.old_dead)}</td>
           <td class="editable" data-field="remnant" data-index="${index}">${fmtBool(ann.remnant)}</td>
-          <td class="editable" data-field="fragment" data-index="${index}">${fmtBool(ann.fragment)}</td>
           <td class="editable" data-field="ex_bound" data-index="${index}">${fmtBool(ann.ex_bound)}</td>
           <td class="editable" data-field="no_colony" data-index="${index}">${fmtBool(ann.no_colony)}</td>
           <td class="editable" data-field="seglength" data-index="${index}">${fmtVal(ann.seglength)}</td>
@@ -114,16 +115,25 @@
         
         // Add click handler AFTER innerHTML (so it doesn't get wiped out)
         row.onclick = (e) => {
-          if (!e.target.closest('button') && !e.target.classList.contains('editable')) {
+          // Editing is double-click, so a single click on any cell (editable
+          // ones included — they are most of the row) selects the row. Not
+          // while a cell editor is open, and not on the editor's own input.
+          if (e.detail > 1) return; // 2nd click of a double-click
+          if (!e.target.closest('button') && !e.target.closest('input, select, textarea, .editing')) {
             document.querySelectorAll('.annotation-table tbody tr').forEach(r => r.classList.remove('selected'));
             row.classList.add('selected');
-            selectAnnotationForEdit(index);
+            clearTimeout(_rowClickTimer);
+            // Zoom modes wait a moment so a double-click (= edit the cell)
+            // doesn't also throw the map to the shape.
+            if (getRowClickMode() === 'highlight') selectAnnotationForEdit(index);
+            else _rowClickTimer = setTimeout(() => selectAnnotationForEdit(index), 260);
           }
         };
-        
+
         // Add double-click handlers to editable cells
         row.querySelectorAll('.editable').forEach(cell => {
           cell.addEventListener('dblclick', (e) => {
+            clearTimeout(_rowClickTimer);
             e.stopPropagation();
             makeTableCellEditable(cell);
           });
@@ -135,69 +145,139 @@
       if (typeof window.catSymbologyRefreshLegend === 'function') window.catSymbologyRefreshLegend();
     }
 
-    // Select annotation for editing (zoom and highlight)
+    // Row click behaviour, cycled by the button next to the table filter and
+    // remembered per browser:
+    //   'highlight' (default) marks the shape and keeps the current view — it
+    //               only pans if the shape is off-screen; no popup.
+    //   'zoom-only' zooms to the shape; no popup.
+    //   'zoom'      zooms to it and opens its popup (the old behaviour).
+    const ROW_CLICK_MODE_KEY = 'cat_row_click_mode';
+    let _rowClickTimer = null;
+    const ROW_CLICK_MODES = ['highlight', 'zoom-only', 'zoom'];
+    const ROW_CLICK_LABELS = {
+      'highlight': ['✨ Row click: highlight', 'Clicking a row highlights the annotation without changing the zoom.'],
+      'zoom-only': ['🔍 Row click: zoom', 'Clicking a row zooms to the annotation (no popup).'],
+      'zoom':      ['🔍 Row click: zoom + popup', 'Clicking a row zooms to the annotation and opens its popup.']
+    };
+    function getRowClickMode() {
+      try {
+        const v = localStorage.getItem(ROW_CLICK_MODE_KEY);
+        return ROW_CLICK_MODES.includes(v) ? v : 'highlight';
+      } catch (e) { return 'highlight'; }
+    }
+    function _paintRowClickModeButton() {
+      const btn = document.getElementById('rowClickModeBtn');
+      if (!btn) return;
+      const [text, title] = ROW_CLICK_LABELS[getRowClickMode()];
+      btn.textContent = text;
+      btn.title = title + ' Click to change.';
+    }
+    function toggleRowClickMode() {
+      const cur = ROW_CLICK_MODES.indexOf(getRowClickMode());
+      const next = ROW_CLICK_MODES[(cur + 1) % ROW_CLICK_MODES.length];
+      try { localStorage.setItem(ROW_CLICK_MODE_KEY, next); } catch (e) { /* ignore */ }
+      _paintRowClickModeButton();
+    }
+    window.toggleRowClickMode = toggleRowClickMode;
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _paintRowClickModeButton);
+    else _paintRowClickModeButton();
+
+    // The highlighted row's layer, so the next selection restores it.
+    let _rowHighlightLayer = null;
+    function _clearRowHighlight() {
+      const layer = _rowHighlightLayer;
+      _rowHighlightLayer = null;
+      if (layer && layer.setStyle && layer.annotationData) {
+        layer.setStyle(getAnnotationLayerStyle(layer.annotationData));
+      }
+    }
+
+    // Mark each table row with its save state (cheap, no rebuild): a coloured
+    // left edge for rows with changes not yet saved, red for ones the server
+    // refused. Replaces a full 35-column table rebuild after every autosave.
+    function refreshRowSaveStates() {
+      const rows = document.querySelectorAll('#annotationTableBody tr[data-index]');
+      if (!rows.length) return;
+      if (!document.getElementById('catRowStateStyle')) {
+        const s = document.createElement('style');
+        s.id = 'catRowStateStyle';
+        s.textContent =
+          '#annotationTableBody tr.row-unsaved td:first-child { box-shadow: inset 4px 0 0 #f59e0b; }' +
+          '#annotationTableBody tr.row-refused td:first-child { box-shadow: inset 4px 0 0 #dc2626; }';
+        document.head.appendChild(s);
+      }
+      const needsSync = (typeof annotationNeedsSync === 'function') ? annotationNeedsSync : null;
+      rows.forEach(tr => {
+        const ann = annotations[parseInt(tr.dataset.index, 10)];
+        if (!ann) return;
+        const refused = ann._syncStatus === 'rejected';
+        const unsaved = !refused && needsSync ? needsSync(ann) : false;
+        tr.classList.toggle('row-refused', refused);
+        tr.classList.toggle('row-unsaved', unsaved);
+        tr.title = refused ? `Not saved — refused by the server: ${ann._rejectedReason || ''}`
+          : unsaved ? 'Change not saved yet' : '';
+      });
+    }
+    window.catRefreshRowSaveStates = refreshRowSaveStates;
+
+    // Select annotation from a table row: highlight or zoom (see above)
     function selectAnnotationForEdit(index) {
-      console.log('Selecting annotation for edit:', index);
-      
       const ann = annotations[index];
       if (!ann) {
         console.error('Annotation not found:', index);
         return;
       }
-      
-      // Find the layer on the map
+
       let selectedLayer = null;
       drawnItems.eachLayer(layer => {
-        if (layer.annotationData === ann) {
-          selectedLayer = layer;
-        }
+        if (layer.annotationData === ann) selectedLayer = layer;
       });
-      
       if (!selectedLayer) {
         console.error('Layer not found for annotation:', index);
         return;
       }
-      
-      // Highlight the selected layer
-      const originalStyle = {
-        color: selectedLayer.options.color || '#3388ff',
-        weight: selectedLayer.options.weight || 3
-      };
-      
+
+      // The toolbar's Edit tool edits the last selected annotation.
+      window._catLastClickedLayer = selectedLayer;
+
+      // Highlight until another row is picked (it used to snap back after
+      // 2 s, restoring a partial style that lost the dash pattern/opacity).
+      _clearRowHighlight();
       if (selectedLayer.setStyle) {
-        selectedLayer.setStyle({
-          color: '#00ff00',
-          weight: 4,
-          fillOpacity: 0.4
-        });
-        
-        // Reset style after 2 seconds
-        setTimeout(() => {
-          if (selectedLayer.setStyle) {
-            selectedLayer.setStyle(originalStyle);
-          }
-        }, 2000);
+        const base = getAnnotationLayerStyle(ann);
+        selectedLayer.setStyle(Object.assign({}, base, {
+          color: '#00e676',
+          weight: Math.max(base.weight || 3, 4) + 2,
+          opacity: 1,
+          fillOpacity: Math.max(base.fillOpacity || 0, 0.35)
+        }));
+        if (selectedLayer.bringToFront) selectedLayer.bringToFront();
+        _rowHighlightLayer = selectedLayer;
       }
-      
-      // Zoom to the annotation
-      if (selectedLayer.getBounds) {
-        map.fitBounds(selectedLayer.getBounds(), { padding: [50, 50] });
-      } else if (selectedLayer.getLatLng) {
-        map.setView(selectedLayer.getLatLng(), 18);
+
+      const center = selectedLayer.getBounds
+        ? selectedLayer.getBounds().getCenter()
+        : (selectedLayer.getLatLng ? selectedLayer.getLatLng() : null);
+
+      const rowMode = getRowClickMode();
+      if (rowMode !== 'highlight') {
+        if (selectedLayer.getBounds) {
+          map.fitBounds(selectedLayer.getBounds(), { padding: [50, 50] });
+        } else if (selectedLayer.getLatLng) {
+          map.setView(selectedLayer.getLatLng(), 18);
+        }
+        // Open the interactive popup (Edit/Shape/Delete buttons) at the
+        // layer's center — showAnnotationPopup() builds it on demand.
+        if (rowMode === 'zoom' && typeof showAnnotationPopup === 'function' && center) {
+          showAnnotationPopup(selectedLayer, center);
+        }
+        return;
       }
-      
-      // Open the interactive popup (Edit/Shape/Delete buttons) at the
-      // layer's center. selectedLayer.openPopup() is a no-op here since
-      // this layer never had bindPopup() called on it -- showAnnotationPopup()
-      // builds a fresh map-level popup on demand instead.
-      if (typeof showAnnotationPopup === 'function') {
-        const latlng = selectedLayer.getBounds
-          ? selectedLayer.getBounds().getCenter()
-          : (selectedLayer.getLatLng ? selectedLayer.getLatLng() : null);
-        if (latlng) showAnnotationPopup(selectedLayer, latlng);
+
+      // Highlight mode: keep the zoom; bring it into view only if needed.
+      if (center && !map.getBounds().contains(center)) {
+        map.panTo(center);
       }
-      
-      console.log('✅ Zoomed to annotation', index);
     }
     
     // Make table cell editable inline
@@ -240,7 +320,8 @@
       // Create input element based on field type
       let inputElement;
       
-      if (field === 'segment' || field === 'transect' || field === 'morph_code' || field === 'juvenile') {
+      const cfgList = window.CatFieldOptions && window.CatFieldOptions.isSelectField(field);
+      if (cfgList || field === 'segment' || field === 'transect' || field === 'morph_code' || field === 'juvenile') {
         // Team-lead-configured options (docs/team-lead-config-plan.md, Phase
         // 3) — buildOptionsHtml always keeps currentValue as a real,
         // selected option even if since disabled, so editing an old
@@ -312,6 +393,10 @@
       // Clear cell and add input
       cell.innerHTML = '';
       cell.appendChild(inputElement);
+      // Free-text columns suggest values (team list, else the project's own).
+      if (inputElement.tagName === 'INPUT' && inputElement.type === 'text' && window.CatFieldOptions) {
+        window.CatFieldOptions.attachSuggestions(inputElement, field);
+      }
       
       // Focus and select the input
       inputElement.focus();
@@ -396,6 +481,7 @@
           });
         }
 
+        if (typeof window.catRefreshRowSaveStates === 'function') window.catRefreshRowSaveStates();
         // Save to project
         saveProject();
 
@@ -612,15 +698,20 @@
           });
         }
 
-        updateAnnotationTable();
+        // Update just this cell (a full 35-column table rebuild here made
+        // every species edit — and every Tab through a species column — slow
+        // on big projects), then refresh the legend counts.
+        cell.textContent = (newValue === '' || newValue === '-') ? '-' : newValue;
+        if (typeof window.catSymbologyRefreshLegend === 'function') window.catSymbologyRefreshLegend();
+        if (typeof window.catRefreshRowSaveStates === 'function') window.catRefreshRowSaveStates();
         saveProject();
       };
-      
+
       // Cancel function
       const cancelTableEdit = () => {
         cell.classList.remove('editing');
         dropdown.style.display = 'none';
-        updateAnnotationTable();
+        cell.textContent = (currentValue === undefined || currentValue === null || currentValue === '') ? '-' : String(currentValue);
       };
       
       // Input events
@@ -776,7 +867,6 @@
             ${inp('edit_juv_substrate','JUV_SUBSTRATE',a.juv_substrate)}
             ${selCfg('edit_no_colony','No Colony',a.no_colony || 0,'no_colony')}
             ${selCfg('edit_remnant','Remnant',a.remnant || 0,'remnant')}
-            ${sel('edit_fragment','Fragment',a.fragment || 0,boolOpts)}
             ${selCfg('edit_ex_bound','Ex. Bound',a.ex_bound || 0,'ex_bound')}
             ${inp('edit_old_dead','Old Dead %',a.old_dead,'number','min="0" max="100"')}
           </div>
@@ -808,6 +898,16 @@
       `;
       
       document.getElementById('editFormContainer').innerHTML = formHTML;
+      // Team lists turn cause/condition/severity into dropdowns; other text
+      // fields suggest values (species keeps its own search).
+      if (window.CatFieldOptions) {
+        document.querySelectorAll('#editFormContainer input[id^="edit_"]').forEach(el => {
+          const f = el.id.slice(5);
+          if (f === 'spcode') return;
+          const now = window.CatFieldOptions.upgradeInput(el, f);
+          if (now.tagName === 'INPUT' && now.type === 'text') window.CatFieldOptions.attachSuggestions(now, f);
+        });
+      }
       document.getElementById('editModal').classList.add('active');
       
       // Store the index for saving
@@ -1011,7 +1111,6 @@
       annotation.juv_substrate = getVal('edit_juv_substrate') || null;
       annotation.no_colony = getInt('edit_no_colony') || 0;
       annotation.remnant = getInt('edit_remnant') || 0;
-      annotation.fragment = getInt('edit_fragment') || 0;
       annotation.ex_bound = getInt('edit_ex_bound') || 0;
       annotation.old_dead = getInt('edit_old_dead');
       annotation.rdcause1 = getVal('edit_rdcause1') || null;
@@ -1039,9 +1138,9 @@
           if (layer.getPopup()) {
             const popupContent = `
               <strong>Annotation #${index + 1}</strong><br>
-              <strong>Species:</strong> ${annotation.spcode || 'Not set'}<br>
-              <strong>Site:</strong> ${annotation.site || 'Not set'}<br>
-              <strong>Analyst:</strong> ${annotation.analyst || 'Not set'}
+              <strong>Species:</strong> ${catEscHtml(annotation.spcode || 'Not set')}<br>
+              <strong>Site:</strong> ${catEscHtml(annotation.site || 'Not set')}<br>
+              <strong>Analyst:</strong> ${catEscHtml(annotation.analyst || 'Not set')}
             `;
             layer.setPopupContent(popupContent);
           }
@@ -1069,25 +1168,21 @@
       // Update the annotation table
       updateAnnotationTable();
 
-      // Mark unsaved and trigger save/sync
+      // Mark unsaved and trigger save/sync. This edit used to never be marked
+      // pending, so autosave skipped it and the badge said "Saved".
       hasUnsavedChanges = true;
-
-      // In popout mode: sync directly to DB (drawnItems is a stub, no layers to iterate)
-      if (window._catPopoutMode && typeof isOracleProjectMode === 'function' && isOracleProjectMode() &&
-          typeof syncAnnotationToDb === 'function') {
-        syncAnnotationToDb(annotation)
-          .then(() => {
-            if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed' });
-          })
-          .catch(err => showStatus(`❌ DB sync failed: ${err.message}`, 'error'));
-        closeEditModal();
-        showStatus('✅ Annotation updated', 'success');
-        return;
-      }
-
       if (typeof isOracleProjectMode === 'function' && isOracleProjectMode()) {
-        if (typeof saveProject === 'function') saveProject();
-        if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed' });
+        annotation._syncStatus = 'pending';
+        // Same save path in the main window and the popout (autosave walks
+        // the annotations array, so it works without map layers). Tell other
+        // windows only once the change is actually on the server.
+        if (typeof saveProject === 'function') {
+          Promise.resolve(saveProject()).then(() => {
+            if (window._catChannel && !annotationNeedsSync(annotation)) {
+              window._catChannel.postMessage({ type: 'annotations-changed', project_id: currentProject?.project_id });
+            }
+          });
+        }
       }
 
       // Close modal (this will also hide geometry edit buttons)
@@ -1242,14 +1337,10 @@
         // Update the layer's annotationData as well
         layerToSave.annotationData = ann;
         
-        // Reset style to original (preserve 7px line weight)
+        // Back to the normal annotation style (species colour, completeness
+        // dashes, the user's line width) instead of a hard-coded 7px blue.
         if (layerToSave.setStyle) {
-          layerToSave.setStyle({
-            color: '#3388ff',
-            weight: 7,  // Preserve original 7px line weight
-            opacity: 0.8,
-            fillOpacity: 0.3
-          });
+          layerToSave.setStyle(getAnnotationLayerStyle(ann));
         }
         
         // Update the label position to match new geometry
@@ -1268,90 +1359,18 @@
         
         // Mark unsaved changes and persist
         hasUnsavedChanges = true;
-        if (isOracleProjectMode() && typeof syncAnnotationToDb === 'function' &&
-            typeof getDbAnnotationId === 'function' && getDbAnnotationId(ann)) {
-          // Task 7 fix: differential sync — PUT just this annotation.
-          // The previous saveProject() call here used POST bulk-replace, which
-          // deletes and re-inserts EVERY row (new annotation_ids), staling all
-          // local _dbAnnotationIds so later PUTs/undo restores would 404.
-          setAutoSaveBadge('pending', '🔵 Unsaved changes');
-          syncAnnotationToDb(ann)
-            .then(synced => {
-              // Refresh version tracking on the shared local object so the next
-              // PUT sends the current version (annotations[] and the layer both
-              // reference `ann`)
-              ann._dbAnnotationId = synced._dbAnnotationId;
-              ann._dbAnnotationVersion = synced._dbAnnotationVersion;
-              ann._syncStatus = 'synced';
-              // Keep projectAnnotations' version tracking in step for change polling
-              if (typeof getProjectAnnotations === 'function') {
-                const pa = getProjectAnnotations();
-                const idx = pa ? pa.findIndex(a =>
-                  a === ann || (a._dbAnnotationId && a._dbAnnotationId === synced._dbAnnotationId)) : -1;
-                if (idx >= 0) {
-                  pa[idx]._dbAnnotationVersion = synced._dbAnnotationVersion;
-                  pa[idx].geometry = ann.geometry;
-                }
-              }
-              // Record our own write so the multi-user poll ignores it
-              if (typeof _recordSyncedByMe === 'function') {
-                _recordSyncedByMe(synced._dbAnnotationId, synced._dbAnnotationVersion);
-              }
-              hasUnsavedChanges = false;
-              lastSaveTime = Date.now();
-              setAutoSaveBadge('saved', '✅ Saved');
-              console.log('✅ Geometry updated for annotation', index);
-              showStatus('✅ Geometry saved', 'success');
-            })
-            .catch(err => {
-              console.error('Geometry sync failed:', err);
-              // Task 7 round 2 fix (Finding 2): recover instead of retrying the
-              // same doomed request forever.
-              if (err.isConflict) {
-                // Another write bumped the version; adopt the server's version
-                // number but keep OUR geometry as the retry payload
-                // (last-writer-wins, acceptable for a single-user session).
-                if (err.serverAnnotation && err.serverAnnotation._dbAnnotationVersion != null) {
-                  ann._dbAnnotationVersion = err.serverAnnotation._dbAnnotationVersion;
-                }
-              } else if (err.isNotFound) {
-                // Server row is gone (e.g. deleted concurrently) — drop the
-                // stale identity so the retry re-POSTs this as a new annotation.
-                // getDbAnnotationId() falls back through annotation_id/id too
-                // (normalizeDbAnnotationResponse mirrors the db id onto both),
-                // so all three must be cleared or the next sync would still
-                // resolve the old id and PUT instead of POST.
-                delete ann._dbAnnotationId;
-                delete ann._dbAnnotationVersion;
-                delete ann.annotation_id;
-                delete ann.id;
-              }
-              // Mark pending (not synced) so the 30s differential auto-save
-              // retries this geometry save instead of the edit being silently lost.
-              ann._syncStatus = 'pending';
-              setAutoSaveBadge('pending', '🔵 Unsaved changes');
-              showStatus(`❌ Failed to save geometry: ${err.message}`, 'error');
-            });
-        } else if (isOracleProjectMode()) {
-          // Task 7 round 2 fix (Finding 1): the annotation hasn't been synced
-          // yet (no _dbAnnotationId), so there is nothing to PUT and calling
-          // saveProject() here would bulk-replace every row (id churn). Just
-          // update the local annotation in place — normalizeAnnotationForDb
-          // reads ann.geometry, which was already updated above, so the
-          // pending differential auto-save POST will carry the moved vertex.
+        if (isOracleProjectMode()) {
+          // Queue through the one save path (runAutoSave) instead of a
+          // separate direct PUT. The direct PUT marked the annotation synced
+          // even if it was edited again while the request was in flight, and
+          // on 404 re-created annotations that someone else had deleted.
           ann._syncStatus = 'pending';
-          if (typeof getProjectAnnotations === 'function') {
-            const pa = getProjectAnnotations();
-            const idx = pa ? pa.findIndex(a => a === ann) : -1;
-            if (idx >= 0) {
-              pa[idx].geometry = ann.geometry;
-              pa[idx]._syncStatus = 'pending';
-            }
-          }
           hasUnsavedChanges = true;
           setAutoSaveBadge('pending', '🔵 Unsaved changes');
-          console.log('✅ Geometry updated locally for annotation', index, '(will sync)');
-          showStatus('✅ Geometry saved', 'success');
+          console.log('✅ Geometry updated for annotation', index, '(saving)');
+          Promise.resolve(saveProject()).then(() => {
+            if (!annotationNeedsSync(ann)) showStatus('✅ Geometry saved', 'success');
+          });
         } else if (typeof saveProject === 'function') {
           saveProject();
           console.log('✅ Geometry updated for annotation', index);
@@ -1410,14 +1429,11 @@
       // Restore pointer events disabled during editing (see enableGeometryEdit)
       if (currentEditingLayer._path) currentEditingLayer._path.style.pointerEvents = '';
 
-      // Reset style (preserve 7px line weight for consistency)
+      // Back to the normal annotation style (incl. the user's line width)
       if (currentEditingLayer.setStyle) {
-        currentEditingLayer.setStyle({
-          color: '#3388ff',
-          weight: 7,
-          opacity: 0.8,
-          fillOpacity: 0.3
-        });
+        currentEditingLayer.setStyle(currentEditingLayer.annotationData
+          ? getAnnotationLayerStyle(currentEditingLayer.annotationData)
+          : applyAnnotationDisplay({ color: '#3388ff', opacity: 0.8, fillOpacity: 0.3 }));
       }
       
       // Remove button container
@@ -1456,7 +1472,7 @@
         }
         annotations.splice(index, 1);
         updateAnnotationTable();
-        if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed' });
+        if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed', project_id: (typeof currentProject !== 'undefined' && currentProject) ? currentProject.project_id : null });
         showStatus('🗑️ Annotation deleted', 'success');
         return;
       }
@@ -1501,7 +1517,7 @@
       
       showStatus('🗑️ Annotation deleted', 'success');
       if (isOracle) {
-        if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed' });
+        if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed', project_id: (typeof currentProject !== 'undefined' && currentProject) ? currentProject.project_id : null });
       } else {
         hasUnsavedChanges = true;
       }

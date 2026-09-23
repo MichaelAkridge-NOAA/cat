@@ -15,8 +15,9 @@
        floating .layer-control geometry it overrides in docked mode. -->
   <link rel="stylesheet" href="css/annotation-sidebar.css" />
   <!-- Popout mode detection — must run before any runtime scripts -->
-  <script src="js/annotation-popout-boot.js"></script>
+  <script src="js/annotation-popout-boot.js?v=v17-rc2"></script>
   <script src="/vendor/leaflet/leaflet.js"></script>
+  <script src="js/cat-tile-queue.js?v=v17-rc2"></script>
   <script src="/vendor/leaflet-draw/leaflet.draw.js"></script>
 </head>
 <body>
@@ -51,7 +52,8 @@
             <button class="dd-item" onclick="if(typeof v2UploadShapefile==='function') v2UploadShapefile(); closeNavDropdowns();">📤 Upload Shapefile Overlay</button>
             <button class="dd-item" onclick="if(typeof startTransectDrawMode==='function') startTransectDrawMode(); closeNavDropdowns();">📏 Create Segments &amp; Transects</button>
             <div class="dd-divider"></div>
-            <button class="dd-item danger" onclick="if(typeof clearAllAnnotations==='function') clearAllAnnotations(); closeNavDropdowns();">🗑️ Clear All Annotations</button>
+            <button class="dd-item" onclick="if(typeof catOpenHistoryPanel==='function') catOpenHistoryPanel(); closeNavDropdowns();">🕘 Recently Deleted &amp; History</button>
+            <button id="ddClearAll" class="dd-item danger" onclick="if(typeof clearAllAnnotations==='function') clearAllAnnotations(); closeNavDropdowns();">🗑️ Clear All Annotations</button>
           </div>
         </div>
         <div class="nav-dropdown" data-dropdown="view">
@@ -75,7 +77,32 @@
                 <option value="off">Off (default coloring)</option>
                 <option value="spcode">Color by Species</option>
                 <option value="con_1">Color by Condition</option>
+                <option value="annotator">Color by Annotator</option>
               </select>
+            </div>
+            <div class="dd-divider"></div>
+            <div class="dd-label">🐱 Cat buddy</div>
+            <button class="dd-item" onclick="if(typeof catBuddyToggle==='function'){ const on = catBuddyToggle(); document.getElementById('catBuddyToggleLabel').textContent = on ? 'on' : 'off'; } closeNavDropdowns();">Break reminder cat: <span id="catBuddyToggleLabel" style="margin-left:4px;font-weight:600;">on</span></button>
+            <div class="dd-item dd-item-static">
+              Wakes after
+              <select id="catBuddyMinutes" onchange="if(typeof catBuddySetMinutes==='function') catBuddySetMinutes(this.value)" style="margin-left:6px;">
+                <option value="10">10 min</option>
+                <option value="15">15 min</option>
+                <option value="20">20 min</option>
+                <option value="25">25 min (pomodoro)</option>
+                <option value="30">30 min</option>
+                <option value="45">45 min</option>
+                <option value="60">1 hour</option>
+                <option value="90">1.5 hours</option>
+                <option value="120">2 hours</option>
+                <option value="custom">Custom…</option>
+              </select>
+            </div>
+            <div class="dd-item dd-item-static" id="catBuddyCustomRow" style="display:none;" onclick="event.stopPropagation()">
+              Every
+              <input type="number" id="catBuddyCustomMinutes" min="1" max="480" step="1" style="width:64px;margin:0 6px;"
+                onchange="if(typeof catBuddySetMinutes==='function') catBuddySetMinutes(this.value)">
+              minutes
             </div>
             <div class="dd-divider"></div>
             <div class="dd-label">Measure (not saved)</div>
@@ -159,19 +186,6 @@
     </div>
   </div>
 
-  <!-- Upload Project Panel -->
-  <div class="layer-control" id="uploadPanel" style="display: block;">
-    <div class="panel-header">
-      <h4>📂 Load Project</h4>
-    </div>
-    <div class="panel-content upload-panel-content">
-      <p class="upload-panel-hint">Upload your project JSON file to begin annotating.</p>
-      <input type="file" id="projectFileInput" accept=".json" class="upload-file-input" style="display: block;">
-      <button id="loadProjectBtn" class="btn btn-primary btn-full-width">Load Project</button>
-      <div id="uploadStatus" class="upload-status-box"></div>
-    </div>
-  </div>
-
   <!-- Combined Map Layers Panel -->
   <div class="layer-control" id="mapLayersPanel" style="display: none;">
     <div class="panel-header" onclick="togglePanel('mapLayersPanel')">
@@ -236,6 +250,11 @@
         <div class="opacity-control opacity-control-spaced">
           <label>Line Width: <span id="lineWidthValue">7</span>px</label>
           <input type="range" class="opacity-slider" id="lineWidth" min="1" max="10" value="7" oninput="setLineWidth(this.value)">
+        </div>
+        <div class="opacity-control opacity-control-spaced" style="display:flex; align-items:center; gap:8px;">
+          <label for="annotationColor" style="flex:1;" title="Colour of annotations when View → Symbology is Off. Annotations missing a species stay orange/dashed.">Default colour</label>
+          <input type="color" id="annotationColor" value="#ff2d6f" oninput="setAnnotationColor(this.value)" style="width:38px; height:24px; padding:0; border:1px solid #cbd5e1; border-radius:4px; cursor:pointer;">
+          <button type="button" onclick="resetAnnotationColor()" title="Back to the default pink-red" style="font-size:11px; padding:2px 6px;">Reset</button>
         </div>
         <div class="opacity-control opacity-control-spaced">
           <label class="inline-checkbox-label">
@@ -653,6 +672,9 @@
           <input type="text" id="annotationTableFilter" placeholder="🔍 Filter by species, site, analyst…"
             oninput="filterAnnotationTable(this.value)"
             class="annotation-filter-input" style="flex:1;" />
+          <button id="rowClickModeBtn" type="button" class="cat-btn cat-btn--secondary"
+            style="white-space:nowrap; font-size:12px; padding:6px 10px;"
+            onclick="toggleRowClickMode()">✨ Row click: highlight</button>
           <button class="cat-btn cat-btn--secondary" style="white-space:nowrap; font-size:12px; padding:6px 10px;"
             onclick="if(typeof openSelectByAttributeModal==='function') openSelectByAttributeModal();"
             title="Select all rows whose field matches a value, then bulk-update/delete/export just those">🎯 Select by Attribute</button>
@@ -676,7 +698,6 @@
             <th>Morph</th>
             <th>Old Dead %</th>
             <th>Remnant</th>
-            <th>Fragment</th>
             <th>Ex Bound</th>
             <th>No Colony</th>
             <th>Seg Length</th>
@@ -774,39 +795,39 @@
     </div>
   </div>
 
-  <script src="js/cat-ui-utils.js"></script>
-  <script src="js/cat-auth.js"></script>
-  <script src="js/annotation-runtime-navbar.js"></script>
-  <script src="js/annotation-undo.js"></script>
-  <script src="js/annotation-runtime-core.js"></script>
-  <script src="js/annotation-runtime-autosave.js"></script>
-  <script src="js/annotation-runtime-user.js"></script>
-  <script src="js/annotation-readonly.js"></script>
-  <script src="js/annotation-runtime-field-options.js"></script>
-  <script src="js/annotation-runtime-project-layers.js"></script>
-  <script src="js/annotation-runtime-annotations.js"></script>
-  <script src="js/annotation-runtime-shell-init.js"></script>
-  <script src="js/annotation-runtime-layer-controls.js"></script>
-  <script src="js/annotation-runtime-panel-ui.js"></script>
-  <script src="js/annotation-runtime-layers-sidebar.js"></script>
-  <script src="js/annotation-runtime-symbology.js"></script>
-  <script src="js/annotation-runtime-measure.js"></script>
-  <script src="js/annotation-runtime-snapping.js"></script>
-  <script src="js/annotation-runtime-raster-tools.js"></script>
-  <script src="js/annotation-runtime-inputs-init.js"></script>
-  <script src="js/annotation-runtime-operations.js"></script>
-  <script src="js/annotation-runtime-sam3.js"></script>
-  <script src="js/annotation-overlay-layers.js"></script>
+  <script src="js/cat-ui-utils.js?v=v17-rc2"></script>
+  <script src="js/cat-auth.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-navbar.js?v=v17-rc2"></script>
+  <script src="js/annotation-undo.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-core.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-autosave.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-user.js?v=v17-rc2"></script>
+  <script src="js/annotation-readonly.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-field-options.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-project-layers.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-annotations.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-shell-init.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-layer-controls.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-panel-ui.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-layers-sidebar.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-symbology.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-measure.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-snapping.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-raster-tools.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-inputs-init.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-operations.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-sam3.js?v=v17-rc2"></script>
+  <script src="js/annotation-overlay-layers.js?v=v17-rc2"></script>
   <!-- Enhancement modules (merged from v2) -->
-  <script src="js/v2-bulk.js"></script>
-  <script src="js/v2-table.js"></script>
-  <script src="js/v2-lasso.js"></script>
-  <script src="js/v2-defaults.js"></script>
+  <script src="js/v2-bulk.js?v=v17-rc2"></script>
+  <script src="js/v2-table.js?v=v17-rc2"></script>
+  <script src="js/v2-lasso.js?v=v17-rc2"></script>
+  <script src="js/v2-defaults.js?v=v17-rc2"></script>
 
   <!-- ============================================================ -->
   <!--  Pop-out Window Support (BroadcastChannel sync)              -->
   <!-- ============================================================ -->
-  <script src="js/annotation-runtime-popout.js"></script>
+  <script src="js/annotation-runtime-popout.js?v=v17-rc2"></script>
 
   <!-- ============================================================ -->
   <!--  Species Filter Settings Modal                                -->
@@ -850,7 +871,7 @@
     </div>
   </div>
 
-  <script src="js/annotation-runtime-settings-species.js"></script>
+  <script src="js/annotation-runtime-settings-species.js?v=v17-rc2"></script>
 
   <!-- ============================================================ -->
   <!--  Timer Settings Modal                                         -->
@@ -954,9 +975,9 @@
         <label class="settings-toggle-row">
           <div>
             <div class="settings-toggle-row-title">⚡ Enable auto-save</div>
-            <div class="settings-toggle-row-sub">Automatically save annotations to the database</div>
+            <div class="settings-toggle-row-sub">Always on — every change is saved to the database automatically</div>
           </div>
-          <input type="checkbox" id="asEnabled" checked class="settings-checkbox">
+          <input type="checkbox" id="asEnabled" checked disabled class="settings-checkbox" title="Auto-save can no longer be turned off">
         </label>
         <!-- Interval -->
         <div class="settings-box">
@@ -1013,7 +1034,7 @@
     </div>
   </div>
 
-  <script src="js/annotation-runtime-settings-app.js"></script>
+  <script src="js/annotation-runtime-settings-app.js?v=v17-rc2"></script>
 
   <!-- ============================================================ -->
   <!--  Map & Display Settings Modal                                 -->
@@ -1088,7 +1109,7 @@
     </div>
   </div>
 
-  <script src="js/annotation-runtime-settings-map.js"></script>
+  <script src="js/annotation-runtime-settings-map.js?v=v17-rc2"></script>
 
   <!-- ============================================================ -->
   <!--  Bookmarks Modal (save/restore named map views)               -->
@@ -1115,7 +1136,9 @@
     </div>
   </div>
 
-  <script src="js/annotation-runtime-bookmarks.js"></script>
+  <script src="js/annotation-runtime-bookmarks.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-history.js?v=v17-rc2"></script>
+  <script src="js/annotation-runtime-cat-buddy.js?v=v17-rc2"></script>
 
   <script>
     // Open the per-project report for the currently loaded DB project in a new

@@ -28,7 +28,16 @@ KNOWN_FIELDS = [
     "transect", "segment", "morph_code",
     "no_colony", "juvenile", "remnant", "ex_bound",
     "juv_substrate",
+    # Group lists: one list drives several numbered annotation fields.
+    "rdcause", "con", "sev",
 ]
+
+# Annotation properties each group list applies to (the rest are 1:1).
+FIELD_GROUP_MEMBERS = {
+    "rdcause": ["rdcause1", "rdcause2", "rdcause3"],
+    "con": ["con_1", "con_2", "con_3"],
+    "sev": ["sev_1", "sev_2", "sev_3"],
+}
 
 # Fields a deployment-wide DEFAULT VALUE makes sense for (Phase 4 candidate,
 # docs/team-lead-config-plan.md) — the same set the existing "Set Defaults"
@@ -181,6 +190,36 @@ async def add_field_option(
         {"f": field_name, "v": payload.value, "l": payload.label or payload.value, "o": next_order},
     )
     return {"success": True, "field": field_name, "value": payload.value, "label": payload.label or payload.value}
+
+
+@router.get("/{field_name}/used-values")
+async def get_used_values(
+    field_name: str,
+    _current_user: Dict[str, Any] = Depends(require_team_lead_or_admin),
+):
+    """Distinct values annotators have actually saved for this field (all
+    projects, live annotations), most used first — so a team lead can build
+    a list from real data instead of guessing codes. Read-only."""
+    _ensure_oracle_mode()
+    _check_field(field_name)
+    from cat.db.oracle import fetch_all
+
+    members = FIELD_GROUP_MEMBERS.get(field_name, [field_name])
+    # Member names come from the fixed allowlist above, never from the request.
+    parts = " UNION ALL ".join(
+        f"SELECT JSON_VALUE(properties_json, '$.{m}') AS v FROM cat_annotations WHERE deleted_at IS NULL"
+        for m in members
+    )
+    rows = fetch_all(
+        f"""
+        SELECT TRIM(v) AS v, COUNT(*) AS n FROM ({parts})
+        WHERE TRIM(v) IS NOT NULL
+        GROUP BY TRIM(v)
+        ORDER BY n DESC, v
+        FETCH FIRST 200 ROWS ONLY
+        """
+    )
+    return {"field": field_name, "values": [{"value": r["v"], "count": int(r["n"])} for r in rows]}
 
 
 # ---------------------------------------------------------------------------

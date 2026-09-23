@@ -115,8 +115,32 @@
     }
   }
 
+  // Rapid filter changes used to fire overlapping requests, and whichever
+  // answered LAST won — often an older filter's result. Now: a short debounce,
+  // the previous request is cancelled, and only the newest response renders.
+  let qcController = null;
+  let qcSeq = 0;
+  let qcDebounce = null;
+  let qcHasData = false;
+
+  function setLoading(on) {
+    ['qcSummary', 'qcProjectRows'].forEach(id => {
+      const el = $(id);
+      if (el) el.style.opacity = on ? '0.45' : '';
+    });
+    const status = $('qcEmpty');
+    if (on && !qcHasData && status) {
+      status.textContent = 'Loading…';
+      status.style.display = 'block';
+    }
+  }
+
+  function scheduleLoad() {
+    clearTimeout(qcDebounce);
+    qcDebounce = setTimeout(loadQc, 250);
+  }
+
   async function loadQc() {
-    showError('');
     const region = $('qcRegion') ? $('qcRegion').value : '';
     const year = $('qcYear') ? $('qcYear').value : '';
     const scope = $('qcScope') ? $('qcScope').value : 'all';
@@ -126,17 +150,38 @@
     if (year) params.set('year', year);
     params.set('scope', scope);
 
+    if (qcController) qcController.abort();
+    const controller = new AbortController();
+    qcController = controller;
+    const seq = ++qcSeq;
+    setLoading(true);
+
     try {
-      const resp = await fetch('/api/db/projects/qc?' + params.toString());
+      const resp = await fetch('/api/db/projects/qc?' + params.toString(), { signal: controller.signal });
       if (!resp.ok) throw new Error('Failed to load QC data (' + resp.status + ')');
       const data = await resp.json();
+      if (seq !== qcSeq) return; // a newer filter's request superseded this one
+      showError('');
+      const empty = $('qcEmpty');
+      if (empty) empty.textContent = 'No projects match these filters.';
       renderSummary(data);
       renderProjects(data.projects || []);
+      qcHasData = true;
     } catch (e) {
+      if (e.name === 'AbortError' || seq !== qcSeq) return; // expected: superseded
       console.error('Error loading QC dashboard:', e);
-      showError('Failed to load QC dashboard: ' + e.message);
-      renderSummary({ rollup: {}, projects: [] });
-      renderProjects([]);
+      // Keep whatever was shown before (dimmed) rather than silently
+      // rendering an empty dashboard that looks like "no problems".
+      showError('Failed to load QC dashboard: ' + e.message + (qcHasData ? ' — showing the previous results.' : ''));
+      if (!qcHasData) {
+        renderSummary({ rollup: {}, projects: [] });
+        renderProjects([]);
+      }
+    } finally {
+      if (seq === qcSeq) {
+        setLoading(false);
+        qcController = null;
+      }
     }
   }
 
@@ -147,9 +192,9 @@
     const regionSel = $('qcRegion');
     const yearSel = $('qcYear');
     const scopeSel = $('qcScope');
-    if (regionSel) regionSel.addEventListener('change', loadQc);
-    if (yearSel) yearSel.addEventListener('change', loadQc);
-    if (scopeSel) scopeSel.addEventListener('change', loadQc);
+    if (regionSel) regionSel.addEventListener('change', scheduleLoad);
+    if (yearSel) yearSel.addEventListener('change', scheduleLoad);
+    if (scopeSel) scopeSel.addEventListener('change', scheduleLoad);
   }
 
   if (document.readyState === 'loading') {

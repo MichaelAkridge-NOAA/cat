@@ -746,39 +746,6 @@
             <div style="padding: 14px; color:#64748b; font-size:13px;">Loading projects...</div>
           </div>
         </div>
-
-        <div id="legacyFileLoadPanel" style="display:none;">
-          <div style="margin-bottom: 10px; padding: 10px 12px; background: #fff7ed; border: 1px solid #fdba74; border-radius: 6px; color: #9a3412; font-size: 12px;">
-            Legacy file-based load mode
-          </div>
-        
-        <div class="drop-zone" id="loadDropZone">
-          <div class="drop-zone-icon"><svg class="cat-icon" style="width:40px;height:40px;"><use href="/vendor/feather/feather-sprite.svg#file-text"/></svg></div>
-          <h3>Drop project.json Here</h3>
-          <p>Or click to browse</p>
-          <input type="file" id="loadInput" accept=".json" style="display:none;">
-        </div>
-
-        <div id="loadStatus" class="status"></div>
-
-        <div id="loadedPreview" style="display:none;">
-          <h3 style="display:flex; align-items:center; gap:8px;">
-            <svg class="cat-icon" style="width:16px;height:16px;"><use href="/vendor/feather/feather-sprite.svg#file-text"/></svg>
-            Loaded Project
-          </h3>
-          <div class="preview-section">
-            <pre id="loadedJsonPreview"></pre>
-          </div>
-
-          <div class="action-buttons">
-            <button class="btn btn-primary" onclick="editLoadedProject()">
-              <svg class="cat-icon" style="width:14px;height:14px;vertical-align:-2px;"><use href="/vendor/feather/feather-sprite.svg#edit-2"/></svg>
-              Edit Project
-            </button>
-            <button class="btn btn-success" onclick="openInViewer()">🚀 Open in Viewer</button>
-          </div>
-        </div>
-        </div>
       </div>
 
       <!-- ===== Site Browser Mode ===== -->
@@ -1221,7 +1188,7 @@
         const response = await fetch('/api/config');
         if (!response.ok) return;
         const config = await response.json();
-        storageBackend = config?.storage_backend || 'file';
+        storageBackend = config?.storage_backend || 'oracle';
         dbApiAvailable = !!config?.db_api_available;
 
         if (storageBackend === 'oracle') {
@@ -1232,42 +1199,9 @@
           }
         }
 
-        // The page is rendered assuming Oracle (the deployed default) so
-        // there's no file-UI flash on load. File mode is the rare fallback,
-        // patched in here once we actually know the backend isn't Oracle.
-        if (storageBackend !== 'oracle') {
-          const subtitle = document.getElementById('projectManagerSubtitle');
-          if (subtitle) subtitle.textContent = 'Create, edit, and open annotation projects';
-
-          const createModeCard = document.getElementById('createMode');
-          const createSection = document.getElementById('createSection');
-          const loadModeCard = document.getElementById('loadMode');
-          const loadHeading = document.getElementById('loadSectionHeading');
-          const legacyFileLoadPanel = document.getElementById('legacyFileLoadPanel');
-
-          if (createModeCard) createModeCard.style.display = '';
-          if (createSection) createSection.style.display = '';
-          if (loadModeCard) {
-            const icon = loadModeCard.querySelector('.mode-icon');
-            const title = loadModeCard.querySelector('.mode-title');
-            const desc = loadModeCard.querySelector('p');
-            if (icon) icon.innerHTML = '<svg class="cat-icon" style="width:40px;height:40px;"><use href="/vendor/feather/feather-sprite.svg#folder"/></svg>';
-            if (title) title.textContent = 'Load Existing Project';
-            if (desc) desc.textContent = 'Upload an existing project.json to edit or continue';
-            loadModeCard.title = '';
-          }
-          if (loadHeading) loadHeading.style.display = '';
-          if (legacyFileLoadPanel) legacyFileLoadPanel.style.display = '';
-
-          const dbBrowser = document.getElementById('dbProjectBrowser');
-          if (dbBrowser) dbBrowser.style.display = 'none';
-
-          currentMode = 'create';
-          selectMode('create');
-        } else {
-          fetchDbProjects();
-          loadDbFilterOptions();
-        }
+        // The database is the only backend (file mode was removed).
+        fetchDbProjects();
+        loadDbFilterOptions();
 
         console.log(`🧭 Project Creator backend: ${storageBackend} (db_api_available=${dbApiAvailable})`);
       } catch (error) {
@@ -1333,7 +1267,6 @@
       setupDropZone('tifDropZone', 'tifInput', addTifFiles);
       setupDropZone('shapefileDropZone', 'shapefileInput', addShapefiles);
       setupDropZone('annotationsDropZone', 'annotationsInput', loadAnnotationsFile);
-      setupDropZone('loadDropZone', 'loadInput', loadProjectFile);
       initializeStorageBackend();
     });
 
@@ -1556,7 +1489,7 @@
           <div style="display:flex; gap:10px; align-items:flex-start;">
             <span onclick="openSiteDrawer(${siteJson})" style="cursor:pointer;" title="View site details">${siteThumb}</span>
             <div style="min-width:0; flex:1;">
-              <div class="site-card-name">${site.site_name}</div>
+              <div class="site-card-name">${_sbEsc(site.site_name)}</div>
               <div class="site-card-meta">Region: <strong>${site.region || '—'}</strong></div>
               <div style="margin:6px 0;">${depthBadge}${cogBadge}${demBadge}</div>
             </div>
@@ -2173,6 +2106,15 @@
     window.showProjectDetails = showProjectDetails;
 
     // ── Project card helpers ──────────────────────────────────────────
+    function _escHtml(v) {
+      return String(v == null ? '' : v).replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function _projectNameById(id) {
+      const p = (dbProjects || []).find(x => x.project_id === id);
+      return p ? (p.project_name || '') : '';
+    }
+
     function chip(text, variant, title) {
       const muted = variant === 'muted';
       return `<span title="${title ? String(title).replace(/"/g, '&quot;') : ''}" style="` +
@@ -2254,16 +2196,20 @@
         // owner, the actual account that created the project — show both
         // when they diverge.
         const owner = project.owner_display_name || project.owner_username || null;
-        const safeName = (project.project_name || '').replace(/'/g, "&#39;");
+        // Project names, sites and observers are user-typed: escape them for
+        // HTML, and never splice them into onclick JS (a quote broke the
+        // buttons, a crafted name ran script for everyone viewing the list).
+        // Handlers get the id and look the name up in dbProjects.
+        const nameHtml = _escHtml(project.project_name || 'Untitled');
 
         // Only state what's actually known. The old template always printed
         // "Observer: -" and "Owner: unassigned", so every row carried two
         // lines of placeholder noise that read as missing data rather than
         // as data that simply isn't recorded for this kind of project.
         const metaBits = [];
-        if (project.site) metaBits.push(`Site: ${site}`);
-        if (project.observer) metaBits.push(`Observer: ${observer}`);
-        if (owner && owner !== project.observer) metaBits.push(`Owner: ${owner}`);
+        if (project.site) metaBits.push(`Site: ${_escHtml(site)}`);
+        if (project.observer) metaBits.push(`Observer: ${_escHtml(observer)}`);
+        if (owner && owner !== project.observer) metaBits.push(`Owner: ${_escHtml(owner)}`);
         const metaLine = metaBits.length
           ? `<div style="font-size:12px; color:#475569; margin-top:3px;">${metaBits.join(' • ')}</div>`
           : '';
@@ -2351,7 +2297,7 @@
             ${thumb}
             <div style="min-width:0;">
               <div style="font-weight:600; color:#0f172a; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="Created: ${created}">
-                #${project.project_id} • ${project.project_name || 'Untitled'}
+                #${project.project_id} • ${nameHtml}
               </div>
               ${metaLine}
               <div style="display:flex; flex-wrap:wrap; gap:5px; margin-top:5px;">${chips.join('')}</div>
@@ -2363,7 +2309,7 @@
                  first and separated by a divider, so a misclick on the way
                  to Open can't destroy a project. -->
             <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;" onclick="event.stopPropagation();">
-              ${isOwner ? `<button class="cat-btn cat-btn--outline-danger" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="deleteDbProject(${project.project_id}, '${safeName}')">
+              ${isOwner ? `<button class="cat-btn cat-btn--outline-danger" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="deleteDbProject(${project.project_id}, _projectNameById(${project.project_id}))">
                 <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#trash-2"/></svg> Delete
               </button>
               <span aria-hidden="true" style="width:1px; align-self:stretch; background:#e2e8f0; margin:0 2px;"></span>` : ''}
@@ -2373,13 +2319,13 @@
               ${canEdit ? `<button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="editDbProject(${project.project_id})">
                 <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#edit-3"/></svg> Edit
               </button>
-              <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="openLayerManager(${project.project_id}, '${safeName}')">
+              <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="openLayerManager(${project.project_id}, _projectNameById(${project.project_id}))">
                 <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#layers"/></svg> Layers
               </button>` : ''}
-              <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="openCollaboratorsModal(${project.project_id}, '${safeName}')">
+              <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="openCollaboratorsModal(${project.project_id}, _projectNameById(${project.project_id}))">
                 <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#users"/></svg> ${isOwner ? 'Share' : 'Access'}
               </button>
-              <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="duplicateDbProject(${project.project_id}, '${safeName}')" title="Make your own editable copy (imagery, annotations and layers) under My Projects">
+              <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="duplicateDbProject(${project.project_id}, _projectNameById(${project.project_id}))" title="Make your own editable copy (imagery, annotations and layers) under My Projects">
                 <svg class="cat-icon"><use href="/vendor/feather/feather-sprite.svg#copy"/></svg> Duplicate
               </button>
               <button class="cat-btn cat-btn--outline" style="padding:7px 10px; font-size:12px; white-space:nowrap;" onclick="window.open('/report?project_id=${project.project_id}', '_blank')">
@@ -2612,11 +2558,24 @@
     async function deleteDbProject(projectId, projectName) {
       if (!projectId) return;
       const label = projectName || `Project ${projectId}`;
-      const confirmed = confirm(`Delete project "${label}" (ID: ${projectId})?\n\nThis cannot be undone.`);
-      if (!confirmed) return;
+      // Typing the name (checked again by the server for any project with
+      // annotations) instead of a one-click OK: this deletes every
+      // annotation in the project for everyone.
+      const typed = prompt(
+        `Permanently delete project "${label}" (ID: ${projectId}) and ALL of its annotations, for every user?\n\n` +
+        `This cannot be undone. Type the project name to confirm:`
+      );
+      if (typed === null) return;
+      if (projectName && typed.trim() !== projectName.trim()) {
+        alert('The name did not match — nothing was deleted.');
+        return;
+      }
 
       try {
-        const response = await fetch(`/api/db/projects/${projectId}`, { method: 'DELETE' });
+        const response = await fetch(
+          `/api/db/projects/${projectId}?confirm_name=${encodeURIComponent(typed.trim())}`,
+          { method: 'DELETE' }
+        );
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
           throw new Error(errorData.detail || `HTTP ${response.status}`);
@@ -2742,7 +2701,7 @@
             <input type="checkbox" ${checked} onchange="toggleLayerMgrActive(${layer.layer_id})" style="cursor:pointer; width:16px; height:16px;">
             <div style="flex:1; min-width:0;">
               <div style="font-weight:600; font-size:13px; color:${nameColor}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                ${layer.layer_name}
+                ${_escHtml(layer.layer_name)}
               </div>
               <div style="font-size:11px; color:#94a3b8;">${dateStr}</div>
             </div>
@@ -3035,7 +2994,7 @@
           return normalized;
         });
 
-        const bulkResp = await fetch(`/api/db/projects/${projectId}/annotations/bulk-replace`, {
+        const bulkResp = await fetch(`/api/db/projects/${projectId}/annotations/bulk-create`, {  // additive — bulk-replace (delete-all) was removed
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ annotations: annotationsPayload })
@@ -3947,185 +3906,14 @@
         }
       }
       
-      // Download the JSON file (same as saveProject)
-      const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${project.project_name.replace(/[^a-z0-9]/gi, '_')}_project.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      
-      // Save to localStorage temporarily for the viewer
-      localStorage.setItem('annotationProject', JSON.stringify(project));
-      
-      // Show success message before redirecting
-      showStatus('createStatus', 'success', '✅ Project file downloaded! Opening viewer...');
-      
-      // Redirect to viewer after a short delay to ensure download starts
-      setTimeout(() => {
-        window.location.href = '/annotation.html';
-      }, 500);
+      showStatus('createStatus', 'error', '❌ The database is not available — projects can only be created in the database.');
     }
     
-    // ========================================
-    // LOAD MODE
-    // ========================================
-    function loadProjectFile(files) {
-      if (files.length === 0) return;
-      
-      const file = files[0];
-      const reader = new FileReader();
-      
-      reader.onload = (e) => {
-        try {
-          loadedProject = JSON.parse(e.target.result);
-          document.getElementById('loadedJsonPreview').textContent = JSON.stringify(loadedProject, null, 2);
-          document.getElementById('loadedPreview').style.display = 'block';
-          showStatus('loadStatus', 'success', '✅ Project loaded successfully!');
-        } catch (error) {
-          showStatus('loadStatus', 'error', `❌ Invalid JSON: ${error.message}`);
-        }
-      };
-      
-      reader.readAsText(file);
-    }
     
-    function editLoadedProject() {
-      if (!loadedProject) return;
-      
-      // Switch to create mode and populate fields
-      selectMode('create');
-      
-      document.getElementById('projectName').value = loadedProject.project_name || '';
-      document.getElementById('siteCode').value = loadedProject.site || '';
-      document.getElementById('cruiseId').value = loadedProject.cruise || '';
-      document.getElementById('year').value = loadedProject.year || new Date().getFullYear();
-      document.getElementById('region').value = loadedProject.region || '';
-      document.getElementById('observer').value = loadedProject.metadata?.observer || '';
-      document.getElementById('notes').value = loadedProject.metadata?.notes || '';
-      
-      // Note: Can't restore actual File objects, but show the paths
-      showStatus('createStatus', 'info', 'ℹ️ Project metadata loaded. File paths are preserved but files must be re-added for editing.');
-    }
     
-    function openInViewer() {
-      if (!loadedProject) return;
-
-      // If loaded JSON already has a DB project id and Oracle mode is active, go directly
-      if (storageBackend === 'oracle' && loadedProject.project_id) {
-        window.location.href = `/annotation.html?project_id=${encodeURIComponent(loadedProject.project_id)}`;
-        return;
-      }
-      
-      // Save to localStorage temporarily
-      localStorage.setItem('annotationProject', JSON.stringify(loadedProject));
-      
-      // Show version selector
-      showVersionSelector();
-    }
     
-    function showVersionSelector() {
-      const modal = document.createElement('div');
-      modal.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0,0,0,0.7);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 10000;
-      `;
-      
-      modal.innerHTML = `
-        <div style="background: white; border-radius: 12px; padding: 32px; max-width: 520px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
-          <h2 style="margin: 0 0 16px 0; color: #333; font-size: 24px;">Open Annotation Tool</h2>
-          <p style="color: #666; margin-bottom: 20px;">Choose which version to open.</p>
-
-          <button onclick="launchAnnotationTool()" style="
-            padding: 16px 18px;
-            border: 2px solid #10b981;
-            background: #f0fdf4;
-            border-radius: 8px;
-            cursor: pointer;
-            text-align: left;
-            transition: all 0.3s;
-            width: 100%;
-          " onmouseover="this.style.background='#dcfce7'; this.style.borderColor='#059669'" onmouseout="this.style.background='#f0fdf4'; this.style.borderColor='#10b981'">
-            <div style="font-weight: bold; font-size: 16px; color: #10b981; margin-bottom: 6px;">
-              🚀 Open Viewer (Stable)
-            </div>
-            <div style="color: #666; font-size: 14px;">
-              Recommended default annotation workflow
-            </div>
-          </button>
-
-          <button onclick="launchAnnotationToolV2()" style="
-            margin-top: 12px;
-            padding: 16px 18px;
-            border: 2px dashed #f59e0b;
-            background: linear-gradient(135deg, #fffbeb 0%, #fff 100%);
-            border-radius: 8px;
-            cursor: pointer;
-            text-align: left;
-            transition: all 0.3s;
-            width: 100%;
-          " onmouseover="this.style.background='#fef3c7'; this.style.borderColor='#d97706'" onmouseout="this.style.background='linear-gradient(135deg, #fffbeb 0%, #fff 100%)'; this.style.borderColor='#f59e0b'">
-            <div style="font-weight: bold; font-size: 16px; color: #d97706; margin-bottom: 6px;">
-              🧪 v2 Dev Preview
-            </div>
-            <div style="color: #666; font-size: 14px;">
-              Bulk draw mode, Ctrl+Z undo, batch table editing, sortable columns, arrow-key nav
-            </div>
-            <div style="margin-top: 6px; font-size: 11px; color: #92400e; background: #fef3c7; display: inline-block; padding: 2px 8px; border-radius: 3px;">
-              ⚠️ In development — may have rough edges
-            </div>
-          </button>
-
-          <!-- A "Need legacy viewer?" link used to sit here pointing at
-               /annotation_file_mode_REFACTORED.html. server.py has never
-               routed that path, so it was a guaranteed 404; the page itself
-               lives in web/deprecated/ as archived source. Removed rather
-               than repointed — the deprecated viewers are kept for reference,
-               not for use. -->
-
-          <button onclick="this.closest('[style*=fixed]').remove()" style="
-            margin-top: 18px;
-            padding: 10px 20px;
-            background: #f3f4f6;
-            border: 1px solid #d1d5db;
-            border-radius: 6px;
-            cursor: pointer;
-            width: 100%;
-            font-size: 14px;
-            color: #6b7280;
-          " onmouseover="this.style.background='#e5e7eb'" onmouseout="this.style.background='#f3f4f6'">
-            Cancel
-          </button>
-        </div>
-      `;
-      
-      document.body.appendChild(modal);
-    }
     
-    function launchAnnotationTool() {
-      // Remove modal
-      const modal = document.querySelector('[style*="position: fixed"]');
-      if (modal) modal.remove();
 
-      window.location.href = '/annotation.html';
-    }
-
-    function launchAnnotationToolV2() {
-      // Remove modal
-      const modal = document.querySelector('[style*="position: fixed"]');
-      if (modal) modal.remove();
-
-      window.location.href = '/annotation.html';
-    }
     
     // ========================================
     // UTILITIES
@@ -4145,6 +3933,7 @@
   <script src="js/cat-auth.js"></script>
   <script src="js/cat-thumbnail.js"></script>
   <script src="/vendor/leaflet/leaflet.js"></script>
+  <script src="js/cat-tile-queue.js?v=v17-perf"></script>
   <script src="js/project-drawer.js"></script>
   <script src="js/site-drawer.js"></script>
   <script>

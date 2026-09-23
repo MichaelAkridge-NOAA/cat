@@ -5,23 +5,7 @@
         return;
       }
 
-      // Task A2 Step 3: a manual Save click while an autosave/retry is already
-      // in flight would otherwise silently no-op (or race it) — tell the user
-      // their changes are already covered by the in-progress save instead.
-      if (window._catAutoSaveInFlight) {
-        if (typeof showStatus === 'function') showStatus('A save is already in progress — your changes are included.', 'info');
-        return;
-      }
-
       try {
-        // Prepare annotations data
-        const annotationsToSave = [];
-        drawnItems.eachLayer(layer => {
-          if (layer.annotationData) {
-            annotationsToSave.push(layer.annotationData);
-          }
-        });
-        
         // Calculate total session time
         const sessionMetadata = {
           total_session_seconds: timerState.totalSessionSeconds,
@@ -47,13 +31,20 @@
           // If an auto-save is mid-flight, runAutoSave() below would return
           // immediately with changes still flagged and this click would report
           // a bogus "Save failed". Wait for it to finish first (bounded).
+          // Edits made after an in-flight save started are NOT in it, so wait
+          // for it and then run our own pass (the old code returned early
+          // claiming "your changes are included", and they weren't).
           const waitStart = Date.now();
           while (window._catAutoSaveInFlight && Date.now() - waitStart < 15000) {
             await new Promise(resolve => setTimeout(resolve, 150));
           }
-          hasUnsavedChanges = true;
+          if (window._catAutoSaveInFlight) {
+            if (typeof showStatus === 'function') showStatus('⏳ A save is still running — your changes will be saved right after it.', 'info');
+            runAutoSave(); // registers a follow-up run
+            return;
+          }
           await runAutoSave();
-          if (hasUnsavedChanges) {
+          if (countUnsavedAnnotations() > 0) {
             // runAutoSave failed; it already put the badge into its error
             // state (and, past the retry budget, the degraded-mode banner)
             // and has a retry scheduled. Nothing more to do here — don't
@@ -84,48 +75,9 @@
             }
           }
 
-          showStatus(`✅ Saved ${annotationsToSave.length} annotation(s) to Oracle project #${projectId}`, 'success');
+          showStatus(`✅ All changes saved to project #${projectId}`, 'success');
           return;
         }
-
-        // File-mode combined JSON save
-        const response = await fetch(`${serverUrl}/api/file-projects/project/${projectId}/save-combined`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            annotations: annotationsToSave,
-            session_metadata: sessionMetadata
-          })
-        });
-        
-        if (!response.ok) {
-          throw new Error('Failed to save');
-        }
-        
-        const result = await response.json();
-        
-        // Download single combined JSON file
-        const combinedBlob = new Blob([JSON.stringify(result.combined_file, null, 2)], { type: 'application/json' });
-        const combinedUrl = URL.createObjectURL(combinedBlob);
-        const combinedLink = document.createElement('a');
-        combinedLink.href = combinedUrl;
-        combinedLink.download = result.suggested_filename;
-        combinedLink.click();
-        URL.revokeObjectURL(combinedUrl);
-        
-        // Mark as saved - reset unsaved changes flag
-        hasUnsavedChanges = false;
-        lastSaveTime = Date.now();
-        setAutoSaveBadge('saved', '✅ Saved');
-        
-        // Show success message in console instead of popup
-        console.log(`✅ Project saved: ${result.suggested_filename} (${annotationsToSave.length} annotations)`);
-        if (result.base_path) {
-          console.log(`💡 Suggested location: ${result.base_path}`);
-        }
-        
-        // Alert removed - file downloads automatically
-        
       } catch (error) {
         console.error('Error saving:', error);
         alert(`❌ Error saving: ${error.message}`);
@@ -135,18 +87,6 @@
     // Toggle timer on click
     document.addEventListener('DOMContentLoaded', async () => {
       await initializeStorageBackend();
-
-      // Show file-mode hint in autosave badge area so users know save = download
-      if (storageBackend !== 'oracle') {
-        const badge = document.getElementById('autoSaveBadge');
-        if (badge) {
-          badge.style.display = 'inline-block';
-          badge.style.background = 'rgba(102,126,234,0.08)';
-          badge.style.color = '#667eea';
-          badge.textContent = '💾 File mode — save to download';
-          badge.title = 'Click the Save button to download your annotations as JSON';
-        }
-      }
 
       // ── Session field persistence ──────────────────────────────────────
       // Auto-restore session fields from localStorage on page load,
@@ -186,18 +126,9 @@
         });
       }
       
-      // Check for project from localStorage (from project creator)
-      const storedProject = localStorage.getItem('annotationProject');
-      if (storedProject) {
-        try {
-          const projectBlob = new Blob([storedProject], { type: 'application/json' });
-          const projectFile = new File([projectBlob], 'project.json', { type: 'application/json' });
-          loadProjectFromFile(projectFile);
-          localStorage.removeItem('annotationProject');
-        } catch (error) {
-          console.error('Error loading stored project:', error);
-        }
-      }
+      // (File-mode projects handed over via localStorage were removed; a
+      // stale hand-off left by an old page is just cleared.)
+      try { localStorage.removeItem('annotationProject'); } catch (e) { /* ignore */ }
 
       // DB mode project bootstrap via URL parameter: ?project_id=123
       const urlParams = new URLSearchParams(window.location.search);
@@ -208,33 +139,24 @@
       // redirect if a project was just handed off via the localStorage
       // bridge above (e.g. a one-off local file opened from the project
       // manager without a numeric project_id).
-      if (storageBackend === 'oracle' && !dbProjectId && !storedProject) {
+      if (storageBackend === 'oracle' && !dbProjectId) {
         window.location.href = '/project_creator.html';
         return;
       }
       if (storageBackend === 'oracle' && dbProjectId) {
         try {
           await loadProjectFromDatabase(dbProjectId);
-          // Task 8 fix: honor the persisted "Auto-save enabled" preference
-          // (Settings → Auto-save) on load. Previously this unconditionally
-          // called startAutoSave() regardless of what the user had saved,
-          // so disabling auto-save never survived a page reload — the
-          // interval always re-armed as soon as a project loaded.
-          let autoSaveEnabled = true;
-          try {
-            const saved = JSON.parse(localStorage.getItem('cat_autosave_settings') || '{}');
-            if (saved.enabled === false) autoSaveEnabled = false;
-          } catch (e) { /* fall back to enabled */ }
-          if (autoSaveEnabled) {
-            startAutoSave();
-          } else {
-            console.log('⏸️ Auto-save disabled in settings — not starting');
-          }
+          // Auto-save is always on in database mode (an older "disabled"
+          // preference is ignored — with it off, nothing saved new work).
+          startAutoSave();
+          // Bring back changes a closed/crashed tab never got to save.
+          if (!window._catPopoutMode) recoverJournaledChanges();
         } catch (error) {
           console.error('Error loading DB project:', error);
           const overlay = document.getElementById('fullLoadingOverlay');
           if (overlay) overlay.style.display = 'none';
-          document.getElementById('uploadStatus').innerHTML = `<span style="color: #ef4444;">❌ DB load failed: ${error.message}</span>`;
+          const _us = document.getElementById('uploadStatus');
+          if (_us) _us.innerHTML = `<span style="color: #ef4444;">❌ DB load failed: ${error.message}</span>`;
           // Task 11: uploadStatus lives inside the (often collapsed) upload
           // panel, so a failed initial project load could go unnoticed.
           // Also raise a toast, consistent with catFetch's failure UX.
@@ -242,24 +164,41 @@
         }
       }
       
-      // Add event listeners for file upload
-      document.getElementById('loadProjectBtn').addEventListener('click', () => {
-        const fileInput = document.getElementById('projectFileInput');
-        if (fileInput.files.length > 0) {
-          loadProjectFromFile(fileInput.files[0]);
-        } else {
-          alert('Please select a project JSON file');
-        }
-      });
-      
       // Add event listener for save button
       document.getElementById('saveProjectBtn').addEventListener('click', saveProjectAndAnnotations);
     });
 
-    // Alias saveProject → saveProjectAndAnnotations so table-edit auto-save works
-    // (annotation-runtime-annotations.js calls saveProject() after inline edits)
+    // saveProject() is what every edit path calls after changing something
+    // (table cells, paste, batch fill, dialog, geometry, undo…). It used to run
+    // the full manual-Save flow each time — a toast and a whole save pass per
+    // call, so pasting into 20 cells meant 20 passes and 20 "saved" toasts.
+    // Now it is a quiet, debounced save: calls within 300 ms collapse into
+    // one autosave pass; the returned promise resolves once that pass is done.
+    // The Save button / Ctrl+S still use saveProjectAndAnnotations() directly.
+    let _saveSoonTimer = null;
+    let _saveSoonWaiters = [];
     function saveProject() {
-      return saveProjectAndAnnotations();
+      return new Promise(resolve => {
+        _saveSoonWaiters.push(resolve);
+        clearTimeout(_saveSoonTimer);
+        _saveSoonTimer = setTimeout(async () => {
+          const waiters = _saveSoonWaiters;
+          _saveSoonWaiters = [];
+          try {
+            if (isOracleProjectMode()) {
+              const waitStart = Date.now();
+              while (window._catAutoSaveInFlight && Date.now() - waitStart < 15000) {
+                await new Promise(r => setTimeout(r, 150));
+              }
+              await runAutoSave();
+            }
+          } catch (e) {
+            console.warn('Save after edit failed (autosave will retry):', e);
+          } finally {
+            waiters.forEach(r => r());
+          }
+        }, 300);
+      });
     }
     
     // File mode uses simple local timer - no inactivity tracking needed
@@ -267,69 +206,81 @@
     // End timer when leaving page (file mode - local only)
     // Also warn user about unsaved changes
     window.addEventListener('beforeunload', (e) => {
-      // Stop auto-save timer
-      if (autoSaveIntervalId) clearInterval(autoSaveIntervalId);
+      // The auto-save interval is NOT stopped here: beforeunload also fires
+      // when the user then clicks "Stay on page", and stopping it left the
+      // rest of the session without auto-save.
 
-      // Final best-effort save for Oracle mode (sendBeacon for async).
-      // Task 8 review note: this is the one remaining save path that still
-      // uses bulk-replace (delete-all-then-reinsert) instead of the
-      // differential POST-new/PUT-changed sync the manual Save button and
-      // auto-save now share. That's intentional, not an oversight:
-      // sendBeacon is fire-and-forget POST-only with no response handling,
-      // so it cannot sequence per-annotation PUTs/DELETEs the way
-      // runAutoSave() does, and bulk-replace's DELETE-then-INSERT semantics
-      // (see /annotations/bulk-replace in cat/api/db_projects.py) mean this
-      // payload must include every current annotation, not just the dirty
-      // ones -- omitting a synced-but-unchanged annotation would delete it
-      // outright. The known cost: ids/versions of already-synced rows churn
-      // on unload, which can 404 a stale reference held by another open
-      // window/popout (it self-heals via Task 7's 404-recovery re-POST).
-      if (isOracleProjectMode() && !window.catReadOnly && hasUnsavedChanges && currentProject?.project_id) {
-        const annotationsToSave = [];
-        drawnItems.eachLayer(layer => {
-          if (layer.annotationData) annotationsToSave.push(layer.annotationData);
-        });
-        // bulk-replace DELETEs every existing annotation for this project
-        // before inserting the payload, unconditionally — a fire-and-forget
-        // beacon with an accidentally-empty list (drawnItems not yet
-        // populated, a timing bug, anything short of the user genuinely
-        // having deleted their last annotation) would silently wipe every
-        // annotation already saved for this project with nothing to
-        // reinsert. There's no way here to tell that apart from a real
-        // "deleted my last annotation" case, so the safe default is: never
-        // let an unload beacon delete everything. That one legitimate edge
-        // case (closing the tab right after deleting the last annotation)
-        // simply doesn't get its deletion persisted on hard close — a far
-        // smaller cost than risking the whole project's annotations.
-        if (annotationsToSave.length === 0) {
-          console.warn('⚠️ Skipping unload save beacon: annotationsToSave is empty (would delete all annotations)');
-        } else {
+      // Final best-effort flush of ONLY the changed annotations, one normal
+      // PUT/POST each with keepalive (survives the page closing). Never
+      // destructive. This replaced a sendBeacon to /annotations/bulk-replace,
+      // which deleted every annotation in the project and re-inserted this
+      // tab's copy — wiping other users' work and resurrecting deletions.
+      const unsavedCount = (isOracleProjectMode() && !window.catReadOnly && typeof countUnsavedAnnotations === 'function')
+        ? countUnsavedAnnotations() : 0;
+      if (unsavedCount > 0 && currentProject?.project_id) {
+        try {
           const projectId = currentProject.project_id;
-          const payload = JSON.stringify({ annotations: annotationsToSave.map(normalizeAnnotationForDb) });
-          navigator.sendBeacon(
-            `${serverUrl}/api/db/projects/${projectId}/annotations/bulk-replace`,
-            new Blob([payload], { type: 'application/json' })
-          );
-          console.log('📤 Final save beacon sent on page unload');
+          const KEEPALIVE_BUDGET = 60000; // browsers cap keepalive bodies at ~64KB total
+          let used = 0;
+          let flushed = 0;
+          _allLocalAnnotations().filter(annotationNeedsSync).forEach(ann => {
+            const dbId = getDbAnnotationId(ann);
+            // Creates carry the annotation's client_uuid, so this POST is
+            // safe even if autosave is sending the same create right now —
+            // the server returns the one row instead of inserting twice.
+            const payload = normalizeAnnotationForDb(ann);
+            const body = dbId
+              ? JSON.stringify({
+                  feature: payload.feature,
+                  properties: payload.properties,
+                  created_by: payload.created_by,
+                  ...(ann._dbAnnotationVersion != null ? { version: ann._dbAnnotationVersion } : {})
+                })
+              : JSON.stringify(payload);
+            if (used + body.length > KEEPALIVE_BUDGET) return;
+            used += body.length;
+            flushed++;
+            const sentFingerprint = annotationPayloadFingerprint(ann);
+            // If the user answers "Stay on page", the page lives on and these
+            // responses arrive: adopt the new id/version exactly like
+            // autosave does, so the next autosave doesn't POST a duplicate or
+            // PUT with a stale version. Until a create answers, autosave
+            // leaves it alone (annotationNeedsSync checks this).
+            if (!dbId) ann._createInFlightUntil = Date.now() + 30000;
+            fetch(dbId
+              ? `${serverUrl}/api/db/projects/${projectId}/annotations/${dbId}`
+              : `${serverUrl}/api/db/projects/${projectId}/annotations`, {
+              method: dbId ? 'PUT' : 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body,
+              keepalive: true,
+              credentials: 'same-origin'
+            })
+              .then(resp => (resp.ok ? resp.json() : null))
+              .then(result => {
+                if (!result || !result.annotation) return;
+                const synced = normalizeDbAnnotationResponse(result.annotation);
+                mergeServerIdentity(ann, synced);
+                _recordSyncedByMe(synced._dbAnnotationId, synced._dbAnnotationVersion);
+                ann._syncedFingerprint = sentFingerprint;
+                ann._syncStatus = (annotationPayloadFingerprint(ann) === sentFingerprint) ? 'synced' : 'pending';
+              })
+              .catch(() => {})
+              .finally(() => { delete ann._createInFlightUntil; });
+          });
+          if (flushed) console.log(`📤 Unload flush: ${flushed}/${unsavedCount} changed annotation(s) sent with keepalive`);
+        } catch (flushErr) {
+          console.warn('Unload flush failed:', flushErr);
         }
       }
 
-      // Save timer state to localStorage for file mode
-      if (timerState.sessionId) {
-        localStorage.setItem('cat_timer_state', JSON.stringify({
-          sessionId: timerState.sessionId,
-          elapsedSeconds: timerState.elapsedSeconds,
-          annotationCount: timerState.annotationCount,
-          timestamp: Date.now()
-        }));
-      }
       
       // Show warning if project is loaded and there are unsaved changes
       // Overlay move/rotate/vertex edits live in an edit session until Save is
       // clicked on the edit bar — closing the tab used to lose them silently.
       const overlayEditsPending = typeof _overlayEditSession !== 'undefined' &&
         _overlayEditSession && _overlayEditSession.dirty;
-      if (currentProject && (hasUnsavedChanges || overlayEditsPending)) {
+      if (currentProject && (unsavedCount > 0 || overlayEditsPending || (!isOracleProjectMode() && hasUnsavedChanges))) {
         // Set returnValue to trigger browser warning
         e.preventDefault();
         e.returnValue = ''; // Chrome requires returnValue to be set
@@ -494,7 +445,188 @@
       }
     });
     map.addControl(drawControl);
-    
+
+    // The toolbar's Delete mode has its own "Clear All" link that removes
+    // every annotation in one click, with no confirmation and no owner check.
+    // (It was harmless until Delete mode started saving to the database.)
+    // Project-wide clearing lives in File → Clear All (owner/admin, confirmed).
+    if (L.EditToolbar && L.EditToolbar.prototype.getActions) {
+      const originalGetActions = L.EditToolbar.prototype.getActions;
+      L.EditToolbar.prototype.getActions = function (handler) {
+        return originalGetActions.call(this, handler).filter(a => a.callback !== this._clearAllLayers);
+      };
+    }
+
+    // Toolbar "Edit layers" used to put EVERY annotation into vertex-edit
+    // mode at once (all lines lit up with handles). Limit it to what the user
+    // has selected: ticked table rows / lasso selection, otherwise the last
+    // annotation clicked on the map. With nothing selected, say so.
+    (function limitToolbarEditToSelection() {
+      if (!L.EditToolbar || !L.EditToolbar.Edit) return;
+      const proto = L.EditToolbar.Edit.prototype;
+      const originalEnableLayerEdit = proto._enableLayerEdit;
+      proto._enableLayerEdit = function (e) {
+        const layer = e.layer || e.target || e;
+        const allowed = window._catEditTargets;
+        if (allowed && !allowed.has(layer)) return;
+        return originalEnableLayerEdit.call(this, e);
+      };
+      // EDITSTART fires before the toolbar walks the layers, so the target
+      // set is in place when _enableLayerEdit runs for each one.
+      map.on(L.Draw.Event.EDITSTART, () => {
+        const targets = new Set();
+        const rows = (window.v2Table && window.v2Table.selectedRows) ? [...window.v2Table.selectedRows] : [];
+        rows.forEach(i => {
+          const ann = annotations[i];
+          if (!ann) return;
+          drawnItems.eachLayer(l => { if (l.annotationData === ann) targets.add(l); });
+        });
+        const last = window._catLastClickedLayer;
+        if (targets.size === 0 && last && drawnItems.hasLayer(last)) targets.add(last);
+        window._catEditTargets = targets;
+        if (targets.size === 0) {
+          showStatus('Select an annotation first (click it on the map or tick its row), then press Edit.', 'info');
+        } else {
+          showStatus(`Editing ${targets.size} selected annotation(s) — drag vertices, then Save.`, 'info');
+        }
+      });
+      map.on(L.Draw.Event.EDITSTOP, () => { window._catEditTargets = null; });
+    })();
+
+    // ── One drawing tool at a time ──────────────────────────────────────
+    // Measure, the AI rectangle, bulk draw, the toolbar tools and the
+    // re-arm-after-save each created their own Leaflet.draw handler and
+    // none of them switched the others off, so two could be live at once
+    // (both firing draw:created). Every tool now calls this first.
+    // opts.keepToolbar: called because a toolbar tool is being turned on.
+    window.catStopAllDrawing = function (opts) {
+      opts = opts || {};
+      if (window._catReEnableTimer) { clearTimeout(window._catReEnableTimer); window._catReEnableTimer = null; }
+      if (!opts.keepToolbar) {
+        try { if (drawControl && drawControl._toolbars && drawControl._toolbars.draw) drawControl._toolbars.draw.disable(); } catch (e) { /* not active */ }
+      }
+      try { if (typeof window.catCancelMeasure === 'function' && window.catMeasureModeActive) window.catCancelMeasure(); } catch (e) { /* ignore */ }
+      try { if (window._catSam3Handler) { window._catSam3Handler.disable(); window._catSam3Handler = null; window.catSam3PendingMode = null; } } catch (e) { /* ignore */ }
+      try { if (window.v2BulkMode && typeof window.v2BulkMode.stopDrawing === 'function') window.v2BulkMode.stopDrawing(); } catch (e) { /* ignore */ }
+    };
+    try {
+      drawControl._toolbars.draw.on('enable', () => window.catStopAllDrawing({ keepToolbar: true }));
+    } catch (e) { /* toolbar layout differs — tools still stop each other via the hotkeys */ }
+
+    // ── Hand (pan) tool ─────────────────────────────────────────────────
+    // Pan is the resting state: no draw tool armed. After saving an
+    // annotation the page used to re-arm the last draw tool automatically;
+    // that is now opt-in via the 🔁 toggle (remembered per browser).
+    window.catKeepToolAfterSave = (function () {
+      try { return localStorage.getItem('cat_keep_tool_after_save') === '1'; } catch (e) { return false; }
+    })();
+    window.catActivatePanTool = function () {
+      window.catStopAllDrawing();
+      lastDrawingTool = null;
+      if (typeof showStatus === 'function') showStatus('✋ Pan tool — drag to move the map', 'info');
+    };
+    const PanControl = L.Control.extend({
+      options: { position: 'topright' },
+      onAdd: function () {
+        const box = L.DomUtil.create('div', 'leaflet-bar cat-pan-control');
+        const pan = L.DomUtil.create('a', '', box);
+        pan.href = '#';
+        pan.title = 'Pan / hand tool (H) — stop drawing';
+        pan.innerHTML = '✋';
+        pan.style.cssText = 'font-size:16px;line-height:30px;text-align:center;';
+        const keep = L.DomUtil.create('a', '', box);
+        keep.href = '#';
+        const paintKeep = () => {
+          keep.innerHTML = '🔁';
+          keep.style.cssText = 'font-size:14px;line-height:30px;text-align:center;' +
+            (window.catKeepToolAfterSave ? 'background:#dbeafe;' : 'opacity:0.45;');
+          keep.title = window.catKeepToolAfterSave
+            ? 'Keep drawing tool after save: ON (click to return to pan after each save)'
+            : 'Keep drawing tool after save: OFF (click to keep the last tool armed)';
+        };
+        paintKeep();
+        L.DomEvent.disableClickPropagation(box);
+        L.DomEvent.on(pan, 'click', (e) => { L.DomEvent.preventDefault(e); window.catActivatePanTool(); });
+        L.DomEvent.on(keep, 'click', (e) => {
+          L.DomEvent.preventDefault(e);
+          window.catKeepToolAfterSave = !window.catKeepToolAfterSave;
+          try { localStorage.setItem('cat_keep_tool_after_save', window.catKeepToolAfterSave ? '1' : '0'); } catch (err) { /* ignore */ }
+          paintKeep();
+        });
+        return box;
+      }
+    });
+    map.addControl(new PanControl());
+
+    // ── Pan without leaving the drawing tool ────────────────────────────
+    // Leaflet only drags with the left button, and the draw tools treat ANY
+    // click as a vertex — so a middle-click meant to pan added a point
+    // (and, for 2-point lines, finished the line). Now:
+    //   * middle-button drag always pans (drawing or not), never adds a point;
+    //   * holding Space turns a left-button drag into a pan as well.
+    // Listeners run in the capture phase on the map container so the draw
+    // handlers never see these presses.
+    (function panWhileDrawing() {
+      const container = map.getContainer();
+      let panning = null; // { x, y, button }
+      let spaceHeld = false;
+
+      const isTyping = () => {
+        const a = document.activeElement;
+        // Also leave Space alone on focused buttons/links (it activates them).
+        return a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' ||
+          a.tagName === 'BUTTON' || a.tagName === 'A' || a.isContentEditable);
+      };
+
+      document.addEventListener('keydown', (e) => {
+        if (e.code !== 'Space' || isTyping() || e.repeat) return;
+        spaceHeld = true;
+        container.style.cursor = 'grab';
+        e.preventDefault(); // no page scroll
+      });
+      document.addEventListener('keyup', (e) => {
+        if (e.code !== 'Space') return;
+        spaceHeld = false;
+        if (!panning) container.style.cursor = '';
+      });
+      window.addEventListener('blur', () => { spaceHeld = false; panning = null; container.style.cursor = ''; });
+
+      container.addEventListener('mousedown', (e) => {
+        const middle = e.button === 1;
+        const spaceLeft = e.button === 0 && spaceHeld;
+        if (!middle && !spaceLeft) return;
+        e.preventDefault();          // no browser autoscroll on middle-click
+        e.stopPropagation();         // the draw tool must not see this press
+        panning = { x: e.clientX, y: e.clientY, button: e.button };
+        container.style.cursor = 'grabbing';
+      }, true);
+
+      document.addEventListener('mousemove', (e) => {
+        if (!panning) return;
+        const dx = e.clientX - panning.x;
+        const dy = e.clientY - panning.y;
+        if (dx || dy) {
+          map.panBy([-dx, -dy], { animate: false });
+          panning.x = e.clientX;
+          panning.y = e.clientY;
+        }
+      }, true);
+
+      const endPan = (e) => {
+        if (!panning || e.button !== panning.button) return;
+        e.preventDefault();
+        e.stopPropagation();         // no vertex, no "finish line" on release
+        panning = null;
+        container.style.cursor = spaceHeld ? 'grab' : '';
+      };
+      document.addEventListener('mouseup', endPan, true);
+      // Middle-click also fires auxclick / click on some browsers.
+      container.addEventListener('auxclick', (e) => { if (e.button === 1) { e.preventDefault(); e.stopPropagation(); } }, true);
+      container.addEventListener('click', (e) => {
+        if (e.button === 0 && spaceHeld) { e.preventDefault(); e.stopPropagation(); }
+      }, true);
+    })();
+
     // Override Leaflet Draw's readableDistance function to show 3 decimal places for sub-meter measurements
     // This affects the tooltip display during drawing
     if (L.GeometryUtil && L.GeometryUtil.readableDistance) {
@@ -909,6 +1041,15 @@
     const PANEL_WIDTH_KEY = 'cat_panel_width';
     const MIN_PANEL_WIDTH = 280;
     const MAX_PANEL_WIDTH = 1600;
+    const MIN_MAP_WIDTH = 320;
+
+    // The saved width (up to 1600px) was applied as-is, so on a smaller
+    // screen the docked table ran off the edge or left no map. Keep it within
+    // the window, always leaving some map visible.
+    function _clampPanelWidth(w) {
+      const maxForWindow = Math.max(MIN_PANEL_WIDTH, window.innerWidth - MIN_MAP_WIDTH);
+      return Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, maxForWindow, w || 420));
+    }
 
     function toggleLayoutMode() {
       const isDocked = document.body.classList.contains('layout-docked');
@@ -916,7 +1057,7 @@
     }
 
     function _setLayoutDocked() {
-      const savedWidth = parseInt(localStorage.getItem(PANEL_WIDTH_KEY)) || 420;
+      const savedWidth = _clampPanelWidth(parseInt(localStorage.getItem(PANEL_WIDTH_KEY)) || 420);
       document.documentElement.style.setProperty('--panel-width', savedWidth + 'px');
       document.body.classList.add('layout-docked');
       const ltb = document.getElementById('layoutToggleBtn');
@@ -961,7 +1102,7 @@
       document.addEventListener('mousemove', (e) => {
         if (!dragging) return;
         const delta = startX - e.clientX; // dragging left = wider panel
-        const newWidth = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, startWidth + delta));
+        const newWidth = _clampPanelWidth(startWidth + delta);
         document.documentElement.style.setProperty('--panel-width', newWidth + 'px');
         if (typeof map !== 'undefined') map.invalidateSize();
       });
@@ -984,6 +1125,19 @@
         _setLayoutDocked();
       }
     })();
+
+    // Re-fit the docked panel when the window shrinks (or a laptop moves
+    // from an external monitor to its own screen).
+    window.addEventListener('resize', () => {
+      if (!document.body.classList.contains('layout-docked')) return;
+      const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--panel-width')) || 420;
+      const wanted = parseInt(localStorage.getItem(PANEL_WIDTH_KEY)) || current;
+      const fitted = _clampPanelWidth(wanted);
+      if (fitted !== current) {
+        document.documentElement.style.setProperty('--panel-width', fitted + 'px');
+        if (typeof map !== 'undefined') map.invalidateSize();
+      }
+    });
 
     // ========== End Panel Layout ==========
 

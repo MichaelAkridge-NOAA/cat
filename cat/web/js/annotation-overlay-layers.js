@@ -2577,8 +2577,8 @@ function renderLayerManagementList() {
                onchange="toggleLayerActive(${layer.layer_id})"
                style="cursor: pointer;">
         <label for="layer_active_${layer.layer_id}" style="flex: 1; cursor: pointer; color: ${layer.is_active ? '#fff' : '#888'};">
-          ${layer.layer_name}
-          ${layer.layer_type ? `<span style="font-size:9px;color:#fff;background:${layer.layer_type === 'transect' ? '#ff8c00' : '#1e90ff'};border-radius:3px;padding:1px 5px;margin-left:5px;text-transform:uppercase;">${layer.layer_type}</span>` : ''}
+          ${catEscHtml(layer.layer_name)}
+          ${layer.layer_type ? `<span style="font-size:9px;color:#fff;background:${layer.layer_type === 'transect' ? '#ff8c00' : '#1e90ff'};border-radius:3px;padding:1px 5px;margin-left:5px;text-transform:uppercase;">${catEscHtml(layer.layer_type)}</span>` : ''}
         </label>
         <span style="color: #666; font-size: 11px;">${layer.created_at?.split('T')[0] || ''}</span>
         <button class="btn btn-sm" onclick="deleteLayerFromManagement(${layer.layer_id})" 

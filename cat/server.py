@@ -36,8 +36,9 @@ from cat.api.coral_species import router as coral_router
 from cat.api.field_options import router as field_options_router
 from cat.api.field_options import router_defaults as field_defaults_router
 
-# Import file-based project API
-from cat.api.file_projects import router as file_projects_router
+# GIS exports (Shapefile/KML/GeoPackage) — moved out of the removed
+# file-mode API, now behind login
+from cat.api.exports import router as exports_router
 
 # Import sites reference API
 from cat.api.sites import router as sites_router
@@ -87,6 +88,17 @@ try:
 except Exception:
     get_database_settings = None
     is_oracle_backend_enabled = None
+
+# CAT runs on the Oracle database only (file mode was removed). Refuse to
+# start on any other setting: an unset or mistyped CAT_STORAGE_BACKEND used
+# to fall back to file mode, which also silently switched login off.
+if get_database_settings is not None:
+    _backend = get_database_settings().storage_backend
+    if _backend != "oracle":
+        raise RuntimeError(
+            f"CAT_STORAGE_BACKEND={_backend!r} is not supported - CAT requires the Oracle database "
+            "(set CAT_STORAGE_BACKEND=oracle or leave it unset)."
+        )
 
 try:
     from cat.db.schema import bootstrap_schema
@@ -300,7 +312,12 @@ async def lifespan(app: FastAPI):
                 except Exception as seed_exc:
                     logger.warning("Site auto-seed failed (non-fatal): %s", seed_exc)
         except Exception as exc:
+            # Don't serve on a half-migrated schema (e.g. no client_uuid
+            # column): every save would fail. Exit instead — the container
+            # restarts (restart: unless-stopped) and retries, and the updater's
+            # health wait reports the failure.
             logger.exception("Oracle schema auto-bootstrap failed: %s", exc)
+            raise
     yield
     # ---- shutdown (nothing needed) ----
 
@@ -338,9 +355,9 @@ print("✅ Thumbnail API enabled at /api/thumbnails/*")
 app.include_router(debug_stats.router)
 print("✅ Debug stats API enabled at /api/debug/tile-stats")
 
-# Include file-based project routes
-app.include_router(file_projects_router)
-print("✅ File-based project API enabled at /api/file-projects/*")
+# Include GIS export routes (formerly under the removed /api/file-projects)
+app.include_router(exports_router)
+print("✅ Export API enabled at /api/exports/*")
 
 # Include DB project routes
 if DB_API_AVAILABLE:
@@ -406,6 +423,25 @@ async def prepend_data_path_middleware(request: Request, call_next):
                 from starlette.requests import Request as StarletteRequest
                 request = StarletteRequest(scope, request.receive)
     response = await call_next(request)
+    return response
+
+# Page code must never be served from a stale browser cache. The annotation
+# page is ~30 classic scripts that call into each other; with no
+# Cache-Control, browsers could heuristically reuse an old copy of one file
+# alongside new copies of others after an update — and a mismatch between the
+# save scripts breaks saving outright. "no-cache" means "revalidate every
+# time": unchanged files still come back as a cheap 304 via their ETag.
+@app.middleware("http")
+async def no_stale_page_code_middleware(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith(("/js/", "/css/")) or path == "/" or path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-cache"
+    elif path.startswith("/tiles/") and response.status_code == 200 and "cache-control" not in response.headers:
+        # Imagery tiles: panning back over the same area re-requested (and
+        # re-rendered) every tile. Let the browser keep them briefly; private
+        # so no shared proxy caches them across users.
+        response.headers["Cache-Control"] = "private, max-age=600"
     return response
 
 # Timing probe for the raster hot path (tiles, statistics, check-cog-crs,
@@ -542,12 +578,12 @@ def list_cog_files():
 @app.get("/api/config")
 def get_config():
     """Return viewer configuration for client"""
-    storage_backend = "file"
+    storage_backend = "oracle"
     if get_database_settings is not None:
         try:
             storage_backend = get_database_settings().storage_backend
         except Exception:
-            storage_backend = "file"
+            storage_backend = "oracle"
 
     auth_enabled = False
     if AUTH_API_AVAILABLE and is_oracle_backend_enabled is not None:
@@ -617,24 +653,6 @@ def check_cog_crs(url: str = Query(..., description="COG URL (gs:// or /vsigs/)"
         raise HTTPException(status_code=500, detail=f"CRS check failed: {exc}")
 
 
-# Debug endpoint to check file existence
-@app.get("/api/debug/file-exists")
-def check_file_exists(path: str):
-    """Debug: Check if a file exists and return its absolute path"""
-    import os
-    file_path = Path(path)
-    abs_path = file_path.resolve()
-
-    return {
-        "input_path": path,
-        "absolute_path": str(abs_path),
-        "exists": file_path.exists(),
-        "is_file": file_path.is_file() if file_path.exists() else False,
-        "cwd": os.getcwd(),
-        "data_dir_exists": Path(CONFIG['data']['directory']).exists(),
-        "data_dir_contents": [str(f.name) for f in Path(CONFIG['data']['directory']).glob('*')] if Path(CONFIG['data']['directory']).exists() else []
-    }
-
 # Serve the landing page at root
 @app.get("/", response_class=HTMLResponse)
 def read_index():
@@ -703,6 +721,22 @@ def read_export():
     if export_file.exists():
         return export_file.read_text(encoding="utf-8")
     return "<h1>Export page not found</h1>"
+
+# Time & activity report (time per annotator/project, leaderboard)
+@app.get("/activity", response_class=HTMLResponse)
+def read_activity():
+    activity_file = BASE_DIR / "web" / "activity.html"
+    if activity_file.exists():
+        return activity_file.read_text(encoding="utf-8")
+    return "<h1>Activity page not found</h1>"
+
+# Team-lead compare view (several projects from one site, layered)
+@app.get("/compare", response_class=HTMLResponse)
+def read_compare():
+    compare_file = BASE_DIR / "web" / "compare.html"
+    if compare_file.exists():
+        return compare_file.read_text(encoding="utf-8")
+    return "<h1>Compare page not found</h1>"
 
 # Serve the cross-project QC dashboard
 @app.get("/qc", response_class=HTMLResponse)

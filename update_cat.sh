@@ -9,11 +9,11 @@
 # Usage:
 #   ./update_cat.sh                   # Normal update (incremental Docker build)
 #   ./update_cat.sh --force-rebuild   # Bust the Docker layer cache
-#   ./update_cat.sh --no-backup       # Skip the pre-update JSON export
-#   ./update_cat.sh --branch dev      # Override the target git branch
+#   ./update_cat.sh --no-backup       # Skip the pre-update database dump (not recommended)
+#   ./update_cat.sh --branch=dev      # Override the target git branch
 # =============================================================================
-SCRIPT_VERSION="13.0.0"
-CAT_BRANCH="cat_db_v13"
+SCRIPT_VERSION="17.0.0"
+CAT_BRANCH="cat_db_v17"
 CAT_REPO_URL="https://github.com/MichaelAkridge-NOAA/cat.git"
 
 # ── Parse flags ──────────────────────────────────────────────────────────────
@@ -21,13 +21,17 @@ FORCE_REBUILD=false
 SKIP_BACKUP=false
 CUSTOM_BRANCH=""
 
-for arg in "$@"; do
-    case "$arg" in
+# while/shift (not `for arg in "$@"`): `--branch NAME` must consume NAME
+# wherever it appears, not only as the first argument.
+while [ $# -gt 0 ]; do
+    case "$1" in
         --force-rebuild)  FORCE_REBUILD=true ;;
         --no-backup)      SKIP_BACKUP=true ;;
-        --branch)         shift; CUSTOM_BRANCH="$1" ;;
-        --branch=*)       CUSTOM_BRANCH="${arg#--branch=}" ;;
+        --branch)         shift; CUSTOM_BRANCH="${1:-}" ;;
+        --branch=*)       CUSTOM_BRANCH="${1#--branch=}" ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
     esac
+    shift
 done
 
 [ -n "$CUSTOM_BRANCH" ] && CAT_BRANCH="$CUSTOM_BRANCH"
@@ -88,12 +92,13 @@ copy_cat_source() {
             --exclude='.env' \
             --exclude='oracle-data' \
             --exclude='exports' \
+            --exclude='backups' \
             --exclude='data' \
             "$src_dir/" "$dst_dir/"
     else
         sudo -u "$ACTUAL_USER" bash -c "cd \"$src_dir\" && tar \
             --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
-            --exclude='.env' --exclude='oracle-data' --exclude='exports' --exclude='data' \
+            --exclude='.env' --exclude='oracle-data' --exclude='exports' --exclude='backups' --exclude='data' \
             -cf - . | (cd \"$dst_dir\" && tar -xf -)"
     fi
 }
@@ -136,28 +141,41 @@ echo "  ✓ Docker available"
 echo "  ✓ Host HTTP port: $CAT_HTTP_PORT"
 
 # =============================================================================
-# Step 2: Pre-update backup (export annotations as JSON)
+# Step 2: Pre-update backup — Oracle Data Pump dump of the CAT schema
 # =============================================================================
+# The app is stopped first so the dump is consistent (no saves mid-export).
+# A new version can run schema migrations on first start, so the update
+# ABORTS if the dump can't be made — pass --no-backup to override.
+# (This used to curl /api/annotations/export, an endpoint that never existed
+# in DB mode, so every update silently ran with no backup at all.)
 if [ "$SKIP_BACKUP" = false ]; then
     echo ""
-    echo "[Step 2/7] Creating pre-update backup..."
-    BACKUP_DIR="$CAT_INSTALL_DIR/exports/update-backups"
-    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    BACKUP_FILE="$BACKUP_DIR/pre-update_${TIMESTAMP}.json"
+    echo "[Step 2/7] Creating pre-update database backup (Data Pump)..."
+    cd "$CAT_INSTALL_DIR"
+    docker compose -f docker-compose.cat.yml stop cat-app 2>/dev/null || true
 
-    sudo mkdir -p "$BACKUP_DIR"
-    sudo chown "$ACTUAL_USER:$(id -gn "$ACTUAL_USER")" "$BACKUP_DIR"
+    BACKUP_SCRIPT="$CAT_INSTALL_DIR/scripts/backup_to_gcs.sh"
+    [ -f "$BACKUP_SCRIPT" ] || BACKUP_SCRIPT="$SCRIPT_DIR/scripts/backup_to_gcs.sh"
+    UPDATE_BACKUP_ROOT="$CAT_INSTALL_DIR/backups/pre-update"
+    sudo -u "$ACTUAL_USER" mkdir -p "$UPDATE_BACKUP_ROOT"
 
-    HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:${CAT_HTTP_PORT}/health" 2>/dev/null || echo "000")
-    if echo "$HTTP_CODE" | grep -qE '^2'; then
-        if curl -sf "http://localhost:${CAT_HTTP_PORT}/api/annotations/export" -o "$BACKUP_FILE" 2>/dev/null; then
-            echo "  ✓ Backup saved: $BACKUP_FILE"
-        else
-            echo "  ⚠️  Export endpoint not available — skipping file backup (data is safe in Oracle)"
-        fi
+    if [ ! -f "$BACKUP_SCRIPT" ]; then
+        echo "  ERROR: backup script not found (scripts/backup_to_gcs.sh)."
+        echo "         Back up the database yourself, then re-run with --no-backup."
+        docker compose -f docker-compose.cat.yml start cat-app 2>/dev/null || true
+        exit 1
+    fi
+
+    bash "$BACKUP_SCRIPT" --local-only --skip-oracle-data --backup-root "$UPDATE_BACKUP_ROOT" || true
+    LATEST_DMP=$(ls -t "$UPDATE_BACKUP_ROOT"/*/oracle-export/cat_export.dmp 2>/dev/null | head -1 || true)
+    if [ -n "$LATEST_DMP" ] && [ -s "$LATEST_DMP" ]; then
+        echo "  ✓ Database dump: $LATEST_DMP ($(du -h "$LATEST_DMP" | cut -f1))"
     else
-        echo "  ⚠️  CAT app not reachable (HTTP $HTTP_CODE) — skipping export backup"
-        echo "      Data remains safe in the Oracle container (it won't be touched)"
+        echo "  ERROR: no database dump was produced — stopping before any change."
+        echo "         The app is restarted on the current version. Fix the backup, or"
+        echo "         re-run with --no-backup if you have another backup."
+        docker compose -f docker-compose.cat.yml start cat-app 2>/dev/null || true
+        exit 1
     fi
 else
     echo ""
@@ -217,7 +235,7 @@ if [ "$SCRIPT_DIR" = "$CAT_INSTALL_DIR" ]; then
 elif [ -f "$SCRIPT_DIR/docker-compose.cat.yml" ]; then
     # Running the updater from a local checkout — rsync to install dir
     echo "  Syncing from local source: $SCRIPT_DIR → $CAT_INSTALL_DIR"
-    echo "  (Preserving: .env, oracle-data, exports, data)"
+    echo "  (Preserving: .env, oracle-data, exports, backups, data)"
     copy_cat_source "$SCRIPT_DIR" "$CAT_INSTALL_DIR"
     echo "  ✓ Local source synced"
 elif [ -d "$CAT_INSTALL_DIR/.git" ]; then

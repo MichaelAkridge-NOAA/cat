@@ -210,7 +210,14 @@
         toggleTd.className = 'toggle-cell';
         var checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
-        checkbox.checked = !s.inactive_flag;
+        // A save still in flight keeps showing what was clicked, locked, even
+        // if the list is redrawn meanwhile (search typing, "disabled only").
+        // Redraws used to show the OLD value, unlocked, so the toggle looked
+        // like it had reset and people clicked again — sending another PUT.
+        var pending = Object.prototype.hasOwnProperty.call(pendingToggles, s.code);
+        checkbox.checked = pending ? pendingToggles[s.code] : !s.inactive_flag;
+        checkbox.disabled = pending;
+        checkbox.title = pending ? 'Saving…' : '';
         checkbox.addEventListener('change', function () {
           setEnabled(s, checkbox.checked, checkbox);
         });
@@ -227,8 +234,14 @@
       return d.innerHTML;
     }
 
+    // code -> the enabled value being saved. One request per species at a time.
+    var pendingToggles = {};
+
     function setEnabled(species, enabled, checkboxEl) {
+      if (Object.prototype.hasOwnProperty.call(pendingToggles, species.code)) return;
+      pendingToggles[species.code] = enabled;
       checkboxEl.disabled = true;
+      checkboxEl.title = 'Saving…';
       fetch('/api/coral/species/' + encodeURIComponent(species.code) + '/enabled', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -241,15 +254,20 @@
           });
           return r.json();
         })
-        .then(function () {
-          species.inactive_flag = enabled ? 0 : 1;
-          showStatus((enabled ? 'Enabled ' : 'Disabled ') + species.code, false);
-          render();
+        .then(function (result) {
+          // The server's stored value is the truth, not what was clicked.
+          var saved = (result && typeof result.enabled === 'boolean') ? result.enabled : enabled;
+          species.inactive_flag = saved ? 0 : 1;
+          showStatus((saved ? 'Enabled ' : 'Disabled ') + species.code, false);
         })
         .catch(function (err) {
-          checkboxEl.checked = !enabled; // revert the optimistic toggle
-          checkboxEl.disabled = false;
-          showStatus('Failed to update ' + species.code + ': ' + err.message, true);
+          // Leave the last confirmed value in place and say what happened.
+          showStatus('Failed to update ' + species.code + ': ' + err.message + ' — it is still ' +
+            (species.inactive_flag ? 'disabled' : 'enabled') + '.', true);
+        })
+        .finally(function () {
+          delete pendingToggles[species.code];
+          render();
         });
     }
 
@@ -280,9 +298,16 @@
     var FIELD_LABELS = {
       morph_code: 'Morphology', transect: 'Transect', segment: 'Segment',
       no_colony: 'No Colony', juvenile: 'Juvenile', remnant: 'Remnant',
-      ex_bound: 'Ex. Bound', juv_substrate: 'JUV_SUBSTRATE (autocomplete)'
+      ex_bound: 'Ex. Bound', juv_substrate: 'JUV_SUBSTRATE (autocomplete)',
+      rdcause: 'RD Cause (RD Cause 1–3)', con: 'Condition (Condition 1–3)', sev: 'Severity (Severity 1–3)'
     };
-    var FIELD_ORDER = ['morph_code', 'transect', 'segment', 'juv_substrate', 'no_colony', 'juvenile', 'remnant', 'ex_bound'];
+    var FIELD_ORDER = ['morph_code', 'transect', 'segment', 'juv_substrate', 'no_colony', 'juvenile', 'remnant', 'ex_bound',
+                       'rdcause', 'con', 'sev'];
+    var FIELD_HINTS = {
+      rdcause: 'Empty = free text. Add codes (or pick from values already used) and these fields become dropdowns.',
+      con: 'Empty = free text. Add codes (or pick from values already used) and these fields become dropdowns.',
+      sev: 'Dropdown of these values for Severity 1–3.'
+    };
     var fieldSections = document.getElementById('fieldSections');
     var fieldsStatusMsg = document.getElementById('fieldsStatusMsg');
     var fieldOptionsData = {};
@@ -403,6 +428,13 @@
 
         var body = document.createElement('div');
         body.className = 'field-section-body';
+        if (FIELD_HINTS[field]) {
+          var hint = document.createElement('div');
+          hint.className = 'hint';
+          hint.style.cssText = 'margin-bottom:6px;';
+          hint.textContent = FIELD_HINTS[field];
+          body.appendChild(hint);
+        }
 
         opts.forEach(function (o) {
           var row = document.createElement('div');
@@ -432,6 +464,19 @@
         });
         body.appendChild(addRow);
 
+        // Values annotators have already typed, so a list can be built from
+        // real data. Click one to add it.
+        var usedBtn = document.createElement('button');
+        usedBtn.type = 'button';
+        usedBtn.className = 'cat-btn cat-btn--outline';
+        usedBtn.style.cssText = 'margin-top:8px; font-size:12px;';
+        usedBtn.textContent = 'Show values already used';
+        var usedBox = document.createElement('div');
+        usedBox.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;';
+        usedBtn.addEventListener('click', function () { showUsedValues(field, opts, usedBox, usedBtn); });
+        body.appendChild(usedBtn);
+        body.appendChild(usedBox);
+
         section.appendChild(body);
         fieldSections.appendChild(section);
       });
@@ -460,6 +505,41 @@
           checkboxEl.checked = !enabled;
           checkboxEl.disabled = false;
           showFieldsStatus('Failed to update: ' + err.message, true);
+        });
+    }
+
+    function showUsedValues(field, opts, box, btn) {
+      btn.disabled = true;
+      box.textContent = 'Loading…';
+      fetch('/api/config/field-options/' + encodeURIComponent(field) + '/used-values', { credentials: 'same-origin' })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function (data) {
+          btn.disabled = false;
+          box.innerHTML = '';
+          var known = {};
+          opts.forEach(function (o) { known[String(o.value)] = true; });
+          var fresh = (data.values || []).filter(function (u) { return !known[String(u.value)]; });
+          if (!fresh.length) {
+            box.textContent = (data.values || []).length ? 'Every value in use is already in the list.' : 'No values saved on any annotation yet.';
+            return;
+          }
+          fresh.forEach(function (u) {
+            var chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'cat-btn cat-btn--outline';
+            chip.style.cssText = 'font-size:12px; padding:3px 8px;';
+            chip.title = 'Add ' + u.value + ' to the list';
+            chip.textContent = '+ ' + u.value + ' (' + u.count + ')';
+            chip.addEventListener('click', function () {
+              chip.disabled = true;
+              addFieldOption(field, { value: u.value }, { value: '' });
+            });
+            box.appendChild(chip);
+          });
+        })
+        .catch(function (err) {
+          btn.disabled = false;
+          box.textContent = 'Failed to load: ' + err.message;
         });
     }
 

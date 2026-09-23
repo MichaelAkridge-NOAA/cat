@@ -29,25 +29,85 @@
       };
     }
     
+    // Map toolbar Edit / Delete. Project annotations carry their data on
+    // layer.annotationData (never layer.options.objectId, which only the old
+    // file mode set), so these handlers used to do nothing for them: the
+    // shape moved or vanished on screen and came back after a refresh.
     map.on(L.Draw.Event.EDITED, function (event) {
-      const layers = event.layers;
-      layers.eachLayer(function (layer) {
-        // Update annotation geometry with full precision
-        const objectId = layer.options.objectId;
-        if (objectId) {
-          updateAnnotationGeometry(objectId, getFullPrecisionGeometry(layer));
+      let changed = 0;
+      event.layers.eachLayer(function (layer) {
+        if (layer.annotationData) {
+          layer.annotationData.geometry = getFullPrecisionGeometry(layer);
+          layer.annotationData._syncStatus = 'pending';
+          changed++;
+          return;
         }
       });
+      if (changed > 0) {
+        hasUnsavedChanges = true;
+        if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
+        if (typeof saveProject === 'function') saveProject();
+      }
     });
-    
-    map.on(L.Draw.Event.DELETED, function (event) {
-      const layers = event.layers;
-      layers.eachLayer(function (layer) {
-        const objectId = layer.options.objectId;
-        if (objectId) {
-          deleteAnnotationFromDB(objectId);
+
+    map.on(L.Draw.Event.DELETED, async function (event) {
+      const removed = [];
+      event.layers.eachLayer(function (layer) {
+        if (layer.annotationData) {
+          removed.push({ layer, ann: layer.annotationData });
         }
       });
+      if (removed.length === 0) return;
+
+      // Several at once needs an explicit yes; deleting most of a project
+      // from here is owner/admin only, same rule as File → Clear All.
+      const putBack = () => {
+        removed.forEach(item => {
+          drawnItems.addLayer(item.layer);
+          if (item.layer.setStyle && typeof getAnnotationLayerStyle === 'function') item.layer.setStyle(getAnnotationLayerStyle(item.ann));
+          if (typeof labelsVisible !== 'undefined' && labelsVisible && typeof addLabelToAnnotation === 'function') addLabelToAnnotation(item.layer);
+        });
+      };
+      const bulk = removed.length > 1;
+      const most = removed.length >= Math.max(2, Math.ceil(annotations.length * 0.5));
+      if (bulk && most && isOracleProjectMode() && window.catProjectRole !== 'owner') {
+        putBack();
+        showStatus('Deleting most of a project at once is limited to the project owner or an admin. Delete annotations individually instead.', 'error');
+        return;
+      }
+      if (bulk && !await catConfirm(`Delete ${removed.length} annotations?`, { danger: true, ok: `Delete ${removed.length}` })) {
+        putBack();
+        showStatus('Nothing deleted', 'info');
+        return;
+      }
+
+      const failed = [];
+      for (const item of removed) {
+        try {
+          if (typeof isOracleProjectMode === 'function' && isOracleProjectMode()) {
+            await deleteAnnotationFromDb(item.ann);
+          }
+          const ai = annotations.indexOf(item.ann);
+          if (ai !== -1) annotations.splice(ai, 1);
+          const pa = typeof getProjectAnnotations === 'function' ? getProjectAnnotations() : null;
+          if (pa && pa !== annotations) {
+            const pi = pa.indexOf(item.ann);
+            if (pi !== -1) pa.splice(pi, 1);
+          }
+          if (typeof removeAnnotationLabel === 'function') removeAnnotationLabel(item.layer._leaflet_id);
+        } catch (err) {
+          // Server refused: put the shape back so the screen matches the DB.
+          failed.push(err);
+          drawnItems.addLayer(item.layer);
+        }
+      }
+      if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
+      if (typeof updateStatistics === 'function') updateStatistics();
+      if (failed.length > 0) {
+        showStatus(`❌ ${failed.length} annotation(s) could not be deleted: ${failed[0].message}`, 'error');
+      } else {
+        showStatus(`🗑️ Deleted ${removed.length} annotation(s)`, 'success');
+      }
     });
     
     // Status messages — delegate to global toast system (defined in HTML <script>)
@@ -401,6 +461,9 @@
     
     // Function to re-enable the last used drawing tool
     function reEnableDrawingTool() {
+      // Pan (no tool armed) is the default after a save; re-arming the last
+      // tool is opt-in via the 🔁 map button (window.catKeepToolAfterSave).
+      if (!window.catKeepToolAfterSave) return;
       if (!lastDrawingTool) {
         console.log('No previous drawing tool to re-enable');
         return;
@@ -422,8 +485,11 @@
         return;
       }
 
-      // Delay to let species field focus happen first (at 100ms)
-      setTimeout(() => {
+      // Delay to let species field focus happen first (at 100ms). Kept in a
+      // handle so picking another tool in the meantime cancels it.
+      if (window._catReEnableTimer) clearTimeout(window._catReEnableTimer);
+      window._catReEnableTimer = setTimeout(() => {
+        window._catReEnableTimer = null;
         const activeElement = document.activeElement;
 
         const btn = document.querySelector(selector);
@@ -445,11 +511,24 @@
     }
     
     // ── Popout form save: geometry comes from BroadcastChannel, saved directly to DB ──
+    // One popout save at a time: the create POST isn't idempotent, and a
+    // double-click (or Enter + click) used to save the same shape twice.
+    let _popoutSaveInFlight = false;
     async function _saveAnnotationFromPopout() {
+      if (_popoutSaveInFlight) return;
       if (!window._popoutGeometry) {
         showStatus('Waiting for a shape from the main map window…', 'info');
         return;
       }
+      _popoutSaveInFlight = true;
+      try {
+        await _saveAnnotationFromPopoutInner();
+      } finally {
+        _popoutSaveInFlight = false;
+      }
+    }
+
+    async function _saveAnnotationFromPopoutInner() {
       const analyst = document.getElementById('analyst')?.value.trim();
       const obs_year = document.getElementById('obs_year')?.value;
       const mission_id = document.getElementById('mission_id')?.value.trim();
@@ -498,7 +577,6 @@
         juvenile: getI('juvenile') || 0,
         juv_substrate: getV('juv_substrate') || null,
         remnant: getI('remnant') || 0,
-        fragment: getI('fragment') || 0,
         morph_code: getV('morph_code') || null,
         ex_bound: getI('ex_bound') || 0,
         old_dead: getI('olddead'),
@@ -518,7 +596,7 @@
           await syncAnnotationToDb(annotationData);
         }
         if (window._catChannel) {
-          window._catChannel.postMessage({ type: 'annotations-changed' });
+          window._catChannel.postMessage({ type: 'annotations-changed', project_id: (typeof currentProject !== 'undefined' && currentProject) ? currentProject.project_id : null });
         }
         // Clear annotation-specific fields, keep session fields
         ['transect','segment','seglength','segwidth','no_colony','spcode','juvenile',
@@ -619,6 +697,19 @@
         return element.value;
       };
       
+      // Numeric fields where 0 is a real answer (e.g. 0% old dead). The old
+      // `parseInt(v) || null` turned every 0 into null.
+      const _intOrNull = (v) => {
+        if (v === null || v === undefined || String(v).trim() === '') return null;
+        const n = parseInt(v, 10);
+        return Number.isNaN(n) ? null : n;
+      };
+      const _floatOrNull = (v) => {
+        if (v === null || v === undefined || String(v).trim() === '') return null;
+        const n = parseFloat(v);
+        return Number.isNaN(n) ? null : n;
+      };
+
       // Build annotation data (lowercase for file mode, matching expected format)
       const annotationData = {
         colony_id: annotations.length + 1,
@@ -629,9 +720,9 @@
         mission_id: mission_id,
         site: site,
         transect: getFieldValue('transect') || null,
-        segment: parseInt(getFieldValue('segment')) || null,
-        seglength: parseFloat(getFieldValue('seglength')) || null,
-        segwidth: parseFloat(getFieldValue('segwidth')) || null,
+        segment: _intOrNull(getFieldValue('segment')),
+        seglength: _floatOrNull(getFieldValue('seglength')),
+        segwidth: _floatOrNull(getFieldValue('segwidth')),
         no_colony: parseInt(getFieldValue('no_colony')) || 0,
         spcode: getFieldValue('spcode') || null,
         juvenile: parseInt(getFieldValue('juvenile')) || 0,
@@ -639,22 +730,22 @@
         remnant: parseInt(getFieldValue('remnant')) || 0,
         morph_code: getFieldValue('morph_code') || null,
         ex_bound: parseInt(getFieldValue('ex_bound')) || 0,
-        old_dead: parseInt(getFieldValue('olddead')) || null,
+        old_dead: _intOrNull(getFieldValue('olddead')),
         rdcause1: getFieldValue('rdcause1') || null,
-        rd_1: parseInt(getFieldValue('rd_1')) || null,
+        rd_1: _intOrNull(getFieldValue('rd_1')),
         rdcause2: getFieldValue('rdcause2') || null,
-        rd_2: parseInt(getFieldValue('rd_2')) || null,
+        rd_2: _intOrNull(getFieldValue('rd_2')),
         rdcause3: getFieldValue('rdcause3') || null,
-        rd_3: parseInt(getFieldValue('rd_3')) || null,
+        rd_3: _intOrNull(getFieldValue('rd_3')),
         con_1: getFieldValue('con_1') || null,
-        extent_1: parseInt(getFieldValue('extent_1')) || null,
-        sev_1: parseInt(getFieldValue('sev_1')) || null,
+        extent_1: _intOrNull(getFieldValue('extent_1')),
+        sev_1: _intOrNull(getFieldValue('sev_1')),
         con_2: getFieldValue('con_2') || null,
-        extent_2: parseInt(getFieldValue('extent_2')) || null,
-        sev_2: parseInt(getFieldValue('sev_2')) || null,
+        extent_2: _intOrNull(getFieldValue('extent_2')),
+        sev_2: _intOrNull(getFieldValue('sev_2')),
         con_3: getFieldValue('con_3') || null,
-        extent_3: parseInt(getFieldValue('extent_3')) || null,
-        sev_3: parseInt(getFieldValue('sev_3')) || null,
+        extent_3: _intOrNull(getFieldValue('extent_3')),
+        sev_3: _intOrNull(getFieldValue('sev_3')),
         line_length_m: line_length_m,       // Auto-computed from drawn geometry (polylines only)
         created_at: new Date().toISOString(),
         annotation_time_seconds: annotationTimeSeconds // Time spent on this annotation
@@ -673,7 +764,7 @@
 
         // Style saved annotation with uniform line color
         if (layer.setStyle) {
-          layer.setStyle({ color: '#3388ff', weight: 3, opacity: 0.8, fillOpacity: 0.3 });
+          layer.setStyle(getAnnotationLayerStyle(annotationData)); // was a hard-coded 3px blue that ignored the line-width setting
         }
 
         // Add to annotations array (and projectAnnotations for autosave/poll sync)
@@ -772,7 +863,7 @@
         showStatus(`✅ Annotation saved! Total: ${annotations.length} (${formatTime(annotationTimeSeconds)})`, 'success');
         console.log('💾 Annotation saved to local array:', annotationData);
         // Notify popout windows of the change
-        if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed' });
+        if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed', project_id: (typeof currentProject !== 'undefined' && currentProject) ? currentProject.project_id : null });
         
         // Re-enable the drawing tool AFTER save to keep workflow going
         // This is better than re-enabling immediately after drawing, as it allows
@@ -789,130 +880,49 @@
       }
     }
     
-    // Load annotations from database (initial load - adds to existing)
-    async function loadAnnotations() {
-      if (!currentCOG && !isOracleProjectMode()) return;
-      
-      try {
-        let url;
-        let response;
-
-        if (isOracleProjectMode()) {
-          const projectId = currentProject.project_id;
-          url = `${serverUrl}/api/db/projects/${projectId}/annotations/geojson`;
-          console.log('Loading annotations from DB project:', url);
-          response = await fetch(url);
-        } else {
-          // Try with current path first, then with data/ prefix for backward compatibility
-          url = `${serverUrl}/api/annotations/geojson?ortho_file=${encodeURIComponent(currentCOG)}`;
-          console.log('Loading annotations from:', url);
-          response = await fetch(url);
-
-          // If no annotations found and path doesn't have data/ prefix, try with it
-          if (response.ok) {
-            const testData = await response.json();
-            if (testData.features && testData.features.length === 0 && !currentCOG.startsWith('data/')) {
-              console.log('No annotations with filename only, trying with data/ prefix...');
-              url = `${serverUrl}/api/annotations/geojson?ortho_file=${encodeURIComponent('data/' + currentCOG)}`;
-              response = await fetch(url);
-            } else {
-              // Reset response if we already have data
-              response = await fetch(`${serverUrl}/api/annotations/geojson?ortho_file=${encodeURIComponent(currentCOG)}`);
-            }
-          }
-        }
-        
-        // Check if response is OK before parsing
-        if (!response.ok) {
-          console.error(`Failed to load annotations: ${response.status} ${response.statusText}`);
-          console.error('Request URL:', url);
-          const errorText = await response.text();
-          console.error('Error response:', errorText);
-          try {
-            const errorData = JSON.parse(errorText);
-            console.error('Error details:', errorData);
-          } catch (e) {
-            console.error('Could not parse error as JSON');
-          }
-          // Don't throw - just return early so we don't break the UI
-          return;
-        }
-        
-        const geojson = await response.json();
-        
-        // Store existing layer IDs to avoid duplicates
-        const existingIds = new Set();
-        drawnItems.eachLayer(layer => {
-          if (layer.options && layer.options.objectId) {
-            existingIds.add(layer.options.objectId);
-          }
-        });
-        
-        // Add annotations to map
-        annotations = isOracleProjectMode()
-          ? (geojson.features || []).map(normalizeDbGeoJsonFeature)
-          : (geojson.features || []);
-        
-        console.log(`Loading ${annotations.length} annotations from database`);
-        
-        annotations.forEach(feature => {
-          // Skip if already on map
-          if (existingIds.has(feature.id)) {
-            console.log(`Annotation ${feature.id} already on map, skipping`);
-            return;
-          }
-          
-          const layer = L.geoJSON(feature, {
-            pane: 'annotationsPane',  // Use custom pane for proper z-index
-            style: {
-              color: '#3388ff',
-              weight: 3,
-              opacity: 0.8,
-              fillOpacity: 0.3
-            },
-            objectId: feature.id
-          });
-
-          layer.eachLayer(l => {
-            l.options.objectId = feature.id;
-            l.feature = feature;  // Store feature data on layer
-            l.annotationData = feature;  // Needed by showAnnotationPopup()
-            drawnItems.addLayer(l);
-
-            // Remove any existing click handlers before adding new one
-            l.off('click');
-
-            // Add click handler for editing -- opens the interactive
-            // popup (Edit/Shape/Delete buttons) directly, same as the
-            // DB/project-mode load path.
-            l.on('click', function(e) {
-              L.DomEvent.stopPropagation(e);  // Prevent map click
-              showAnnotationPopup(l, e.latlng);
-            });
-
-            // Add label if labels are enabled
-            if (labelsVisible) {
-              addLabelToAnnotation(l);
-            }
-          });
-        });
-        
-        // Update statistics
-        updateStatistics();
-        
-        // Update annotation list
-        updateAnnotationTable();
-        
-      } catch (error) {
-        console.error('Error loading annotations:', error);
-        showStatus('Error loading annotations', 'error');
-      }
-    }
 
     // Refresh annotations - clears and reloads from database
-    async function refreshAnnotations() {
+    // Called when a map file is (re)selected. It used to fetch the project's
+    // annotations and ADD them as new layers without removing the existing
+    // ones — every call duplicated the whole set on the map. The project's
+    // annotations are already loaded; just re-sync them the safe way.
+    function loadAnnotations() {
+      return refreshAnnotations({ auto: true });
+    }
+
+    // opts.auto = triggered by another window (not a user click): never ask,
+    // never discard — just skip if this tab has unsaved changes.
+    async function refreshAnnotations(opts) {
+      opts = opts || {};
       if (!currentCOG && !isOracleProjectMode()) return;
-      
+
+      // A refresh rebuilds everything from the server, so any change not yet
+      // saved would be thrown away. It used to be — and refresh runs on its
+      // own whenever a popout/other tab saves, so edits vanished silently.
+      // Save first; if that can't finish, keep local work and skip refresh.
+      if (isOracleProjectMode() && typeof countUnsavedAnnotations === 'function' && countUnsavedAnnotations() > 0) {
+        const waitStart = Date.now();
+        while (window._catAutoSaveInFlight && Date.now() - waitStart < 15000) {
+          await new Promise(resolve => setTimeout(resolve, 150));
+        }
+        if (!window._catAutoSaveInFlight) await runAutoSave();
+        const stillUnsaved = countUnsavedAnnotations();
+        if (stillUnsaved > 0) {
+          if (opts.auto) {
+            console.log(`Refresh from another window skipped: ${stillUnsaved} unsaved change(s) here`);
+            return;
+          }
+          const discard = await catConfirm(
+            `${stillUnsaved} change(s) in this tab could not be saved yet.\n\nRefreshing now will DISCARD them. Export a backup first if unsure.\n\nDiscard and refresh?`,
+            { danger: true, ok: 'Discard & refresh' }
+          );
+          if (!discard) {
+            showStatus(`Refresh cancelled — ${stillUnsaved} unsaved change(s) kept. Saving keeps retrying.`, 'info');
+            return;
+          }
+        }
+      }
+
       console.log('🔄 Refreshing annotations from database...');
       
       // Save current map view to restore after refresh
@@ -920,9 +930,7 @@
       const currentZoom = map.getZoom();
       
       try {
-        const url = isOracleProjectMode()
-          ? `${serverUrl}/api/db/projects/${currentProject.project_id}/annotations/geojson`
-          : `${serverUrl}/api/annotations/geojson?ortho_file=${encodeURIComponent(currentCOG)}`;
+        const url = `${serverUrl}/api/db/projects/${currentProject.project_id}/annotations/geojson`;
         const response = await fetch(url);
         
         if (!response.ok) {
@@ -950,14 +958,23 @@
         annotations = rawFeatures.map((feature, idx) => {
           const gf = isOracleProjectMode() ? normalizeDbGeoJsonFeature(feature) : feature;
           const props = gf.properties || {};
-          // Flatten: merge nested properties to root (same as loadProjectAnnotations)
+          // Flatten: merge nested properties to root (same as
+          // loadProjectAnnotations). No nested `.properties` copy is kept —
+          // a second copy of the fields went stale on edit and was what got
+          // saved (see normalizeAnnotationForDb).
           const flat = {
             ...props,
-            properties: props,
             geometry: gf.geometry
           };
-          // Carry over DB tracking fields
-          const dbId = props.annotation_id || gf.id;
+          // Server-owned keys aren't user fields
+          delete flat.annotation_id;
+          delete flat.version;
+          if (flat.client_uuid) flat._clientUuid = flat.client_uuid;
+          delete flat.client_uuid;
+          delete flat.created_by_user_id;
+          delete flat.creator_display_name;
+          // Carry over DB tracking fields (feature.id is the authoritative id)
+          const dbId = gf.id ?? props.annotation_id;
           if (dbId != null) {
             flat.id = dbId;
             flat._dbAnnotationId = dbId;
@@ -968,6 +985,9 @@
           flat._displayIndex = idx + 1;
           flat._creatorUserId = props.created_by_user_id ?? null;
           flat._creatorLabel = props.creator_display_name || 'Unknown';
+          if (dbId != null && typeof annotationPayloadFingerprint === 'function') {
+            flat._syncedFingerprint = annotationPayloadFingerprint(flat);
+          }
           return flat;
         });
 
@@ -1047,6 +1067,14 @@
         return;
       }
       
+      // Clearing a whole project (every annotator's work) is for the project
+      // owner or an admin (both resolve to 'owner'). Editors can still delete
+      // individual annotations.
+      if (isOracleProjectMode() && window.catProjectRole !== 'owner') {
+        showStatus('Only the project owner or an admin can clear all annotations. You can still delete individual annotations.', 'error');
+        return;
+      }
+
       if (annotations.length === 0) {
         showStatus('No annotations to clear', 'info');
         return;
@@ -1063,86 +1091,51 @@
       
       try {
         if (isOracleProjectMode()) {
-          const projectId = currentProject.project_id;
-          const response = await fetch(`${serverUrl}/api/db/projects/${projectId}/annotations/bulk-replace`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ annotations: [] })
-          });
-
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.detail || 'Failed to clear DB annotations');
-          }
-
-          drawnItems.eachLayer(layer => {
-            if (layer.options && layer.options.objectId) {
-              drawnItems.removeLayer(layer);
+          // Soft-delete exactly the annotations shown here, one by one (each
+          // is restorable). This used to call /bulk-replace with [], which
+          // hard-deleted every row in the project — other users' too — and
+          // then left every layer on the map (it only removed layers with
+          // options.objectId, which project layers never have).
+          const targets = annotations.slice();
+          const failed = [];
+          let done = 0;
+          for (const ann of targets) {
+            try {
+              await deleteAnnotationFromDb(ann);
+              done++;
+            } catch (err) {
+              failed.push({ ann, err });
             }
-          });
-          annotations = [];
-          
-          // Clear all labels from map
-          if (typeof hideAllAnnotationLabels === 'function') {
-            hideAllAnnotationLabels();
           }
-          
+          const failedSet = new Set(failed.map(f => f.ann));
+          const layersToRemove = [];
+          drawnItems.eachLayer(layer => {
+            if (layer.annotationData && !failedSet.has(layer.annotationData)) layersToRemove.push(layer);
+          });
+          layersToRemove.forEach(layer => {
+            if (typeof removeAnnotationLabel === 'function') removeAnnotationLabel(layer._leaflet_id);
+            drawnItems.removeLayer(layer);
+          });
+          const keep = targets.filter(a => failedSet.has(a));
+          annotations.length = 0;
+          keep.forEach(a => annotations.push(a));
+          const pa = typeof getProjectAnnotations === 'function' ? getProjectAnnotations() : null;
+          if (pa && pa !== annotations) {
+            pa.length = 0;
+            keep.forEach(a => pa.push(a));
+          }
+
           updateAnnotationTable();
           updateStatistics();
-          showStatus('✅ Cleared all project annotations', 'success');
+          if (failed.length > 0) {
+            showStatus(`Deleted ${done}; ${failed.length} could not be deleted: ${failed[0].err.message}`, 'error');
+          } else {
+            showStatus(`✅ Deleted ${done} annotation(s) (soft-deleted — still recoverable in the database)`, 'success');
+          }
+          if (window._catChannel) window._catChannel.postMessage({ type: 'annotations-changed', project_id: currentProject.project_id });
           return;
         }
 
-        // Delete each annotation from the database
-        let deletedCount = 0;
-        let failedCount = 0;
-        
-        for (const annotation of annotations) {
-          const objectId = annotation.id;
-          try {
-            const response = await fetch(`${serverUrl}/api/annotations/${objectId}`, {
-              method: 'DELETE'
-            });
-            
-            if (response.ok) {
-              deletedCount++;
-            } else {
-              failedCount++;
-              console.error(`Failed to delete annotation ${objectId}`);
-            }
-          } catch (error) {
-            failedCount++;
-            console.error(`Error deleting annotation ${objectId}:`, error);
-          }
-        }
-        
-        // Clear all annotation layers from the map
-        drawnItems.eachLayer(layer => {
-          if (layer.options && layer.options.objectId) {
-            drawnItems.removeLayer(layer);
-          }
-        });
-        
-        // Clear annotations array
-        annotations = [];
-        
-        // Clear all labels from map
-        if (typeof hideAllAnnotationLabels === 'function') {
-          hideAllAnnotationLabels();
-        }
-        
-        // Update UI
-        updateAnnotationTable();
-        updateStatistics();
-        
-        if (failedCount === 0) {
-          showStatus(`✅ Cleared all ${deletedCount} annotations`, 'success');
-          console.log(`✅ Successfully deleted ${deletedCount} annotations`);
-        } else {
-          showStatus(`⚠️ Deleted ${deletedCount} annotations, ${failedCount} failed`, 'warning');
-          console.warn(`⚠️ Deleted ${deletedCount}, failed ${failedCount}`);
-        }
-        
       } catch (error) {
         console.error('Error clearing annotations:', error);
         showStatus('Error clearing annotations', 'error');
@@ -1175,7 +1168,8 @@
       // Species breakdown
       const speciesCounts = {};
       annotations.forEach(ann => {
-        const p = ann.properties || ann;
+        // Flat fields are authoritative (a nested .properties copy can be stale)
+        const p = ann;
         const sp = p.SPCODE || p.spcode || p.species_code || p.SPECIES_CODE || '';
         if (sp) speciesCounts[sp] = (speciesCounts[sp] || 0) + 1;
       });
@@ -1221,131 +1215,9 @@
     // updateAnnotationList removed — all callers now use updateAnnotationTable()
     // (defined in annotation-runtime-annotations.js with full 35-column rendering)
     
-    // Zoom to annotation
-    function zoomToAnnotation(objectId) {
-      drawnItems.eachLayer(layer => {
-        if (layer.options.objectId === objectId) {
-          map.fitBounds(layer.getBounds());
-          layer.openPopup();
-        }
-      });
-    }
     
-    // Delete annotation
-    // Database mode delete function (not used in file mode, kept for compatibility)
-    async function deleteAnnotationDB(objectId) {
-      if (!await catConfirm('Delete this annotation?', { danger: true, ok: 'Delete' })) return;
-      
-      await deleteAnnotationFromDB(objectId);
-    }
     
-    async function deleteAnnotationFromDB(objectId) {
-      showLoading(true);
-      
-      try {
-        let response;
-        if (isOracleProjectMode()) {
-          response = await fetch(`${serverUrl}/api/db/projects/${currentProject.project_id}/annotations/${objectId}`, {
-            method: 'DELETE'
-          });
-        } else {
-          response = await fetch(`${serverUrl}/api/annotations/${objectId}`, {
-            method: 'DELETE'
-          });
-        }
-        
-        if (response.ok) {
-          showStatus(`Annotation ${objectId} deleted`, 'success');
-          
-          // Remove from map
-          drawnItems.eachLayer(layer => {
-            if (layer.options && layer.options.objectId === objectId) {
-              drawnItems.removeLayer(layer);
-            }
-          });
-          
-          // Remove label if exists
-          removeAnnotationLabel(objectId);
-          
-          // Remove from annotations array (and projectAnnotations for poll sync)
-          const index = annotations.findIndex(ann => ann.id === objectId);
-          if (index !== -1) {
-            annotations.splice(index, 1);
-          }
-          if (typeof getProjectAnnotations === 'function') {
-            const pa = getProjectAnnotations();
-            if (pa && pa !== annotations) {
-              const pi = pa.findIndex(a => (a._dbAnnotationId || a.id) === objectId);
-              if (pi !== -1) pa.splice(pi, 1);
-            }
-          }
-          
-          // Update UI
-          updateStatistics();
-          updateAnnotationTable();
-          
-          console.log(`✅ Annotation ${objectId} deleted from map and database`);
-        } else {
-          const errorData = await response.json();
-          showStatus(`Error deleting annotation: ${errorData.detail || 'Unknown error'}`, 'error');
-        }
-      } catch (error) {
-        console.error('Error deleting annotation:', error);
-        showStatus('Error deleting annotation', 'error');
-      } finally {
-        showLoading(false);
-      }
-    }
     
-    // Update annotation geometry
-    async function updateAnnotationGeometry(objectId, geometry) {
-      showLoading(true);
-      try {
-        let response;
-        if (isOracleProjectMode()) {
-          response = await fetch(`${serverUrl}/api/db/projects/${currentProject.project_id}/annotations/${objectId}`, {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              feature: {
-                type: 'Feature',
-                geometry,
-                properties: {}
-              }
-            })
-          });
-        } else {
-          response = await fetch(`${serverUrl}/api/annotations/${objectId}`, {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ GEOMETRY: geometry })
-          });
-        }
-        
-        if (response.ok) {
-          showStatus(`Annotation ${objectId} geometry updated`, 'success');
-          
-          // Update geometry in annotations array
-          const index = annotations.findIndex(ann => ann.id === objectId);
-          if (index !== -1) {
-            annotations[index].geometry = geometry;
-          }
-          
-          console.log(`✅ Annotation ${objectId} geometry updated`);
-        } else {
-          showStatus('Error updating annotation geometry', 'error');
-        }
-      } catch (error) {
-        console.error('Error updating annotation:', error);
-        showStatus('Error updating annotation geometry', 'error');
-      } finally {
-        showLoading(false);
-      }
-    }
     
     // Clear form
     function clearForm() {
@@ -1392,58 +1264,6 @@
       }
     }
     
-    // Export annotations as CSV
-    async function exportAnnotations() {
-      if (!currentCOG && !isOracleProjectMode()) {
-        showStatus('Please select a COG file first', 'error');
-        return;
-      }
-      
-      try {
-        if (isOracleProjectMode()) {
-          if (!annotations.length) {
-            showStatus('No annotations to export', 'warning');
-            return;
-          }
-
-          const headers = ['id', 'shape', 'species', 'analyst', 'site', 'obs_year', 'mission_id'];
-          const rows = annotations.map((ann) => ([
-            ann.id || ann.properties?.annotation_id || '',
-            ann.properties?.SHAPE || '',
-            ann.properties?.SPCODE || '',
-            ann.properties?.ANALYST || '',
-            ann.properties?.SITE || '',
-            ann.properties?.OBS_YEAR || '',
-            ann.properties?.MISSION_ID || ''
-          ]));
-
-          const escapeCsv = (v) => {
-            const str = String(v ?? '');
-            if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-              return `"${str.replace(/"/g, '""')}"`;
-            }
-            return str;
-          };
-
-          const csv = [headers, ...rows].map(row => row.map(escapeCsv).join(',')).join('\n');
-          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = `project_${currentProject.project_id}_annotations.csv`;
-          link.click();
-          URL.revokeObjectURL(url);
-          showStatus('CSV export complete', 'success');
-          return;
-        }
-
-        window.open(`${serverUrl}/api/annotations/export/csv?ortho_file=${encodeURIComponent(currentCOG)}`, '_blank');
-        showStatus('CSV export started', 'success');
-      } catch (error) {
-        console.error('Error exporting CSV:', error);
-        showStatus('Error exporting annotations', 'error');
-      }
-    }
     
     // Export annotations as Shapefile (File Mode)
     async function exportShapefile() {
@@ -1464,7 +1284,7 @@
         showStatus('Exporting annotations to shapefile...', 'info');
         
         // Send annotations to backend for shapefile conversion
-        const response = await fetch(`${serverUrl}/api/file-projects/export-shapefile`, {
+        const response = await fetch(`${serverUrl}/api/exports/shapefile`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1511,7 +1331,7 @@
       }
       try {
         showStatus(`Exporting annotations to ${label}...`, 'info');
-        const response = await fetch(`${serverUrl}/api/file-projects/${endpoint}`, {
+        const response = await fetch(`${serverUrl}/api/exports/${endpoint}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1539,8 +1359,8 @@
         showStatus(`Error exporting ${label}: ${error.message}`, 'error');
       }
     }
-    function exportKML() { return _exportViaServer('export-kml', 'kml', 'KML'); }
-    function exportGeoPackage() { return _exportViaServer('export-geopackage', 'gpkg', 'GeoPackage'); }
+    function exportKML() { return _exportViaServer('kml', 'kml', 'KML'); }
+    function exportGeoPackage() { return _exportViaServer('geopackage', 'gpkg', 'GeoPackage'); }
 
     // ── GeoJSON Export (client-side) ────────────────────────────────────────────
     function exportGeoJSON() {
@@ -1687,18 +1507,35 @@
         const tag = (e.target.tagName || '').toLowerCase();
         if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
 
+        const key = e.key.toLowerCase();
+        // H = hand / pan: stop whatever tool is armed.
+        if (key === 'h' && typeof window.catActivatePanTool === 'function') {
+          e.preventDefault();
+          window.catActivatePanTool();
+          return;
+        }
         const toolMap = {
           'd': '.leaflet-draw-draw-polyline',
           'p': '.leaflet-draw-draw-polygon',
           'r': '.leaflet-draw-draw-rectangle',
         };
-        const selector = toolMap[e.key.toLowerCase()];
+        const selector = toolMap[key];
         if (selector) {
           e.preventDefault();
+          const tool = { d: 'polyline', p: 'polygon', r: 'rectangle' }[key];
+          // The toolbar button toggles: pressing R while the rectangle tool
+          // is already armed used to switch it OFF. Leave it on instead.
+          let alreadyActive = false;
+          try {
+            const active = drawControl && drawControl._toolbars && drawControl._toolbars.draw && drawControl._toolbars.draw._activeMode;
+            alreadyActive = !!(active && active.handler && active.handler.type === tool);
+          } catch (err) { /* ignore */ }
+          if (alreadyActive) return;
+          if (typeof window.catStopAllDrawing === 'function') window.catStopAllDrawing();
           const btn = document.querySelector(selector);
           if (btn) {
             btn.click();
-            lastDrawingTool = { d: 'polyline', p: 'polygon', r: 'rectangle' }[e.key.toLowerCase()];
+            lastDrawingTool = tool;
           }
         }
       }

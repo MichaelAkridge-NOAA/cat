@@ -1063,5 +1063,148 @@ MERGE INTO cat_schema_migrations dst
     WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
 /
 
+-- block 84
+BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE cat_annotations ADD (client_uuid VARCHAR2(64))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+/
+
+-- block 85
+BEGIN
+        EXECUTE IMMEDIATE q'[CREATE UNIQUE INDEX ux_cat_annotations_client_uuid ON cat_annotations(client_uuid)]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
+    END;
+/
+
+-- block 86
+BEGIN
+        EXECUTE IMMEDIATE q'[CREATE INDEX idx_cat_annotations_proj_del ON cat_annotations(project_id, deleted_at)]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
+    END;
+/
+
+-- block 87
+MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0017' AS mid, 'Retry-safe creates: cat_annotations.client_uuid (unique) + (project_id, deleted_at) index' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+/
+
+-- block 88
+BEGIN
+        EXECUTE IMMEDIATE q'[
+            CREATE TABLE cat_annotation_history (
+                history_id NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                annotation_id NUMBER NOT NULL,
+                project_id NUMBER NOT NULL,
+                version NUMBER,
+                op VARCHAR2(20) NOT NULL,
+                feature_geojson CLOB,
+                properties_json CLOB,
+                deleted_at TIMESTAMP,
+                created_by VARCHAR2(255),
+                created_by_user_id NUMBER,
+                client_uuid VARCHAR2(64),
+                prev_modified_by_user_id NUMBER,
+                changed_by_user_id NUMBER,
+                changed_at TIMESTAMP DEFAULT SYSTIMESTAMP
+            )
+        ]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+/
+
+-- block 89
+BEGIN
+        EXECUTE IMMEDIATE q'[CREATE INDEX idx_cat_ann_hist_annotation ON cat_annotation_history(annotation_id, changed_at)]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
+    END;
+/
+
+-- block 90
+BEGIN
+        EXECUTE IMMEDIATE q'[CREATE INDEX idx_cat_ann_hist_project ON cat_annotation_history(project_id, changed_at)]';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLCODE NOT IN (-955, -1408) THEN RAISE; END IF;
+    END;
+/
+
+-- block 91
+BEGIN
+        EXECUTE IMMEDIATE REPLACE(q'[
+            CREATE OR REPLACE TRIGGER trg_cat_annotations_history
+            BEFORE UPDATE OR DELETE ON cat_annotations
+            FOR EACH ROW
+            DECLARE
+                v_op VARCHAR2(20);
+                v_by NUMBER;
+            BEGIN
+                IF DELETING THEN
+                    v_op := 'HARD_DELETE';
+                    v_by := NULL;
+                ELSE
+                    v_by := ~NEW.last_mod_by_user_id;
+                    IF ~OLD.deleted_at IS NULL AND ~NEW.deleted_at IS NOT NULL THEN
+                        v_op := 'DELETE';
+                    ELSIF ~OLD.deleted_at IS NOT NULL AND ~NEW.deleted_at IS NULL THEN
+                        v_op := 'RESTORE';
+                    ELSE
+                        v_op := 'UPDATE';
+                    END IF;
+                END IF;
+                INSERT INTO cat_annotation_history (
+                    annotation_id, project_id, version, op, feature_geojson, properties_json,
+                    deleted_at, created_by, created_by_user_id, client_uuid,
+                    prev_modified_by_user_id, changed_by_user_id
+                ) VALUES (
+                    ~OLD.annotation_id, ~OLD.project_id, ~OLD.version, v_op, ~OLD.feature_geojson, ~OLD.properties_json,
+                    ~OLD.deleted_at, ~OLD.created_by, ~OLD.created_by_user_id, ~OLD.client_uuid,
+                    ~OLD.last_mod_by_user_id, v_by
+                );
+            END;
+        ]', '~', CHR(58));
+    END;
+/
+
+-- block 92
+MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0018' AS mid, 'Annotation history: cat_annotation_history + BEFORE UPDATE/DELETE trigger (no FKs)' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+/
+
+-- block 93
+MERGE INTO cat_annotation_field_options dst
+    USING (
+        SELECT 'sev' AS field_name, '1' AS option_value, '1' AS option_label, 1 AS display_order FROM DUAL UNION ALL
+        SELECT 'sev', '2', '2', 2 FROM DUAL UNION ALL
+        SELECT 'sev', '3', '3', 3 FROM DUAL UNION ALL
+        SELECT 'sev', '4', '4', 4 FROM DUAL UNION ALL
+        SELECT 'sev', '5', '5', 5 FROM DUAL
+    ) src
+    ON (dst.field_name = src.field_name AND dst.option_value = src.option_value)
+    WHEN NOT MATCHED THEN INSERT (field_name, option_value, option_label, display_order)
+        VALUES (src.field_name, src.option_value, src.option_label, src.display_order)
+/
+
+-- block 94
+MERGE INTO cat_schema_migrations dst
+    USING (SELECT '0019' AS mid, 'Field option lists for cause/condition/severity groups; severity seeded 1-5' AS descr FROM DUAL) src
+    ON (dst.migration_id = src.mid)
+    WHEN NOT MATCHED THEN INSERT (migration_id, description) VALUES (src.mid, src.descr)
+/
+
 
 PROMPT CAT tables ready.

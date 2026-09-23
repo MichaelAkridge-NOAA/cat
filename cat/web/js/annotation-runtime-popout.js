@@ -4,6 +4,19 @@
     window._catChannel = _ch;
     const _mode = window._catPopoutMode;
 
+    // The channel is shared by every CAT tab on this origin, whatever project
+    // it has open. A save in one project used to trigger a refresh in every
+    // other tab. Messages without a project_id (older pages) still count.
+    function _isForThisProject(msg) {
+      if (msg.project_id == null) return true;
+      try {
+        return typeof currentProject !== 'undefined' && currentProject &&
+          String(currentProject.project_id) === String(msg.project_id);
+      } catch (e) {
+        return true;
+      }
+    }
+
     // ── Shared: the popout's two-state body ──
     // The popout has no map of its own, so until the main window sends a shape
     // there is nothing to fill in a form about. Exactly one of the waiting
@@ -107,16 +120,29 @@
           // Bulk draw sync — replace local annotations array and refresh table
           if (typeof annotations !== 'undefined' && Array.isArray(annotations)) {
             annotations.length = 0;
-            msg.annotations.forEach(function(a) { annotations.push(a); });
+            msg.annotations.forEach(function(a) {
+              // These are copies of the main window's objects, and saving them
+              // is the main window's job. Take them as this window's saved
+              // baseline so the popout only saves edits made here — otherwise
+              // both windows would PUT (and fight over versions of) the same
+              // annotations.
+              if (typeof getDbAnnotationId === 'function' && getDbAnnotationId(a)) {
+                a._syncStatus = 'synced';
+                if (typeof annotationPayloadFingerprint === 'function') {
+                  a._syncedFingerprint = annotationPayloadFingerprint(a);
+                }
+              }
+              annotations.push(a);
+            });
             if (typeof updateAnnotationTable === 'function') updateAnnotationTable();
           }
         }
-        if (msg.type === 'annotations-changed') {
+        if (msg.type === 'annotations-changed' && _isForThisProject(msg)) {
           // Was gated on `_mode === 'table'`, a mode name that no longer exists (see
           // the saveAnnotation() fix in annotation-runtime-operations.js) - the single
           // 'panel' mode shows the table alongside the form, so it should refresh here too.
           if (typeof refreshAnnotationsFromDb === 'function') {
-            refreshAnnotationsFromDb().catch(function(e) { console.warn('Refresh failed:', e); });
+            refreshAnnotationsFromDb({ auto: true }).catch(function(e) { console.warn('Refresh failed:', e); });
           }
         }
         if (msg.type === 'main-closing') {
@@ -216,10 +242,10 @@
 
       _ch.onmessage = function(e) {
         const msg = e.data;
-        if (msg.type === 'annotations-changed') {
+        if (msg.type === 'annotations-changed' && _isForThisProject(msg)) {
           _clearGhostAfterPopoutSave();
           if (typeof refreshAnnotations === 'function') {
-            refreshAnnotations().catch(function(e) { console.warn('Refresh failed:', e); });
+            refreshAnnotations({ auto: true }).catch(function(e) { console.warn('Refresh failed:', e); });
           }
         }
         if (msg.type === 'popout-ready') {

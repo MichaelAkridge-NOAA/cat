@@ -38,6 +38,22 @@
       };
     }
 
+    const DB_PAYLOAD_EXCLUDED_KEYS = new Set([
+      'properties', 'geometry', 'feature', 'id', 'annotation_id', 'version',
+      'created_by_user_id', 'creator_display_name', 'creator_username', 'client_uuid'
+    ]);
+
+    // Stable fingerprint of what would be sent for an annotation. Autosave
+    // compares the fingerprint taken at send time with the one after the
+    // response: if the user edited the annotation while the request was in
+    // flight they differ, and it stays pending instead of being marked saved.
+    function annotationPayloadFingerprint(annotation) {
+      const p = normalizeAnnotationForDb(annotation);
+      const sortedProps = {};
+      Object.keys(p.properties).sort().forEach(k => { sortedProps[k] = p.properties[k]; });
+      return JSON.stringify([p.feature, sortedProps]);
+    }
+
     function normalizeAnnotationForDb(annotation) {
       const ann = annotation || {};
       const rawGeometry = ann.geometry || ann.feature?.geometry || ann.feature || null;
@@ -49,15 +65,48 @@
             properties: {}
           };
 
-      const properties = ann.properties
-        ? { ...ann.properties }
-        : Object.fromEntries(Object.entries(ann).filter(([k]) => !['geometry', 'feature', '_displayIndex', 'id'].includes(k)));
+      // Always build the saved properties from the FLAT fields. Annotations
+      // used to carry a second, nested `.properties` copy (after a sync,
+      // refresh or bulk draw) and this preferred it — so every edit path that
+      // only writes flat fields (edit modal, batch fill, defaults, undo) was
+      // silently dropped on save. Server-owned and client bookkeeping keys are
+      // stripped so they never leak into properties_json.
+      const properties = {};
+      Object.keys(ann).forEach(k => {
+        if (DB_PAYLOAD_EXCLUDED_KEYS.has(k)) return;
+        if (k.charAt(0) === '_' && k !== '_localId') return;
+        properties[k] = ann[k];
+      });
 
       return {
         feature,
         properties,
-        created_by: (properties.ANALYST || properties.analyst || document.getElementById('analyst')?.value || null)
+        created_by: (properties.ANALYST || properties.analyst || document.getElementById('analyst')?.value || null),
+        // Same UUID on every attempt to create this annotation, so the
+        // server can recognise a retry of a create that already went through.
+        client_uuid: getDbAnnotationId(ann) ? undefined : ensureClientUuid(ann)
       };
+    }
+
+    // crypto.randomUUID only exists in secure contexts (https / localhost);
+    // CAT is often served over plain http on a workstation, so fall back to
+    // getRandomValues (available everywhere) formatted as a v4 UUID.
+    function _newUuid() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        try { return window.crypto.randomUUID(); } catch (e) { /* insecure context */ }
+      }
+      const b = new Uint8Array(16);
+      window.crypto.getRandomValues(b);
+      b[6] = (b[6] & 0x0f) | 0x40;
+      b[8] = (b[8] & 0x3f) | 0x80;
+      const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+      return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+    }
+
+    function ensureClientUuid(annotation) {
+      if (!annotation) return null;
+      if (!annotation._clientUuid) annotation._clientUuid = _newUuid();
+      return annotation._clientUuid;
     }
 
     function isOracleProjectMode() {
@@ -87,7 +136,8 @@
         // `properties` — these come from the API's LEFT JOIN cat_users, not from
         // the annotation's own editable fields.
         _creatorUserId: annotationRow?.created_by_user_id ?? null,
-        _creatorLabel: annotationRow?.creator_display_name || annotationRow?.created_by || 'Unknown'
+        _creatorLabel: annotationRow?.creator_display_name || annotationRow?.created_by || 'Unknown',
+        _clientUuid: annotationRow?.client_uuid || undefined
       };
     }
 
@@ -128,6 +178,12 @@
           err.currentVersion = conflictData.current_version != null ? conflictData.current_version : null;
           throw err;
         }
+        if (resp.status === 410) {
+          // Deleted (soft) by someone else — must NOT be re-created.
+          const err = new Error(`Annotation #${annotationId} was deleted`);
+          err.isGone = true;
+          throw err;
+        }
         if (resp.status === 404) {
           const err = new Error(`Annotation #${annotationId} no longer exists server-side`);
           err.isNotFound = true;
@@ -135,7 +191,9 @@
         }
         if (!resp.ok) {
           const e = await resp.json().catch(() => ({}));
-          throw new Error(e.detail || `Failed to update annotation #${annotationId}`);
+          const err = new Error((typeof e.detail === "string" && e.detail) || `Failed to update annotation #${annotationId}`);
+          err.status = resp.status;
+          throw err;
         }
         const result = await resp.json();
         return normalizeDbAnnotationResponse(result.annotation);
@@ -146,9 +204,17 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+      if (resp.status === 410) {
+        // Retry of a create whose annotation was deleted meanwhile.
+        const err = new Error('Annotation was deleted');
+        err.isGone = true;
+        throw err;
+      }
       if (!resp.ok) {
         const e = await resp.json().catch(() => ({}));
-        throw new Error(e.detail || 'Failed to create annotation');
+        const err = new Error((typeof e.detail === "string" && e.detail) || "Failed to create annotation");
+        err.status = resp.status;
+        throw err;
       }
       const result = await resp.json();
       return normalizeDbAnnotationResponse(result.annotation);
@@ -173,6 +239,11 @@
       const resp = await fetch(`${serverUrl}/api/db/projects/${currentProject.project_id}/annotations/${annotationId}`, {
         method: 'DELETE'
       });
+      // 404/410 = it is already not live on the server; that's the outcome
+      // we wanted, so don't leave the row stuck on screen with an error.
+      if (resp.status === 404 || resp.status === 410) {
+        return { success: true, already_deleted: true, deleted_annotation_id: annotationId };
+      }
       if (!resp.ok) {
         const e = await resp.json().catch(() => ({}));
         throw new Error(e.detail || `Failed to delete annotation #${annotationId}`);
@@ -203,20 +274,44 @@
       }
     }
 
+    // Copy the server-owned identity (db id, version, creator) from a sync
+    // response onto the EXISTING local object. Annotations are never swapped
+    // for the response object any more: the table row, open form, undo stack
+    // and map layer all hold references to the local object, and swapping it
+    // left them editing an orphan that no save ever saw.
+    function mergeServerIdentity(annotation, synced) {
+      if (!annotation || !synced) return annotation;
+      annotation._dbAnnotationId = synced._dbAnnotationId;
+      annotation.id = synced._dbAnnotationId;
+      annotation._dbAnnotationVersion = synced._dbAnnotationVersion;
+      if (synced._creatorUserId !== undefined && annotation._creatorUserId == null) {
+        annotation._creatorUserId = synced._creatorUserId;
+      }
+      if (synced._creatorLabel && !annotation._creatorLabel) {
+        annotation._creatorLabel = synced._creatorLabel;
+      }
+      return annotation;
+    }
+
+    // Kept for callers (undo/redo) that receive a fresh server object for an
+    // annotation already in the project: merge into the object at `index`
+    // rather than replacing it. Layers are matched by object identity only —
+    // the old `_displayIndex === index + 1` match went stale after any delete
+    // and rebound one annotation's layer to another annotation's data.
     function applySyncedAnnotation(index, syncedAnnotation) {
       if (index < 0 || !syncedAnnotation) return;
-      const oldAnnotation = projectAnnotations[index];
-      updateAnnotationInProject(index, syncedAnnotation);
-      // Also update the parallel annotations array used by table/stats
-      if (index >= 0 && index < annotations.length && annotations[index] === oldAnnotation) {
-        annotations[index] = syncedAnnotation;
-      }
-      drawnItems.eachLayer(layer => {
-        if (!layer.annotationData) return;
-        if (layer.annotationData._displayIndex === index + 1 || layer.annotationData === oldAnnotation) {
-          layer.annotationData = syncedAnnotation;
-        }
+      const existing = projectAnnotations[index];
+      if (!existing) return;
+      if (existing === syncedAnnotation) return;
+      const keepLocalId = existing._localId;
+      const keepDisplayIndex = existing._displayIndex;
+      Object.keys(existing).forEach(k => { delete existing[k]; });
+      Object.keys(syncedAnnotation).forEach(k => {
+        if (k === 'properties') return; // flat shape only
+        existing[k] = syncedAnnotation[k];
       });
+      if (keepLocalId && !existing._localId) existing._localId = keepLocalId;
+      if (keepDisplayIndex != null) existing._displayIndex = keepDisplayIndex;
     }
 
     // ── End project annotation helpers ──
@@ -266,6 +361,9 @@
       // Set before anything else initializes so the edit tools never arm.
       window.catProjectRole = snapshot.my_role || 'viewer';
       window.catReadOnly = window.catProjectRole === 'viewer';
+      // Clear All is owner/admin only (see clearAllAnnotations).
+      const _clearAllItem = document.getElementById('ddClearAll');
+      if (_clearAllItem) _clearAllItem.style.display = window.catProjectRole === 'owner' ? '' : 'none';
       currentProject = transformDbSnapshotToProject(snapshot);
       projectAnnotations = (snapshot.annotations || []).map((a) => {
         // Use normalizeDbAnnotationResponse to preserve _dbAnnotationId / _dbAnnotationVersion
@@ -288,7 +386,8 @@
       loadingMessage.textContent = 'Loading COG layers and annotations...';
       loadingIcon.textContent = '🗺️';
 
-      document.getElementById('uploadPanel').style.display = 'none';
+      const _uploadPanel = document.getElementById('uploadPanel');
+      if (_uploadPanel) _uploadPanel.style.display = 'none';
       // '' rather than 'block': the layers sidebar (annotation-runtime-layers-sidebar.js)
       // styles this panel as a flex column when docked, and an inline 'block'
       // would beat that stylesheet.
@@ -326,6 +425,9 @@
       // Start DB annotation session (best effort)
       try {
         if (window.catReadOnly) throw new Error('view-only: no annotation session');
+        // The popout mirrors the main window's timer; starting a session here
+        // would close the main window's (one active session per person).
+        if (window._catPopoutMode) throw new Error('popout: main window owns the session');
         const analyst = document.getElementById('analyst')?.value || 'unknown';
         const sessionResp = await fetch(`${serverUrl}/api/db/projects/${numericId}/sessions/start`, {
           method: 'POST',
@@ -335,6 +437,7 @@
         if (sessionResp.ok) {
           const sessionData = await sessionResp.json();
           currentDbSessionId = sessionData.session?.session_id || null;
+          if (typeof setPriorSessionTotal === 'function') setPriorSessionTotal(sessionData.prior_total_seconds || 0);
         }
       } catch (sessionErr) {
         console.warn('Could not start DB annotation session:', sessionErr);
@@ -349,116 +452,6 @@
       overlay.style.display = 'none';
     }
     
-    async function loadProjectFromFile(file) {
-      try {
-        const text = await file.text();
-        const projectData = JSON.parse(text);
-        
-        // Upload to backend for processing (COG creation, etc.)
-        const formData = new FormData();
-        formData.append('file', file);  // Send the actual file, not just text
-        
-        // Show full-screen loading overlay
-        const overlay = document.getElementById('fullLoadingOverlay');
-        const loadingTitle = document.getElementById('loadingTitle');
-        const loadingMessage = document.getElementById('loadingMessage');
-        const loadingProgress = document.getElementById('loadingProgress');
-        const loadingIcon = document.getElementById('loadingIcon');
-        
-        overlay.style.display = 'flex';
-        loadingTitle.textContent = 'Loading Project';
-        loadingMessage.textContent = 'Parsing project file...';
-        loadingProgress.style.width = '10%';
-        loadingIcon.textContent = '📄';
-        
-        // Brief delay to show parsing message
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        // Update to show COG processing will happen
-        loadingTitle.textContent = 'Processing Project';
-        loadingMessage.textContent = 'Creating Cloud Optimized GeoTIFF (COG) files if needed... This is a one-time process and may take several minutes for large images. Please Wait...';
-        loadingProgress.style.width = '20%';
-        loadingIcon.textContent = '⚙️';
-        
-        const response = await fetch(`${serverUrl}/api/file-projects/upload-project`, {
-          method: 'POST',
-          body: formData
-        });
-        
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.detail || 'Failed to load project');
-        }
-        
-        const result = await response.json();
-        currentProject = result.project;
-        projectAnnotations = result.annotations || [];
-        
-        // Update progress - completed processing, now initializing
-        loadingTitle.textContent = 'Initializing Map';
-        loadingMessage.textContent = 'COG creation complete! Loading map layers and annotations...';
-        loadingProgress.style.width = '70%';
-        loadingIcon.textContent = '🗺️';
-        
-        // Hide upload panel, show map layers and annotation form
-        // ('' not 'block' — see the DB-load path above: the docked layers
-        // sidebar needs the stylesheet, not an inline display, to win.)
-        document.getElementById('uploadPanel').style.display = 'none';
-        document.getElementById('mapLayersPanel').style.display = '';
-        document.getElementById('annotationFormPanel').style.display = 'block';
-        document.getElementById('saveProjectBtn').style.display = 'block';
-        
-        // Update site badge
-        const siteBadge = document.getElementById('mapLayersSiteBadge');
-        if (siteBadge) {
-          siteBadge.textContent = currentProject.site || currentProject.project_name;
-        }
-        
-        // Initialize annotation form with project data
-        initializeAnnotationForm();
-        
-        // Load layers
-        loadProjectLayers();
-        
-        // Load shapefiles if present
-        if (currentProject.shapefiles && currentProject.shapefiles.length > 0) {
-          loadProjectShapefiles();
-        }
-        
-        // Load existing annotations
-        loadProjectAnnotations();
-
-        // Task 8 fix: only auto-start if the user's Timer Settings say so
-        // (see the matching fix + comment in loadProjectFromDatabase above).
-        if (shouldAutoStartTimer()) startTimer();
-        
-        // Update progress - complete
-        loadingProgress.style.width = '100%';
-        loadingTitle.textContent = 'Project Loaded';
-        loadingIcon.textContent = '✅';
-        
-        const numTifs = currentProject.tif_files?.length || 0;
-        const numAnnotations = projectAnnotations.length;
-        const numShapefiles = currentProject.shapefiles?.length || 0;
-        
-        loadingMessage.textContent = `${numTifs} image${numTifs !== 1 ? 's' : ''} • ${numAnnotations} annotation${numAnnotations !== 1 ? 's' : ''}${numShapefiles > 0 ? ` • ${numShapefiles} shapefile${numShapefiles !== 1 ? 's' : ''}` : ''}`;
-        
-        // Hide overlay after a brief success display
-        await new Promise(resolve => setTimeout(resolve, 1200));
-        overlay.style.display = 'none';
-        
-      } catch (error) {
-        console.error('Error loading project:', error);
-
-        // Hide overlay and show error
-        const overlay = document.getElementById('fullLoadingOverlay');
-        if (overlay) overlay.style.display = 'none';
-
-        document.getElementById('uploadStatus').innerHTML = `<span style="color: #ef4444;">❌ Error: ${error.message}</span>`;
-        // Task 11: also raise a toast — uploadStatus text alone is easy to miss.
-        if (typeof showStatus === 'function') showStatus(`❌ Failed to load project: ${error.message}`, 'error');
-      }
-    }
     
     function initializeAnnotationForm() {
       // Pre-fill annotation form with project data
@@ -691,85 +684,6 @@
       }
     }
     
-    async function loadProjectShapefiles() {
-      const shapefileContainer = document.getElementById('shapefileLayersContainer');
-      if (!shapefileContainer || !currentProject.shapefiles) return;
-      
-      shapefileContainer.innerHTML = '';
-      
-      for (const shapefile of currentProject.shapefiles) {
-        // Add to UI (unchecked by default - user can enable if needed)
-        const layerDiv = document.createElement('div');
-        layerDiv.className = 'layer-item';
-        
-        // Sanitize shapefile name for use in IDs
-        const safeId = shapefile.name.replace(/[^a-zA-Z0-9_-]/g, '_');
-        
-        // Use shapefile_path property (from project creator)
-        const shapefilePath = shapefile.shapefile_path || shapefile.path;
-        
-        layerDiv.innerHTML = `
-          <div class="layer-header shapefile-header-${safeId}" style="cursor: pointer;">
-            <div class="layer-name" style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-              <label onclick="event.stopPropagation()" style="display: flex; align-items: center; gap: 8px; flex: 1;">
-                <input type="checkbox" class="shapefile-checkbox" data-shapefile-name="${shapefile.name}" data-shapefile-path="${shapefilePath}" data-shapefile-id="${safeId}">
-                <span>${shapefile.name}</span>
-              </label>
-              <span class="layer-collapse-icon" id="shapefile_${safeId}_detailsIcon">▶</span>
-            </div>
-          </div>
-          <div class="layer-details collapsed" id="shapefile_${safeId}_details">
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-              <label style="font-size:11px; color:#aaa; display:flex; align-items:center; gap:3px; cursor:pointer;">
-                <input type="checkbox" class="shapefile-border-only" id="shapefile_${safeId}_borderOnly" data-shapefile-name="${shapefile.name}" data-safe-id="${safeId}" disabled> Border only
-              </label>
-            </div>
-            <div class="opacity-control">
-              <label>Opacity: <span id="shapefile_${safeId}_opacityValue">80</span>%</label>
-              <input type="range" class="opacity-slider shapefile-opacity-slider" id="shapefile_${safeId}_opacity" min="0" max="100" value="80" disabled data-shapefile-name="${shapefile.name}" data-safe-id="${safeId}">
-            </div>
-          </div>
-        `;
-        shapefileContainer.appendChild(layerDiv);
-        
-        // Add header click listener for collapse/expand
-        const header = layerDiv.querySelector(`.shapefile-header-${safeId}`);
-        header.addEventListener('click', () => {
-          toggleLayerDetails(`shapefile_${safeId}_details`);
-        });
-        
-        // Add change listeners
-        const checkbox = layerDiv.querySelector('.shapefile-checkbox');
-        const opacitySlider = layerDiv.querySelector(`#shapefile_${safeId}_opacity`);
-        const borderOnlyCheckbox = layerDiv.querySelector(`#shapefile_${safeId}_borderOnly`);
-
-        // Opacity slider listener
-        opacitySlider.addEventListener('input', (e) => {
-          setShapefileOpacity(shapefile.name, e.target.value, safeId);
-        });
-
-        // Border-only toggle
-        if (borderOnlyCheckbox) {
-          borderOnlyCheckbox.addEventListener('change', () => {
-            toggleShapefileBorderOnly(shapefile.name, borderOnlyCheckbox.checked, safeId);
-          });
-        }
-
-        checkbox.addEventListener('change', async (e) => {
-          if (e.target.checked) {
-            await loadShapefileLayer(shapefile, safeId);
-            // Enable controls when shapefile is loaded
-            if (opacitySlider) opacitySlider.disabled = false;
-            if (borderOnlyCheckbox) borderOnlyCheckbox.disabled = false;
-          } else {
-            removeShapefileLayer(shapefile.name);
-            // Disable controls when shapefile is removed
-            if (opacitySlider) opacitySlider.disabled = true;
-            if (borderOnlyCheckbox) borderOnlyCheckbox.disabled = true;
-          }
-        });
-      }
-    }
     
     async function loadShapefileLayer(shapefile, safeId) {
       console.log('Loading shapefile:', shapefile.name);
@@ -1754,22 +1668,12 @@
       drawnItems.clearLayers();
       annotations = [];
       
-      // Check if project has imported annotations
-      if (currentProject.annotations && Array.isArray(currentProject.annotations)) {
-        console.log(`📥 Loading ${currentProject.annotations.length} imported annotations from project...`);
-        projectAnnotations = currentProject.annotations;
-      }
       
       // Load annotations from project
       projectAnnotations.forEach((ann, idx) => {
         const layer = L.geoJSON(ann.geometry, {
           pane: 'annotationsPane',  // Ensure annotations are in the top pane
-          style: {
-            color: '#3388ff',
-            weight: 7,
-            opacity: 0.8,
-            fillOpacity: 0.3
-          }
+          style: getAnnotationLayerStyle(ann)
         }).getLayers()[0];
         
         // Normalize annotation format: if properties are nested, flatten them to root level
@@ -1788,10 +1692,17 @@
           if (ann.id != null) normalizedAnn.id = ann.id;
           if (ann._creatorUserId !== undefined) normalizedAnn._creatorUserId = ann._creatorUserId;
           if (ann._creatorLabel) normalizedAnn._creatorLabel = ann._creatorLabel;
+          if (ann._clientUuid) normalizedAnn._clientUuid = ann._clientUuid;
         }
 
         // Add the array index as the display ID (for consistent referencing)
         normalizedAnn._displayIndex = idx + 1;
+
+        // Baseline of what the server has, so autosave can detect ANY later
+        // change to this annotation (see annotationNeedsSync in autosave.js).
+        if (getDbAnnotationId(normalizedAnn) && normalizedAnn._syncStatus === 'synced') {
+          normalizedAnn._syncedFingerprint = annotationPayloadFingerprint(normalizedAnn);
+        }
 
         // Keep every annotation consumer on the same object. Differential
         // sync replaces projectAnnotations entries after a successful PUT,

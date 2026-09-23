@@ -1,5 +1,14 @@
 // Extracted from annotation-file-mode-runtime.js (Phase 2h: panel/label ui)
 
+    // Escape user-typed text (species, analyst, site, any field) before it
+    // goes into HTML — annotations are shared, so unescaped text would run
+    // as markup/script for every collaborator who views the project.
+    function catEscHtml(v) {
+      return String(v == null ? '' : v).replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    window.catEscHtml = catEscHtml;
+
     // ── Annotation completeness & style helpers (used by labels, refresh, bulk, etc.) ──
     function isAnnotationComplete(ann) {
       if (!ann) return false;
@@ -21,7 +30,10 @@
     // time they saved. Holding the values here and applying them as the last
     // step of getAnnotationLayerStyle() makes them stick, because every code
     // path that (re)styles an annotation already goes through that function.
-    const ANNOTATION_DISPLAY_DEFAULTS = { opacityPct: 80, lineWidth: 7 };
+    // color: the annotation colour when "Color by" is off — user-changeable,
+    // defaulting to a bright pink-red that stands out on reef imagery (the
+    // old fixed blue blended into water).
+    const ANNOTATION_DISPLAY_DEFAULTS = { opacityPct: 80, lineWidth: 7, color: '#ff2d6f' };
     const ANNOTATION_DISPLAY_KEY = 'cat_annotation_display';
     let annotationDisplay = Object.assign({}, ANNOTATION_DISPLAY_DEFAULTS);
     window.catAnnotationDisplay = annotationDisplay;
@@ -44,6 +56,7 @@
         const w = parseInt(saved.lineWidth, 10);
         if (!isNaN(o) && o >= 0 && o <= 100) annotationDisplay.opacityPct = o;
         if (!isNaN(w) && w >= 1 && w <= 10) annotationDisplay.lineWidth = w;
+        if (typeof saved.color === 'string' && /^#[0-9a-f]{6}$/i.test(saved.color)) annotationDisplay.color = saved.color;
       }
       const oSlider = document.getElementById('annotationsOpacity');
       const oLabel = document.getElementById('annotationsOpacityValue');
@@ -53,6 +66,8 @@
       if (oLabel) oLabel.textContent = annotationDisplay.opacityPct;
       if (wSlider) wSlider.value = annotationDisplay.lineWidth;
       if (wLabel) wLabel.textContent = annotationDisplay.lineWidth;
+      const cInput = document.getElementById('annotationColor');
+      if (cInput) cInput.value = annotationDisplay.color;
     }
 
     function getAnnotationLayerStyle(ann) {
@@ -69,7 +84,7 @@
           // forever — the "complete" style simply never mentioned dashArray,
           // so there was nothing to clear it. Leaflet removes the attribute
           // for a falsy dashArray, which is exactly what's wanted here.
-          ? { color: '#3388ff', weight: 7, opacity: 0.8, fillOpacity: 0.3, dashArray: null }
+          ? { color: annotationDisplay.color, weight: 7, opacity: 0.8, fillOpacity: 0.3, dashArray: null }
           : { color: '#e67e22', weight: 7, opacity: 0.9, fillOpacity: 0.25, dashArray: '6 4' };
 
       // Attribute-driven symbology (annotation-runtime-symbology.js): when a
@@ -158,8 +173,45 @@
       const width = parseInt(value, 10);
       annotationDisplay.lineWidth = isNaN(width) ? ANNOTATION_DISPLAY_DEFAULTS.lineWidth : width;
       restyleAllAnnotations();
+      applyLineWidthToDrawTools();
       saveAnnotationDisplay();
     }
+
+    // Default annotation colour (used when "Color by" is off).
+    function setAnnotationColor(value) {
+      if (!/^#[0-9a-f]{6}$/i.test(value || '')) value = ANNOTATION_DISPLAY_DEFAULTS.color;
+      annotationDisplay.color = value;
+      const cInput = document.getElementById('annotationColor');
+      if (cInput && cInput.value !== value) cInput.value = value;
+      restyleAllAnnotations();
+      saveAnnotationDisplay();
+    }
+    window.setAnnotationColor = setAnnotationColor;
+    window.resetAnnotationColor = function () { setAnnotationColor(ANNOTATION_DISPLAY_DEFAULTS.color); };
+
+    // The draw tools had their own fixed 7px shape options, so a shape being
+    // drawn — and a new annotation until its first restyle — ignored the
+    // width setting ("updates old ones but not new ones"). Keep them in step:
+    // both the control's option objects (bulk draw builds handlers from these)
+    // and the toolbar's already-created handlers.
+    function applyLineWidthToDrawTools() {
+      if (typeof drawControl === 'undefined' || !drawControl) return;
+      const w = annotationDisplay.lineWidth;
+      const drawOpts = drawControl.options && drawControl.options.draw;
+      if (drawOpts) {
+        Object.keys(drawOpts).forEach(k => {
+          if (drawOpts[k] && drawOpts[k].shapeOptions) drawOpts[k].shapeOptions.weight = w;
+        });
+      }
+      const modes = drawControl._toolbars && drawControl._toolbars.draw && drawControl._toolbars.draw._modes;
+      if (modes) {
+        Object.keys(modes).forEach(k => {
+          const opts = modes[k] && modes[k].handler && modes[k].handler.options;
+          if (opts && opts.shapeOptions) opts.shapeOptions.weight = w;
+        });
+      }
+    }
+    window.catApplyLineWidthToDrawTools = applyLineWidthToDrawTools;
     
     // Species label management
     let annotationLabels = new Map(); // Store label markers by annotation ID
@@ -276,7 +328,7 @@
           box-shadow: 0 1px 3px rgba(0,0,0,0.3);
           cursor: pointer;
           text-shadow: 0 1px 2px rgba(0,0,0,0.4);
-        ">${spcode} #${colonyId}</div>`,
+        ">${catEscHtml(spcode)} #${catEscHtml(colonyId)}</div>`,
         iconSize: null,
         iconAnchor: [0, 0]
       });
@@ -418,7 +470,11 @@
 
     function showAnnotationPopup(layer, latlng) {
       if (!layer.annotationData) return;
-      
+      // Shift/Ctrl+click picks the shape for bulk update instead (v2-table.js).
+      if (typeof window.catMapSelectClick === 'function' && window.catMapSelectClick(layer)) return;
+      // Remembered so the toolbar's Edit tool edits just this one.
+      window._catLastClickedLayer = layer;
+
       const data = layer.annotationData;
       
       // Find the annotation index in the annotations array
@@ -442,17 +498,17 @@
       // Species
       const speciesValue = keyFields.map(f => data[f]).find(v => v);
       if (speciesValue) {
-        popupContent += `<div style="margin: 4px 0;"><strong>Species:</strong> ${speciesValue}</div>`;
+        popupContent += `<div style="margin: 4px 0;"><strong>Species:</strong> ${catEscHtml(speciesValue)}</div>`;
       }
       
       // ID - use display index as fallback for consistency
       const idValue = idFields.map(f => data[f]).find(v => v) || data._displayIndex || layer._leaflet_id;
-      popupContent += `<div style="margin: 4px 0;"><strong>ID:</strong> ${idValue}</div>`;
+      popupContent += `<div style="margin: 4px 0;"><strong>ID:</strong> ${catEscHtml(idValue)}</div>`;
       
       // Size
       const sizeValue = sizeFields.map(f => data[f]).find(v => v);
       if (sizeValue) {
-        popupContent += `<div style="margin: 4px 0;"><strong>Size:</strong> ${sizeValue} cm</div>`;
+        popupContent += `<div style="margin: 4px 0;"><strong>Size:</strong> ${catEscHtml(sizeValue)} cm</div>`;
       }
       
       // Add other fields (excluding geometry and already shown fields)
@@ -470,7 +526,8 @@
           const value = data[key];
           // Format the key (remove underscores, capitalize)
           const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-          popupContent += `<div style="margin: 2px 0; font-size: 0.9em;"><strong>${displayKey}:</strong> ${value}</div>`;
+          const shown = (value && typeof value === 'object') ? JSON.stringify(value) : value;
+          popupContent += `<div style="margin: 2px 0; font-size: 0.9em;"><strong>${catEscHtml(displayKey)}:</strong> ${catEscHtml(shown)}</div>`;
         });
         popupContent += '</div>';
       }
@@ -749,7 +806,7 @@
 
     document.addEventListener('DOMContentLoaded', function() {
       restoreAnnotationDisplay();
-      makePanelDraggable('uploadPanel');
+      applyLineWidthToDrawTools(); // draw tools start at the saved width too
       makePanelDraggable('mapLayersPanel');
       makePanelDraggable('statsPanel', 'h4');
     });

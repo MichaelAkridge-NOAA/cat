@@ -26,7 +26,26 @@ function undoPushAdd(annotation, layer) {
 }
 
 function undoPushEdit(index, prevAnnotation, nextAnnotation) {
-  undoStack.push({ type: 'edit', index, prev: { ...prevAnnotation }, next: { ...nextAnnotation } });
+  // Hold the LIVE annotation object (an array index goes stale after any
+  // delete) and deep snapshots (a shallow copy shared the nested .properties
+  // object with the live annotation, so later edits rewrote the "previous"
+  // state and undo reverted nothing).
+  const target = (typeof annotations !== 'undefined' && annotations[index]) || null;
+  undoStack.push({ type: 'edit', index, target, prev: _undoSnapshot(prevAnnotation), next: _undoSnapshot(nextAnnotation) });
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack = [];
+  _updateUndoRedoUI();
+}
+
+// One undo step for an edit that touched many annotations at once (bulk
+// update): `items` are [{target, prev, next}] with prev/next full snapshots.
+function undoPushBatchEdit(items, label) {
+  if (!items || !items.length) return;
+  undoStack.push({
+    type: 'batch-edit',
+    label: label || 'bulk edit',
+    items: items.map(it => ({ target: it.target, prev: _undoSnapshot(it.prev), next: _undoSnapshot(it.next) }))
+  });
   if (undoStack.length > MAX_UNDO) undoStack.shift();
   redoStack = [];
   _updateUndoRedoUI();
@@ -45,6 +64,9 @@ async function undoLastAction() {
       await _undoAdd(op);
     } else if (op.type === 'edit') {
       await _undoEdit(op);
+    } else if (op.type === 'batch-edit') {
+      _applyBatchSnapshots(op, 'prev');
+      showStatus(`↩️ Undo: ${op.label} reverted`, 'success');
     }
     redoStack.push(op);
     if (redoStack.length > MAX_UNDO) redoStack.shift();
@@ -114,21 +136,78 @@ async function _undoAdd(op) {
   showStatus('↩️ Undo: annotation removed', 'success');
 }
 
-async function _undoEdit(op) {
-  const projectAnnotations = getProjectAnnotations();
-  const ann = projectAnnotations[op.index];
-  if (!ann) { showStatus('⚠️ Could not find annotation to undo', 'error'); return; }
+// Deep copy of an annotation's user-visible state: flat fields + geometry,
+// no nested .properties copy and no client/server bookkeeping (_*, ids).
+function _undoSnapshot(annotation) {
+  const snap = {};
+  Object.keys(annotation || {}).forEach(k => {
+    if (k === 'properties' || k === 'id' || k.charAt(0) === '_') return;
+    snap[k] = annotation[k];
+  });
+  return JSON.parse(JSON.stringify(snap));
+}
 
-  const isOracle = typeof isOracleProjectMode === 'function' && isOracleProjectMode();
-  if (isOracle && ann._dbAnnotationId && typeof syncAnnotationToDb === 'function') {
-    const restored = await syncAnnotationToDb({ ...op.prev, _dbAnnotationId: ann._dbAnnotationId });
-    restored._syncStatus = 'synced';
-    applySyncedAnnotation(op.index, restored);
-  } else {
-    updateAnnotationInProject(op.index, { ...op.prev });
+function _resolveEditTarget(op) {
+  const list = (typeof annotations !== 'undefined') ? annotations : getProjectAnnotations();
+  if (op.target && list.includes(op.target)) return op.target;
+  return null;
+}
+
+// Put `snap` back onto the live annotation IN PLACE and queue it for the
+// normal autosave (which sends the current version). Undo used to PUT the
+// old snapshot directly — with its stale version, so it 409'd once the edit
+// had been saved — and to swap in a new object nothing else referenced.
+function _applyUndoSnapshot(target, snap) {
+  _writeSnapshot(target, snap);
+  _refreshUndoneTargets(new Set([target]));
+}
+
+// Batch version: write every snapshot first, then one map pass, one table
+// rebuild and one (debounced) save for the lot.
+function _applyBatchSnapshots(op, which) {
+  const list = (typeof annotations !== 'undefined') ? annotations : getProjectAnnotations();
+  const touched = new Set();
+  op.items.forEach(it => {
+    if (!it.target || !list.includes(it.target)) return; // deleted since
+    _writeSnapshot(it.target, it[which]);
+    touched.add(it.target);
+  });
+  if (!touched.size) throw new Error('None of those annotations exist any more');
+  _refreshUndoneTargets(touched);
+}
+
+function _writeSnapshot(target, snap) {
+  Object.keys(target).forEach(k => {
+    if (k === 'id' || k.charAt(0) === '_') return;
+    delete target[k];
+  });
+  Object.assign(target, JSON.parse(JSON.stringify(snap)));
+  target._syncStatus = 'pending';
+  if (typeof hasUnsavedChanges !== 'undefined') hasUnsavedChanges = true;
+}
+
+function _refreshUndoneTargets(targets) {
+  const drawnItems = getDrawnItems();
+  if (drawnItems) {
+    drawnItems.eachLayer(layer => {
+      if (!targets.has(layer.annotationData)) return;
+      if (typeof getAnnotationLayerStyle === 'function' && layer.setStyle) {
+        layer.setStyle(getAnnotationLayerStyle(layer.annotationData));
+      }
+      if (typeof labelsVisible !== 'undefined' && labelsVisible && typeof addLabelToAnnotation === 'function') {
+        addLabelToAnnotation(layer);
+      }
+    });
   }
-
   updateAnnotationTable();
+  if (typeof saveProject === 'function') saveProject();
+}
+
+async function _undoEdit(op) {
+  const target = _resolveEditTarget(op);
+  // Throw so undoLastAction re-pushes the op and the stacks stay consistent.
+  if (!target) throw new Error('Could not find annotation to undo (it may have been deleted)');
+  _applyUndoSnapshot(target, op.prev);
   showStatus('↩️ Undo: edit reverted', 'success');
 }
 
@@ -145,6 +224,9 @@ async function redoLastAction() {
       await _redoAdd(op);
     } else if (op.type === 'edit') {
       await _redoEdit(op);
+    } else if (op.type === 'batch-edit') {
+      _applyBatchSnapshots(op, 'next');
+      showStatus(`↪️ Redo: ${op.label} reapplied`, 'success');
     }
     undoStack.push(op);
     if (undoStack.length > MAX_UNDO) undoStack.shift();
@@ -204,20 +286,9 @@ async function _redoAdd(op) {
 }
 
 async function _redoEdit(op) {
-  const projectAnnotations = getProjectAnnotations();
-  const ann = projectAnnotations[op.index];
-  if (!ann) { showStatus('⚠️ Could not find annotation to redo', 'error'); return; }
-
-  const isOracle = typeof isOracleProjectMode === 'function' && isOracleProjectMode();
-  if (isOracle && ann._dbAnnotationId && typeof syncAnnotationToDb === 'function') {
-    const restored = await syncAnnotationToDb({ ...op.next, _dbAnnotationId: ann._dbAnnotationId });
-    restored._syncStatus = 'synced';
-    applySyncedAnnotation(op.index, restored);
-  } else {
-    updateAnnotationInProject(op.index, { ...op.next });
-  }
-
-  updateAnnotationTable();
+  const target = _resolveEditTarget(op);
+  if (!target) throw new Error('Could not find annotation to redo (it may have been deleted)');
+  _applyUndoSnapshot(target, op.next);
   showStatus('↪️ Redo: edit reapplied', 'success');
 }
 
@@ -288,5 +359,6 @@ document.addEventListener('keydown', function (e) {
 
 window.undoPushAdd = undoPushAdd;
 window.undoPushEdit = undoPushEdit;
+window.undoPushBatchEdit = undoPushBatchEdit;
 window.undoLastAction = undoLastAction;
 window.redoLastAction = redoLastAction;

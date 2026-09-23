@@ -35,11 +35,24 @@
     remnant: [{ value: '0', label: 'No' }, { value: '-1', label: 'Yes' }],
     ex_bound: [{ value: '0', label: 'No' }, { value: '-1', label: 'Yes' }],
     juv_substrate: ['CCAH', 'CCAR', 'TURFH', 'TURFR', 'EMA', 'PESP', 'LOBO', 'HARD', 'CORAL', 'RUB', 'HALI']
-      .map(function (v) { return { value: v, label: v }; })
+      .map(function (v) { return { value: v, label: v }; }),
+    // Group lists (one list for several numbered fields, see GROUP_OF).
+    // Cause/condition codes are deliberately not guessed: empty until a team
+    // lead adds them, and until then those fields stay free text.
+    rdcause: [],
+    con: [],
+    sev: ['1', '2', '3', '4', '5'].map(function (v) { return { value: v, label: v }; })
+  };
+
+  // Annotation field -> the list that drives it, where they differ.
+  var GROUP_OF = {
+    rdcause1: 'rdcause', rdcause2: 'rdcause', rdcause3: 'rdcause',
+    con_1: 'con', con_2: 'con', con_3: 'con',
+    sev_1: 'sev', sev_2: 'sev', sev_3: 'sev'
   };
 
   // Fields whose <select> starts with a blank "-" option today.
-  var BLANK_FIRST = { transect: true, segment: true, morph_code: true };
+  var BLANK_FIRST = { transect: true, segment: true, morph_code: true, rdcause: true, con: true, sev: true };
 
   var _fields = null; // resolved {field: [{value,label},...]}, or null until loaded
   var _ready = fetch('/api/config/field-options', { credentials: 'same-origin' })
@@ -57,7 +70,33 @@
     });
 
   function getOptions(field) {
+    field = GROUP_OF[field] || field;
     return (_fields && _fields[field]) || FALLBACK[field] || [];
+  }
+
+  // Should this annotation field be a pick-list? True for the fixed
+  // dropdown fields and for a group field once its list has options.
+  // (juv_substrate is a suggest-as-you-type field, not a strict list.)
+  var SELECT_FIELDS = { transect: 1, segment: 1, morph_code: 1, no_colony: 1, juvenile: 1, remnant: 1, ex_bound: 1 };
+  function isSelectField(field) {
+    if (SELECT_FIELDS[field]) return true;
+    return !!GROUP_OF[field] && getOptions(field).length > 0;
+  }
+
+  // Turn a plain <input> for `field` into a <select> of its list, keeping
+  // id/name/class/style and the current value (an off-list value stays,
+  // marked "retired"). Used where the markup is a text/number input today:
+  // the new-annotation form and the edit dialog. No-op when the field has
+  // no list. Returns the element now in the DOM.
+  function upgradeInput(inputEl, field) {
+    if (!inputEl || inputEl.tagName === 'SELECT' || !isSelectField(field)) return inputEl;
+    var sel = document.createElement('select');
+    ['id', 'name', 'className'].forEach(function (k) { if (inputEl[k]) sel[k] = inputEl[k]; });
+    sel.style.cssText = inputEl.style.cssText;
+    sel.innerHTML = buildOptionsHtml(field, inputEl.value);
+    sel.value = inputEl.value || '';
+    inputEl.parentNode.replaceChild(sel, inputEl);
+    return sel;
   }
 
   // Plain array of enabled values (no labels) — for autocomplete-style
@@ -87,7 +126,7 @@
     // markup itself, the browser defaults to the first <option>, silently
     // losing the real selection.
     var html = '';
-    if (BLANK_FIRST[field]) html += '<option value=""' + (cur === '' ? ' selected' : '') + '>-</option>';
+    if (BLANK_FIRST[GROUP_OF[field] || field]) html += '<option value=""' + (cur === '' ? ' selected' : '') + '>-</option>';
     var found = false;
     opts.forEach(function (o) {
       var v = String(o.value);
@@ -117,8 +156,42 @@
     get: getOptions,
     getValues: getValues,
     buildOptionsHtml: buildOptionsHtml,
-    populateSelect: populateSelect
+    populateSelect: populateSelect,
+    isSelectField: isSelectField,
+    upgradeInput: upgradeInput,
+    usedValues: usedValues,
+    attachSuggestions: attachSuggestions
   };
+
+  // Distinct values already saved for `field` in the open project, most
+  // used first — suggestions for free-text columns (analyst, site, ...).
+  function usedValues(field, limit) {
+    var list = (typeof annotations !== 'undefined' && Array.isArray(annotations)) ? annotations : [];
+    var counts = {};
+    list.forEach(function (a) {
+      var v = a && a[field];
+      if (v === undefined || v === null || String(v).trim() === '') return;
+      v = String(v);
+      counts[v] = (counts[v] || 0) + 1;
+    });
+    return Object.keys(counts)
+      .sort(function (x, y) { return counts[y] - counts[x] || (x < y ? -1 : 1); })
+      .slice(0, limit || 50);
+  }
+
+  // Give a text input a native suggestion list (still free text): the
+  // field's configured list if it has one, else values used in the project.
+  var _dlSeq = 0;
+  function attachSuggestions(inputEl, field) {
+    if (!inputEl || inputEl.tagName !== 'INPUT') return;
+    var vals = getOptions(field).length ? getValues(field) : usedValues(field);
+    if (!vals.length) return;
+    var dl = document.createElement('datalist');
+    dl.id = 'catSuggest_' + field + '_' + (++_dlSeq);
+    dl.innerHTML = vals.map(function (v) { return '<option value="' + esc(v) + '">'; }).join('');
+    inputEl.insertAdjacentElement('afterend', dl);
+    inputEl.setAttribute('list', dl.id);
+  }
 
   // Populate the main form's static selects as soon as config loads,
   // independent of which project is open (this config is deployment-wide).
@@ -129,6 +202,11 @@
     ['transect', 'segment', 'morph_code', 'no_colony', 'juvenile', 'remnant', 'ex_bound'].forEach(function (field) {
       var el = document.getElementById(field);
       if (el && el.tagName === 'SELECT') populateSelect(el, field);
+    });
+    // Cause/condition/severity inputs become dropdowns once their team list
+    // has options.
+    Object.keys(GROUP_OF).forEach(function (field) {
+      upgradeInput(document.getElementById(field), field);
     });
   });
 })();

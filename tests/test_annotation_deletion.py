@@ -63,8 +63,10 @@ def test_delete_annotation_soft_deletes_and_logs_activity(monkeypatch):
     assert result == {"success": True, "deleted_annotation_id": 42}
     assert len(executed) == 1
     sql, params = executed[0]
-    assert "SET deleted_at = CURRENT_TIMESTAMP" in sql
-    assert params == {"project_id": 3, "annotation_id": 42}
+    assert "deleted_at = CURRENT_TIMESTAMP" in sql
+    # Delete bumps version so other open tabs see it as a change.
+    assert "version = NVL(version, 1) + 1" in sql
+    assert params == {"project_id": 3, "annotation_id": 42, "last_mod_by_user_id": 7}
     assert activity == [(3, 7, "annotation_deleted", {"annotation_id": 42})]
 
 
