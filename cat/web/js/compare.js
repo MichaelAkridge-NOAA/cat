@@ -32,7 +32,7 @@
   // Only what is on screen is labelled, up to this many.
   const LABEL_CAP = 600;
 
-  const map = L.map('cmpMap', { zoomControl: true, maxZoom: 28 }).setView([0, 0], 2);
+  const map = L.map('cmpMap', { zoomControl: true, maxZoom: 2000 }).setView([0, 0], 2);
   map.createPane('imagery').style.zIndex = 250;
   map.createPane('overlays').style.zIndex = 350;      // transects/segments, under annotations
   const labelPane = map.createPane('cmpLabels');
@@ -476,7 +476,7 @@
       if (crs && crs.is_local_cs && crs.vrt_path) path = crs.vrt_path;
     } catch (e) { /* fall back to the plain COG */ }
     state.imagery = L.tileLayer(`${window.location.origin}/tiles/WebMercatorQuad/{z}/{x}/{y}.png?url=${encodeURIComponent(path)}`, {
-      pane: 'imagery', maxZoom: 28, maxNativeZoom: 24
+      pane: 'imagery', maxZoom: 2000
     }).addTo(map);
     if (!state.layers.size) {
       try {
