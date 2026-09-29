@@ -34,12 +34,25 @@
       <h1>Debug Stats</h1>
       <div class="subtitle">
         Live timings for the raster hot path (tile serving, statistics, the
-        LOCAL_CS CRS check, previews). In-memory only — resets on restart,
-        holds the most recent 300 requests.
+        LOCAL_CS CRS check, previews) and for saves, login checks, config and
+        health. In-memory only — resets on restart, holds the most recent 300
+        raster and 300 other requests.
       </div>
 
       <div class="toolbar">
         <a class="export-btn" href="/api/debug/tile-stats.csv" download>Export CSV</a>
+      </div>
+
+      <h2>Server load right now</h2>
+      <div class="table-scroll">
+        <table id="runtimeTable">
+          <tbody>
+            <tr><td>Requests in flight (peak since start)</td><td class="num" id="rtInFlight">–</td></tr>
+            <tr><td>Worker threads in use / limit</td><td class="num" id="rtThreads">–</td></tr>
+            <tr><td>Database connections busy / open / max</td><td class="num" id="rtPool">–</td></tr>
+            <tr><td>HTTP keep-alive (s)</td><td class="num" id="rtKeepalive">–</td></tr>
+          </tbody>
+        </table>
       </div>
 
       <h2>Summary by endpoint</h2>
@@ -116,7 +129,7 @@
         if (slow) tr.className = 'row-slow';
         tr.innerHTML =
           '<td>' + fmtTime(row.ts) + '</td>' +
-          '<td>' + row.group + '</td>' +
+          '<td>' + row.group + (row.method && row.method !== 'GET' ? ' (' + row.method + ')' : '') + '</td>' +
           '<td>' + (row.cog || '') + '</td>' +
           '<td class="num">' + row.status + '</td>' +
           '<td class="num ms">' + row.ms + '</td>';
@@ -124,8 +137,20 @@
       });
     }
 
+    function setText(id, value) { document.getElementById(id).textContent = value; }
+
+    function renderRuntime(rt) {
+      setText('rtInFlight', rt.requests_in_flight + ' (' + rt.requests_in_flight_peak + ')');
+      var t = rt.threadpool || {};
+      setText('rtThreads', t.error ? t.error : (t.in_use + ' / ' + t.limit));
+      var p = rt.db_pool || {};
+      setText('rtPool', p.pool || p.error || (p.busy + ' / ' + p.opened + ' / ' + p.max));
+      setText('rtKeepalive', rt.keepalive_s);
+    }
+
     function poll() {
       fetch('/api/debug/tile-stats').then(function (r) { return r.json(); }).then(render).catch(function () {});
+      fetch('/api/debug/runtime').then(function (r) { return r.json(); }).then(renderRuntime).catch(function () {});
     }
 
     poll();

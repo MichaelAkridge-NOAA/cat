@@ -188,6 +188,10 @@
     if (geojsonBtn) geojsonBtn.addEventListener('click', () => triggerExport('geojson'));
     const csvBtn = $('exportCsvBtn');
     if (csvBtn) csvBtn.addEventListener('click', () => triggerExport('csv'));
+    const gdbBtn = $('exportGdbBtn');
+    if (gdbBtn) gdbBtn.addEventListener('click', () => triggerExport('gdb'));
+    const gpkgBtn = $('exportGpkgBtn');
+    if (gpkgBtn) gpkgBtn.addEventListener('click', () => triggerExport('gpkg'));
   }
 
   // Row checkboxes are rendered via innerHTML (see renderProjects), so their

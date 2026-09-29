@@ -122,5 +122,18 @@
   }
 
   ['fDays', 'fSite', 'fProject'].forEach(id => $(id).addEventListener('change', load));
+
+  // CSV of the same data as the page, with the same filters. Stored times
+  // are UTC; the browser's time zone is sent so the file shows local times.
+  $('exportBtn').addEventListener('click', () => {
+    const params = new URLSearchParams();
+    params.set('table', $('fExport').value);
+    if ($('fDays').value) params.set('days', $('fDays').value);
+    if ($('fSite').value) params.set('site', $('fSite').value);
+    if ($('fProject').value) params.set('project_id', $('fProject').value);
+    try { params.set('tz', Intl.DateTimeFormat().resolvedOptions().timeZone || ''); } catch (e) { /* offset below */ }
+    params.set('tz_offset_min', String(-new Date().getTimezoneOffset()));
+    window.location.href = `${API}/activity/export?${params}`;
+  });
   loadFilters().then(load);
 })();

@@ -220,6 +220,104 @@
       return normalizeDbAnnotationResponse(result.annotation);
     }
 
+    // Save many annotations in ONE request (autosave). Each round trip to a
+    // Cloud Workstation crosses the internet and Google's gateway, so saving
+    // one annotation per request made a 300-annotation save take minutes.
+    // Returns one entry per input annotation, in order: { synced } on
+    // success, or { error } carrying the same flags syncAnnotationToDb()
+    // throws (isConflict / isGone / isNotFound / status), so autosave handles
+    // both paths identically. Throws only if the whole request failed; an
+    // `unsupported` flag means an older server without this endpoint.
+    const BATCH_SYNC_TIMEOUT_MS = 90000;
+
+    // True only when the route itself doesn't exist (an older server): a 405,
+    // or FastAPI's bare "Not Found". An app 404 such as "Project not found"
+    // must not switch batching off for the rest of the session.
+    async function _isMissingEndpoint(resp) {
+      if (resp.status === 405) return true;
+      if (resp.status !== 404) return false;
+      const body = await resp.clone().json().catch(() => ({}));
+      return body.detail === 'Not Found';
+    }
+    async function syncAnnotationsBatchToDb(annotationList) {
+      const projectId = currentProject.project_id;
+      const items = annotationList.map(annotation => {
+        const annotationId = getDbAnnotationId(annotation);
+        const payload = normalizeAnnotationForDb(annotation);
+        if (annotationId) {
+          const item = {
+            annotation_id: annotationId,
+            feature: payload.feature,
+            properties: payload.properties,
+            created_by: payload.created_by
+          };
+          if (annotation._dbAnnotationVersion != null) item.version = annotation._dbAnnotationVersion;
+          return item;
+        }
+        return {
+          feature: payload.feature,
+          properties: payload.properties,
+          created_by: payload.created_by,
+          client_uuid: payload.client_uuid
+        };
+      });
+
+      // A request that never answers used to leave autosave "in progress"
+      // forever; give up after a while and let the retry logic take over.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), BATCH_SYNC_TIMEOUT_MS);
+      let resp;
+      try {
+        resp = await fetch(`${serverUrl}/api/db/projects/${projectId}/annotations/batch-sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items }),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      if (await _isMissingEndpoint(resp)) {
+        console.warn('[CAT] Server has no /batch-sync; saving one annotation per request.');
+        const err = new Error('Server has no batch save endpoint');
+        err.unsupported = true;
+        throw err;
+      }
+      if (!resp.ok) {
+        const e = await resp.json().catch(() => ({}));
+        const err = new Error((typeof e.detail === 'string' && e.detail) || `Batch save failed (HTTP ${resp.status})`);
+        err.status = resp.status;
+        throw err;
+      }
+      const body = await resp.json();
+      const results = body.results || [];
+      return annotationList.map((annotation, i) => {
+        const r = results[i];
+        const label = getDbAnnotationId(annotation) ? `annotation #${getDbAnnotationId(annotation)}` : 'new annotation';
+        if (!r) {
+          const err = new Error(`No result returned for ${label}`);
+          return { error: err };
+        }
+        if (r.status === 200 && r.annotation) {
+          return { synced: normalizeDbAnnotationResponse(r.annotation) };
+        }
+        const detail = r.detail || {};
+        const message = (typeof detail === 'string' && detail) || detail.message || `Failed to save ${label}`;
+        const err = new Error(message);
+        err.status = r.status;
+        if (r.status === 409 && typeof detail === 'object') {
+          err.isConflict = true;
+          err.serverAnnotation = detail.current_annotation ? normalizeDbAnnotationResponse(detail.current_annotation) : null;
+          err.currentVersion = detail.current_version != null ? detail.current_version : null;
+        } else if (r.status === 410) {
+          err.isGone = true;
+        } else if (r.status === 404) {
+          err.isNotFound = true;
+        }
+        return { error: err };
+      });
+    }
+
     function getProjectAnnotations() {
       return projectAnnotations;
     }
@@ -249,6 +347,71 @@
         throw new Error(e.detail || `Failed to delete annotation #${annotationId}`);
       }
       return resp.json();
+    }
+
+    // Delete many annotations in as few requests as possible (bulk delete,
+    // Clear All). One DELETE per annotation cost a full internet round trip
+    // each on a Cloud Workstation. Returns a Map annotation -> Error (or null
+    // when it is gone from the server, including "was already deleted").
+    // Never throws; annotations without a db id count as deleted.
+    const BATCH_DELETE_SIZE = 200;
+    let _batchDeleteUnsupported = false;
+    async function deleteAnnotationsFromDb(annotationList) {
+      const outcome = new Map();
+      const withIds = [];
+      annotationList.forEach(ann => {
+        if (isOracleProjectMode() && getDbAnnotationId(ann)) withIds.push(ann);
+        else outcome.set(ann, null);
+      });
+
+      const oneByOne = async (list) => {
+        for (const ann of list) {
+          try { await deleteAnnotationFromDb(ann); outcome.set(ann, null); }
+          catch (err) { outcome.set(ann, err); }
+        }
+      };
+
+      for (let start = 0; start < withIds.length; start += BATCH_DELETE_SIZE) {
+        const chunk = withIds.slice(start, start + BATCH_DELETE_SIZE);
+        if (_batchDeleteUnsupported) { await oneByOne(chunk); continue; }
+        let resp;
+        try {
+          resp = await fetch(`${serverUrl}/api/db/projects/${currentProject.project_id}/annotations/batch-delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ annotation_ids: chunk.map(getDbAnnotationId) })
+          });
+        } catch (err) {
+          chunk.forEach(ann => outcome.set(ann, err));
+          continue;
+        }
+        if (await _isMissingEndpoint(resp)) {
+          console.warn('[CAT] Server has no /batch-delete; deleting one annotation per request.');
+          _batchDeleteUnsupported = true;
+          await oneByOne(chunk);
+          continue;
+        }
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          const err = new Error((typeof e.detail === 'string' && e.detail) || `Delete failed (HTTP ${resp.status})`);
+          chunk.forEach(ann => outcome.set(ann, err));
+          continue;
+        }
+        const body = await resp.json();
+        const byId = new Map((body.results || []).map(r => [r.annotation_id, r]));
+        chunk.forEach(ann => {
+          const id = getDbAnnotationId(ann);
+          const r = byId.get(Number(id)) || byId.get(id);
+          // 404/410 = already not live on the server: the outcome we wanted.
+          if (r && (r.status === 200 || r.status === 404 || r.status === 410)) {
+            outcome.set(ann, null);
+          } else {
+            const detail = r && r.detail;
+            outcome.set(ann, new Error((typeof detail === 'string' && detail) || `Failed to delete annotation #${id}`));
+          }
+        });
+      }
+      return outcome;
     }
 
     async function restoreAnnotationInDb(annotationId) {

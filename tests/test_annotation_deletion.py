@@ -32,7 +32,8 @@ def test_table_bulk_delete_confirms_once_and_persists_selected_annotations():
     assert 'id="v2BulkDeleteBtn"' in source
     assert handler.count("catConfirm(") == 1
     assert "for (const item of selected)" in handler
-    assert "await deleteAnnotationFromDb(item.annotation);" in handler
+    # Persisted in one batched request (was one DELETE per annotation).
+    assert "await deleteAnnotationsFromDb(selected.map(item => item.annotation))" in handler
     assert "failed.forEach(item =>" in handler
     assert "annotations.splice(item.index, 1)" in handler
 

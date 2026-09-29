@@ -41,3 +41,15 @@ def test_session_update_refreshes_heartbeat(monkeypatch):
 
     dbp.update_session(3, 11, dbp.SessionUpdate(total_seconds=120), _current_user=USER)
     assert "last_heartbeat = CURRENT_TIMESTAMP" in executed[0]
+
+
+def test_database_times_are_sent_as_utc():
+    """Stored timestamps are UTC without a zone; sent as "08:10" the browser
+    showed them as 8:10 local time (Activity page "last active")."""
+    from datetime import datetime, timezone
+
+    from cat.db.oracle import _read_value
+
+    value = _read_value(datetime(2026, 9, 29, 8, 10, 3))
+    assert value.tzinfo is timezone.utc
+    assert value.isoformat() == "2026-09-29T08:10:03+00:00"

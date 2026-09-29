@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .config import get_database_settings, validate_oracle_settings
@@ -28,6 +29,19 @@ def _connect_kwargs(settings) -> Dict[str, Any]:
     return kwargs
 
 
+def _set_session_utc(connection, _requested_tag=None) -> None:
+    """Pin the session time zone to UTC.
+
+    CURRENT_TIMESTAMP is evaluated in the session time zone, which
+    python-oracledb takes from the client machine. The containers run in
+    UTC, so every stored timestamp is UTC -- and the API labels them as UTC
+    (cat/server.py). Pinning it keeps that true if the app is ever run on a
+    machine with a local time zone.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute("ALTER SESSION SET TIME_ZONE = '+00:00'")
+
+
 def _get_pool(oracledb, settings):
     """Create the pool on first use (and again if the settings changed)."""
     global _pool, _pool_key, _pool_failed
@@ -42,22 +56,41 @@ def _get_pool(oracledb, settings):
         except ValueError:
             max_size = 12
         try:
+            wait_s = max(1, int(os.getenv("CAT_DB_POOL_WAIT_S", "15")))
+        except ValueError:
+            wait_s = 15
+        try:
             _pool = oracledb.create_pool(
                 min=1, max=max_size, increment=1,
                 # A connection that sat idle may have been dropped by a
                 # firewall/DB restart; check before handing it out.
                 ping_interval=60,
+                # When every connection is busy, wait a bounded time for one
+                # instead of forever (the default): a stuck request then fails
+                # with a clear error and a log line rather than silently
+                # holding a worker thread that saves and page loads need.
+                getmode=oracledb.POOL_GETMODE_TIMEDWAIT,
+                wait_timeout=wait_s * 1000,
+                session_callback=_set_session_utc,
                 **_connect_kwargs(settings),
             )
             _pool_key = key
             _pool_failed = False
-            logger.info("Oracle connection pool ready (max %d)", max_size)
+            logger.info("Oracle connection pool ready (max %d, wait %ds)", max_size, wait_s)
         except Exception as exc:  # fall back to one-off connections
             if not _pool_failed:
                 logger.warning("Oracle connection pool unavailable, using direct connections: %s", exc)
             _pool_failed = True
             _pool = None
         return _pool
+
+
+def pool_stats() -> Dict[str, Any]:
+    """Connection-pool gauges for the admin Debug page (/api/debug/runtime)."""
+    pool = _pool
+    if pool is None:
+        return {"pool": "not created" if not _pool_failed else "unavailable (direct connections)"}
+    return {"busy": pool.busy, "opened": pool.opened, "max": pool.max}
 
 
 @contextmanager
@@ -74,7 +107,16 @@ def get_connection():
     if pool is not None:
         # Returned to the pool on exit; anything not committed is rolled
         # back on release, exactly as close() did before.
-        connection = pool.acquire()
+        try:
+            connection = pool.acquire()
+        except Exception as exc:
+            # Pool exhausted (timed out waiting) or the database is down --
+            # the exception says which; the counts show how busy the pool was.
+            logger.warning(
+                "Could not get a database connection: %s: %s (busy=%s opened=%s max=%s)",
+                type(exc).__name__, exc, pool.busy, pool.opened, pool.max,
+            )
+            raise
         try:
             yield connection
         finally:
@@ -89,6 +131,7 @@ def get_connection():
 
     connection = oracledb.connect(**_connect_kwargs(settings))
     try:
+        _set_session_utc(connection)
         yield connection
     finally:
         connection.close()
@@ -168,6 +211,10 @@ def _read_value(v: Any) -> Any:
         return v
     if isinstance(v, oracledb.LOB):
         return v.read()
+    if isinstance(v, datetime) and v.tzinfo is None:
+        # Stored in UTC without a zone (session pinned to UTC). Say so, or
+        # the API sends "08:10" and the browser shows it as 8:10 local time.
+        return v.replace(tzinfo=timezone.utc)
     return v
 
 

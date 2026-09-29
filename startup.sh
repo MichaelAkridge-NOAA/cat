@@ -129,9 +129,18 @@ start_app() {
     echo ""
     
     # Start uvicorn - use cat.server:app as the entry point
+    #
+    # --timeout-keep-alive: how long an idle connection stays open. uvicorn's
+    # default is 5s, but the Cloud Workstations gateway (like any Google
+    # front end) keeps its connection to the app open for up to ~10 minutes
+    # and reuses it. If the app closes an idle connection just as the gateway
+    # sends a save on it, that save fails ("saved but showed an error").
+    # Keeping ours open longer than the proxy's means the proxy always closes
+    # first. Google's guidance for backends behind its proxies is > 600s.
     exec python -m uvicorn cat.server:app \
         --host "${CAT_HOST:-0.0.0.0}" \
         --port "${CAT_PORT:-8000}" \
+        --timeout-keep-alive "${CAT_KEEPALIVE_S:-650}" \
         --proxy-headers \
         --forwarded-allow-ips='*'
 }

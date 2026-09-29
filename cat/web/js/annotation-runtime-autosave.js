@@ -145,6 +145,52 @@
       });
     }
 
+    // Annotations per save request. One request per annotation cost a full
+    // internet round trip each on a Cloud Workstation; batching makes a
+    // 300-annotation save a handful of requests.
+    const AUTOSAVE_BATCH_SIZE = 50;
+    // ...and also split by size: 50 detailed polygons (e.g. SAM3 masks) can
+    // be several MB, more than a proxy may accept in one request.
+    const AUTOSAVE_BATCH_MAX_CHARS = 2000000;
+    let _batchSyncUnsupported = false;
+
+    function _planAutoSaveBatches(list) {
+      const batches = [];
+      let current = [];
+      let chars = 0;
+      list.forEach(ann => {
+        const size = annotationPayloadFingerprint(ann).length;
+        if (current.length && (current.length >= AUTOSAVE_BATCH_SIZE || chars + size > AUTOSAVE_BATCH_MAX_CHARS)) {
+          batches.push(current);
+          current = [];
+          chars = 0;
+        }
+        current.push(ann);
+        chars += size;
+      });
+      if (current.length) batches.push(current);
+      return batches;
+    }
+
+    // One outcome per annotation ({ synced } or { error }), in order.
+    async function _sendAutoSaveBatch(chunk) {
+      if (!_batchSyncUnsupported && typeof syncAnnotationsBatchToDb === 'function') {
+        try {
+          return await syncAnnotationsBatchToDb(chunk);
+        } catch (err) {
+          if (!err.unsupported) throw err;
+          // Older server without /batch-sync: save one at a time as before.
+          _batchSyncUnsupported = true;
+        }
+      }
+      const outcomes = [];
+      for (const ann of chunk) {
+        try { outcomes.push({ synced: await syncAnnotationToDb(ann) }); }
+        catch (error) { outcomes.push({ error }); }
+      }
+      return outcomes;
+    }
+
     async function runAutoSave() {
       if (!isOracleProjectMode()) return;
       if (window.catReadOnly) return; // view-only: the server would 403 every write
@@ -178,81 +224,93 @@
         const errors = [];
         const rejected = [];
 
-        for (const ann of toSync) {
-          // Deleted locally before its turn came up — nothing to save.
-          if (!_isStillInProject(ann)) continue;
-          const wasNew = !getDbAnnotationId(ann);
-          const sentFingerprint = annotationPayloadFingerprint(ann);
-          try {
-            const synced = await syncAnnotationToDb(ann);
-            mergeServerIdentity(ann, synced);
-            _recordSyncedByMe(synced._dbAnnotationId, synced._dbAnnotationVersion);
-            ann._syncedFingerprint = sentFingerprint;
-            // Only "synced" if nothing changed while the request was in
-            // flight — otherwise the newer edit stays pending for next run.
-            ann._syncStatus = (annotationPayloadFingerprint(ann) === sentFingerprint) ? 'synced' : 'pending';
+        for (const planned of _planAutoSaveBatches(toSync)) {
+          // Deleted locally before its batch was sent — nothing to save.
+          const chunk = planned.filter(_isStillInProject);
+          if (chunk.length === 0) continue;
+          const sent = chunk.map(ann => ({
+            wasNew: !getDbAnnotationId(ann),
+            sentFingerprint: annotationPayloadFingerprint(ann)
+          }));
+          // Throws only if the whole request failed (network, timeout, 5xx):
+          // the retry logic below then re-sends whatever is still unsaved.
+          const outcomes = await _sendAutoSaveBatch(chunk);
+          for (let i = 0; i < chunk.length; i++) {
+            const ann = chunk[i];
+            const { wasNew, sentFingerprint } = sent[i];
+            try {
+              const outcome = outcomes[i];
+              if (outcome.error) throw outcome.error;
+              const synced = outcome.synced;
+              mergeServerIdentity(ann, synced);
+              _recordSyncedByMe(synced._dbAnnotationId, synced._dbAnnotationVersion);
+              ann._syncedFingerprint = sentFingerprint;
+              // Only "synced" if nothing changed while the request was in
+              // flight — otherwise the newer edit stays pending for next run.
+              ann._syncStatus = (annotationPayloadFingerprint(ann) === sentFingerprint) ? 'synced' : 'pending';
 
-            // Deleted while its create was in flight: the row now exists
-            // server-side, so delete it there too or it comes back on refresh.
-            if (wasNew && !_isStillInProject(ann)) {
-              try { await deleteAnnotationFromDb(ann); }
-              catch (delErr) { console.warn('Could not delete annotation removed during save:', delErr); }
-            }
-          } catch (err) {
-            if (err.isGone) {
-              // Someone deleted it. Never re-create it — drop it here too.
-              ann._syncStatus = 'gone';
-              _dropAnnotationLocally(ann);
-              removedByOthers++;
-              continue;
-            }
-            // Task 7 round 2 fix (Finding 2): recover from 409/404 instead of
-            // re-sending the same stale request forever on every retry.
-            if (err.isConflict) {
-              // Someone else saved this annotation since we loaded it. Merge
-              // instead of overwriting: start from the server's current
-              // copy and re-apply only the fields THIS tab changed since its
-              // last save. (It used to re-send the whole record, silently
-              // undoing the other person's changes to any other field.)
-              const merged = err.serverAnnotation ? _mergeConflict(ann, err.serverAnnotation) : false;
-              if (err.serverAnnotation && err.serverAnnotation._dbAnnotationVersion != null) {
-                ann._dbAnnotationVersion = err.serverAnnotation._dbAnnotationVersion;
-              } else if (err.currentVersion != null) {
-                ann._dbAnnotationVersion = err.currentVersion;
+              // Deleted while its create was in flight: the row now exists
+              // server-side, so delete it there too or it comes back on refresh.
+              if (wasNew && !_isStillInProject(ann)) {
+                try { await deleteAnnotationFromDb(ann); }
+                catch (delErr) { console.warn('Could not delete annotation removed during save:', delErr); }
               }
-              if (typeof showStatus === 'function') {
-                var _now = Date.now();
-                if (!window._catLastConflictToast || _now - window._catLastConflictToast > 10000) {
-                  window._catLastConflictToast = _now;
-                  showStatus(merged
-                    ? 'An annotation was also changed by someone else — merged your edits with theirs.'
-                    : 'An annotation was also changed by someone else — your version will be saved over it.', 'info');
+            } catch (err) {
+              if (err.isGone) {
+                // Someone deleted it. Never re-create it — drop it here too.
+                ann._syncStatus = 'gone';
+                _dropAnnotationLocally(ann);
+                removedByOthers++;
+                continue;
+              }
+              // Task 7 round 2 fix (Finding 2): recover from 409/404 instead of
+              // re-sending the same stale request forever on every retry.
+              if (err.isConflict) {
+                // Someone else saved this annotation since we loaded it. Merge
+                // instead of overwriting: start from the server's current
+                // copy and re-apply only the fields THIS tab changed since its
+                // last save. (It used to re-send the whole record, silently
+                // undoing the other person's changes to any other field.)
+                const merged = err.serverAnnotation ? _mergeConflict(ann, err.serverAnnotation) : false;
+                if (err.serverAnnotation && err.serverAnnotation._dbAnnotationVersion != null) {
+                  ann._dbAnnotationVersion = err.serverAnnotation._dbAnnotationVersion;
+                } else if (err.currentVersion != null) {
+                  ann._dbAnnotationVersion = err.currentVersion;
                 }
+                if (typeof showStatus === 'function') {
+                  var _now = Date.now();
+                  if (!window._catLastConflictToast || _now - window._catLastConflictToast > 10000) {
+                    window._catLastConflictToast = _now;
+                    showStatus(merged
+                      ? 'An annotation was also changed by someone else — merged your edits with theirs.'
+                      : 'An annotation was also changed by someone else — your version will be saved over it.', 'info');
+                  }
+                }
+                ann._syncStatus = 'pending';
+              } else if (err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429) {
+                // Permanent refusal (permissions, validation…). Retrying the
+                // same content forever used to end in a false "database is
+                // unreachable" banner. Hold it until the user changes it.
+                ann._syncStatus = 'rejected';
+                ann._rejectedFingerprint = sentFingerprint;
+                ann._rejectedReason = err.message;
+                rejected.push(err);
+                continue;
+              } else if (err.isNotFound) {
+                // Row is gone for good (hard-deleted), not soft-deleted by a
+                // user (that is 410 above) — re-create it so this user's data
+                // isn't lost. getDbAnnotationId() falls back through
+                // annotation_id/id too, so all of them must be cleared.
+                delete ann._dbAnnotationId;
+                delete ann._dbAnnotationVersion;
+                delete ann.annotation_id;
+                delete ann.id;
+                ann._syncStatus = 'pending';
+              } else {
+                ann._syncStatus = 'error';
               }
-              ann._syncStatus = 'pending';
-            } else if (err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429) {
-              // Permanent refusal (permissions, validation…). Retrying the
-              // same content forever used to end in a false "database is
-              // unreachable" banner. Hold it until the user changes it.
-              ann._syncStatus = 'rejected';
-              ann._rejectedFingerprint = sentFingerprint;
-              ann._rejectedReason = err.message;
-              rejected.push(err);
-              continue;
-            } else if (err.isNotFound) {
-              // Row is gone for good (hard-deleted), not soft-deleted by a
-              // user (that is 410 above) — re-create it so this user's data
-              // isn't lost. getDbAnnotationId() falls back through
-              // annotation_id/id too, so all of them must be cleared.
-              delete ann._dbAnnotationId;
-              delete ann._dbAnnotationVersion;
-              delete ann.annotation_id;
-              delete ann.id;
-              ann._syncStatus = 'pending';
-            } else {
-              ann._syncStatus = 'error';
+              errors.push(err);
             }
-            errors.push(err);
           }
         }
 
@@ -268,7 +326,9 @@
         }
 
         if (errors.length > 0) {
-          throw new Error(`${errors.length} of ${toSync.length} annotation(s) failed to sync`);
+          const syncErr = new Error(`${errors.length} of ${toSync.length} annotation(s) failed to sync`);
+          syncErr.firstError = errors[0];
+          throw syncErr;
         }
 
         lastSaveTime = Date.now();
@@ -306,12 +366,21 @@
         autoSaveRerunRequested = false; // the retry below covers it
         // Exponential backoff retry logic (Fix 1c)
         autoSaveRetryCount++;
-        console.warn(`Auto-save failed (attempt ${autoSaveRetryCount}):`, err);
+        const saveErrDetail = _describeError(err.firstError || err);
+        console.warn(`Auto-save failed (attempt ${autoSaveRetryCount}): ${saveErrDetail}`, err);
+        // Over a Cloud Workstation connection a single request now and then
+        // is slow or dropped even though the next one works. The first retry
+        // comes quickly and quietly; only repeated failures turn the badge
+        // red, and the banner waits until every retry has failed.
         const maxRetries = 3;
-        const retryDelays = [5000, 15000, 30000];
+        const retryDelays = [3000, 10000, 30000];
         if (autoSaveRetryCount <= maxRetries) {
           const delay = retryDelays[autoSaveRetryCount - 1];
-          setAutoSaveBadge('error', `❌ Save failed — retrying in ${delay / 1000}s…`);
+          if (autoSaveRetryCount === 1) {
+            setAutoSaveBadge('pending', '🔄 Connection slow — retrying save…');
+          } else {
+            setAutoSaveBadge('error', `❌ Save failed — retrying in ${delay / 1000}s…`);
+          }
           if (autoSaveRetryTimeoutId) clearTimeout(autoSaveRetryTimeoutId);
           autoSaveRetryTimeoutId = setTimeout(() => { runAutoSave(); }, delay);
         } else {
@@ -328,10 +397,21 @@
           // Nothing is persisted locally — unsaved work exists only in this
           // tab — so say that, and point at the export.
           _checkConnectivity().then(online => {
-            const label = online
-              ? '⚠️ Save failed — the database is unreachable. Your changes are NOT saved and exist only in this tab. Export a backup and do not close the page.'
-              : '📡 No network connection. Your changes are NOT saved and exist only in this tab. Export a backup and do not close the page.';
-            _enterDegradedMode(label);
+            const state = _lastConnectivity.state;
+            let label;
+            if (online) {
+              label = '⚠️ Save failed — the database is unreachable. Your changes are NOT saved and exist only in this tab. Export a backup and do not close the page.';
+            } else if (state === 'gateway-auth') {
+              label = '🔑 Your workstation login session expired. Your changes are NOT saved and exist only in this tab. Export a backup, then reload the page to sign in again.';
+            } else if (state === 'http-error') {
+              label = '⚠️ Save failed — the server returned an error. Your changes are NOT saved and exist only in this tab. Export a backup and do not close the page.';
+            } else {
+              label = '📡 No network connection. Your changes are NOT saved and exist only in this tab. Export a backup and do not close the page.';
+            }
+            // Raw cause (e.g. "TypeError: Failed to fetch", "HTTP 502") so a
+            // screenshot of the banner is enough to tell the failures apart.
+            const detail = [saveErrDetail, _lastConnectivity.detail].filter(Boolean).join(' / ');
+            _enterDegradedMode(detail ? `${label} [${detail}]` : label);
           });
         }
       } finally {
@@ -651,13 +731,54 @@
     let degradedMode = false;
     let degradedRecoveryIntervalId = null;
 
+    // What the last connectivity check saw, for the banner and the console:
+    // 'online' | 'http-error' (server/proxy answered with an error status) |
+    // 'gateway-auth' (a proxy in front of CAT, e.g. the Cloud Workstations
+    // gateway, redirected /health to its login page — its session expired) |
+    // 'offline' (the request never got an answer).
+    let _lastConnectivity = { state: 'online', detail: '' };
+
     async function _checkConnectivity() {
       try {
-        const resp = await fetch(`${window.location.origin}/health`, { cache: 'no-store' });
-        return resp.ok;
-      } catch {
-        return false;
+        // CAT's /health never redirects, so an opaque redirect here can only
+        // come from a proxy in front of it. Following it (the default) would
+        // hit a cross-origin login page and throw, which looked like "no
+        // network" and was only fixable by reloading.
+        const resp = await fetch(`${window.location.origin}/health`, {
+          cache: 'no-store', redirect: 'manual', credentials: 'same-origin'
+        });
+        if (resp.type === 'opaqueredirect') {
+          // Follow it once: a same-origin cookie refresh ends back at
+          // /health and counts as online; a cross-origin login page throws.
+          try {
+            const followed = await fetch(`${window.location.origin}/health`, {
+              cache: 'no-store', credentials: 'same-origin'
+            });
+            _lastConnectivity = followed.ok
+              ? { state: 'online', detail: 'manual:redirect / follow:ok' }
+              : { state: 'gateway-auth', detail: `manual:redirect / follow:HTTP ${followed.status}` };
+          } catch (followErr) {
+            _lastConnectivity = { state: 'gateway-auth', detail: `manual:redirect / follow:${followErr && followErr.name}` };
+          }
+          if (_lastConnectivity.state === 'online') console.info('[CAT] connectivity check:', _lastConnectivity.detail);
+        } else if (!resp.ok) {
+          _lastConnectivity = { state: 'http-error', detail: `HTTP ${resp.status}` };
+        } else {
+          _lastConnectivity = { state: 'online', detail: '' };
+        }
+      } catch (err) {
+        _lastConnectivity = { state: 'offline', detail: `${err && err.name}: ${err && err.message}` };
       }
+      if (_lastConnectivity.state !== 'online') {
+        console.warn('[CAT] connectivity check:', _lastConnectivity.state, _lastConnectivity.detail);
+      }
+      return _lastConnectivity.state === 'online';
+    }
+
+    function _describeError(err) {
+      if (!err) return '';
+      if (err.status) return `HTTP ${err.status}`;
+      return `${err.name || 'Error'}: ${err.message || ''}`;
     }
 
     function _enterDegradedMode(label) {

@@ -809,13 +809,7 @@
       }
 
       // Auto-start / resume timer on first annotation draw
-      if (!timerState.isRunning) {
-        console.log('🎬 First annotation drawn — starting timer');
-        startTimer();
-      } else if (timerState.isPaused) {
-        console.log('▶️ Annotation drawn — resuming timer');
-        startTimer();
-      }
+      startTimerForAnnotating();
 
       // Show the Discard button for easy cancel
       const discardBtn = document.getElementById('discardAnnotationBtn');

@@ -17,7 +17,7 @@
     };
     const AUTOSAVE_DEFAULTS = {
       enabled: true,
-      intervalMs: 30000,
+      intervalMs: 60000,
       showBadge: true,
       maxRetries: 3,
     };
@@ -194,7 +194,7 @@
       const checkedRadio = document.querySelector('input[name="asInterval"]:checked');
       const s = {
         enabled: document.getElementById('asEnabled').checked,
-        intervalMs: checkedRadio ? parseInt(checkedRadio.value, 10) : 30000,
+        intervalMs: checkedRadio ? parseInt(checkedRadio.value, 10) : 60000,
         showBadge: document.getElementById('asShowBadge').checked,
         maxRetries: parseInt(document.getElementById('asMaxRetries').value, 10),
       };
@@ -222,7 +222,7 @@
       }
       const running = typeof autoSaveIntervalId !== 'undefined' && autoSaveIntervalId !== null;
       if (running) {
-        const intervalSec = (typeof AUTO_SAVE_INTERVAL_MS !== 'undefined' ? AUTO_SAVE_INTERVAL_MS : 30000) / 1000;
+        const intervalSec = (typeof AUTO_SAVE_INTERVAL_MS !== 'undefined' ? AUTO_SAVE_INTERVAL_MS : 60000) / 1000;
         el.innerHTML = `✅ Auto-save is <strong>active</strong> — saving every ${intervalSec}s`;
       } else {
         el.innerHTML = '⏹️ Auto-save is <strong>stopped</strong>';

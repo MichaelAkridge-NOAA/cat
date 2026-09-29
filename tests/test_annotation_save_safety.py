@@ -123,6 +123,102 @@ def test_update_refuses_to_overwrite_unreadable_stored_properties(editor, monkey
     assert exc.value.status_code == 422
 
 
+# ------------------------------------------------------------- batch-sync
+
+def _batch(*items):
+    return dbp.AnnotationBatchSync(items=[dbp.AnnotationSyncItem(**i) for i in items])
+
+
+def test_batch_sync_answers_each_item_and_one_failure_does_not_stop_the_rest(editor, monkeypatch):
+    def fake_update(project_id, annotation_id, payload, current_user):
+        if annotation_id == 2:
+            raise HTTPException(status_code=410, detail={"message": "Annotation was deleted", "annotation_id": 2})
+        return {"success": True, "annotation": {"annotation_id": annotation_id, "version": payload.version + 1}}
+
+    def fake_create(project_id, payload, current_user):
+        assert payload.client_uuid == "u-5"
+        return {"success": True, "annotation": {"annotation_id": 99, "version": 1}}
+
+    monkeypatch.setattr(dbp, "update_annotation", fake_update)
+    monkeypatch.setattr(dbp, "create_annotation", fake_create)
+
+    out = dbp.batch_sync_annotations(3, _batch(
+        {"annotation_id": 1, "properties": {"spcode": "A"}, "version": 4},
+        {"annotation_id": 2, "properties": {"spcode": "B"}, "version": 4},
+        {"feature": {"type": "Feature", "geometry": None}, "properties": {"spcode": "C"}, "client_uuid": "u-5"},
+    ), current_user=EDITOR)
+
+    assert [r["status"] for r in out["results"]] == [200, 410, 200]
+    assert out["results"][0]["annotation"]["version"] == 5
+    assert out["results"][1]["detail"]["annotation_id"] == 2
+    assert out["results"][2]["annotation"]["annotation_id"] == 99
+
+
+def test_batch_sync_goes_through_the_real_update_checks(editor, monkeypatch):
+    # The soft-delete / version / empty-properties guards live in
+    # update_annotation; the batch must hit them, not bypass them.
+    monkeypatch.setattr(dbp, "fetch_one", lambda sql, params=None: _live_row())
+    monkeypatch.setattr(dbp, "execute_rowcount", lambda sql, params=None: pytest.fail("must not write"))
+
+    out = dbp.batch_sync_annotations(3, _batch({"annotation_id": 42, "properties": {}, "version": 5}), current_user=EDITOR)
+    assert out["results"][0]["status"] == 422
+
+
+def test_batch_sync_reports_a_replayed_save_as_saved(editor, monkeypatch):
+    # The first attempt was stored but its answer was lost; the retry sends
+    # the same content with the old version. That is not a conflict.
+    stored = _live_row(version=6, properties_json='{"spcode": "PMEA"}')
+    monkeypatch.setattr(dbp, "fetch_one", lambda sql, params=None: stored)
+    monkeypatch.setattr(dbp, "execute_rowcount", lambda sql, params=None: 0)
+
+    out = dbp.batch_sync_annotations(3, _batch({
+        "annotation_id": 42,
+        "feature": {"type": "Feature", "geometry": None, "properties": {}},
+        "properties": {"spcode": "PMEA"},
+        "version": 5,
+    }), current_user=EDITOR)
+
+    result = out["results"][0]
+    assert result["status"] == 200 and result.get("replayed") is True
+    assert result["annotation"]["version"] == 6
+
+
+def test_batch_sync_real_conflict_is_still_409(editor, monkeypatch):
+    stored = _live_row(version=6, properties_json='{"spcode": "OTHER"}')
+    monkeypatch.setattr(dbp, "fetch_one", lambda sql, params=None: stored)
+    monkeypatch.setattr(dbp, "execute_rowcount", lambda sql, params=None: 0)
+
+    out = dbp.batch_sync_annotations(3, _batch({"annotation_id": 42, "properties": {"spcode": "PMEA"}, "version": 5}),
+                                     current_user=EDITOR)
+
+    result = out["results"][0]
+    assert result["status"] == 409
+    assert result["detail"]["current_version"] == 6
+
+
+def test_batch_delete_soft_deletes_each_id_and_reports_per_id(editor, monkeypatch):
+    calls = []
+
+    def fake_delete(project_id, annotation_id, current_user):
+        calls.append(annotation_id)
+        if annotation_id == 8:
+            raise HTTPException(status_code=404, detail="Annotation not found")
+        return {"success": True, "deleted_annotation_id": annotation_id}
+
+    monkeypatch.setattr(dbp, "delete_annotation", fake_delete)
+    out = dbp.batch_delete_annotations(3, dbp.AnnotationBatchDelete(annotation_ids=[7, 8, 9]), current_user=EDITOR)
+
+    assert calls == [7, 8, 9]  # every id goes through the soft-delete route
+    assert [(r["annotation_id"], r["status"]) for r in out["results"]] == [(7, 200), (8, 404), (9, 200)]
+
+
+def test_batch_sync_is_capped(editor):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        _batch(*[{"annotation_id": i, "properties": {"a": 1}} for i in range(dbp.ANNOTATION_BATCH_MAX + 1)])
+
+
 # ------------------------------------------------------------------ geojson
 
 def test_geojson_server_fields_win_over_stored_properties(editor, monkeypatch):
@@ -377,3 +473,16 @@ def test_deleting_a_project_with_annotations_needs_its_name(monkeypatch, editor)
     assert not deleted
     out = dbp.delete_project(5, confirm_name=" Reef A ", current_user=EDITOR)
     assert out["deleted_annotation_count"] == 3 and deleted
+
+
+def test_every_drawing_path_starts_the_timer():
+    """Bulk draw and the AI box handle draw:created themselves and return
+    before the normal handler's timer start, so each must start it too."""
+    assert "function startTimerForAnnotating()" in _read("cat/web/js/annotation-runtime-core.js")
+    for rel in (
+        "cat/web/js/annotation-runtime-shell-init.js",
+        "cat/web/js/v2-bulk.js",
+        "cat/web/js/annotation-runtime-sam3.js",
+    ):
+        assert "startTimerForAnnotating()" in _read(rel), rel
+    assert "incrementAnnotationCount()" in _read("cat/web/js/v2-bulk.js")

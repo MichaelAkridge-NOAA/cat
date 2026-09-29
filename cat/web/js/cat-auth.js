@@ -28,14 +28,18 @@
   function fetchCurrentUser(force) {
     if (force) _userPromise = null;
     if (!_userPromise) {
+      // Ask for the user at the same time as the config instead of after it:
+      // on a Cloud Workstation each request is a full internet round trip,
+      // and waiting for one before sending the other doubled the header's
+      // load time. The answer is only used when login is enabled.
+      var mePromise = fetch('/api/auth/me', { credentials: 'same-origin' }).then(function (r) {
+        if (!r.ok) return null;
+        return r.json();
+      }).then(function (data) {
+        return data && data.user ? data : null;
+      }).catch(function () { return null; });
       _userPromise = getConfig().then(function (config) {
-        if (!config.auth_enabled) return null;
-        return fetch('/api/auth/me', { credentials: 'same-origin' }).then(function (r) {
-          if (!r.ok) return null;
-          return r.json();
-        }).then(function (data) {
-          return data && data.user ? data : null;
-        }).catch(function () { return null; });
+        return config.auth_enabled ? mePromise : null;
       });
     }
     return _userPromise;

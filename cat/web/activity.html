@@ -15,6 +15,8 @@
       border: 1px solid var(--cat-border); border-radius: var(--cat-radius); margin-bottom: 18px; }
     .filters label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--cat-ink-soft); }
     .filters select { padding: 6px 8px; border: 1px solid var(--cat-border); border-radius: var(--cat-radius); font-size: 13px; min-width: 170px; }
+    .filters .export { display: flex; align-items: flex-end; gap: 8px; margin-left: auto; }
+    .filters .export .cat-btn { padding: 6px 12px; font-size: 13px; }
     .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
     .tile { background: var(--cat-surface); border: 1px solid var(--cat-border); border-radius: var(--cat-radius); padding: 12px 14px; }
     .tile .k { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--cat-ink-soft); }
@@ -63,6 +65,19 @@
       <label>Project
         <select id="fProject"><option value="">All projects</option></select>
       </label>
+      <div class="export">
+        <label>Export CSV
+          <select id="fExport">
+            <option value="projects">Total time per project</option>
+            <option value="annotator_projects">Time per annotator per project</option>
+            <option value="annotators">Annotators (all stats)</option>
+            <option value="sessions">Every session</option>
+            <option value="daily">Per day (annotator × project)</option>
+            <option value="all">All of the above (zip)</option>
+          </select>
+        </label>
+        <button type="button" class="cat-btn cat-btn--outline" id="exportBtn" title="Uses the Period / Site / Project filters. Times are in your time zone.">Download</button>
+      </div>
     </div>
 
     <div id="err"></div>

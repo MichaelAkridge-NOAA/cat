@@ -34,19 +34,29 @@
     if (title) title.textContent = 'Project Report';
   }
 
+  function pctText(share) {
+    if (!isFinite(share) || share <= 0) return '0%';
+    if (share < 0.01) return '<1%';
+    return (share * 100).toFixed(share < 0.1 ? 1 : 0) + '%';
+  }
+
   // Build a titled group of horizontal bars for one breakdown.
-  //   items: array of { label, count }
-  function renderBarGroup(title, items) {
-    if (!items.length) return '';
-    const max = items.reduce((m, it) => Math.max(m, it.count), 0) || 1;
+  //   items: array of { label, count, kind? ('missing' | 'other'), title? }
+  //   total: what 100% means (bars used to be scaled to the LARGEST
+  //          category, so the top one always filled the track whether it
+  //          was 5% or 95% of the annotations).
+  function renderBarGroup(title, items, total, note, fmt) {
+    if (!items.length || !total) return '';
+    const format = fmt || function (v) { return v.toLocaleString(); };
     const rows = items
       .map(function (it) {
-        const pct = (it.count / max) * 100;
+        const share = it.count / total;
+        const tip = (it.title || it.label) + ': ' + format(it.count) + ' (' + pctText(share) + ')';
         return (
-          '<div class="bar-row">' +
-          '<span class="bar-label" title="' + escapeHtml(it.label) + '">' + escapeHtml(it.label) + '</span>' +
-          '<span class="bar-track"><span class="bar-fill" style="width:' + pct.toFixed(1) + '%;"></span></span>' +
-          '<span class="bar-count">' + it.count + '</span>' +
+          '<div class="bar-row' + (it.kind ? ' bar-row--' + it.kind : '') + '" title="' + escapeHtml(tip) + '">' +
+          '<span class="bar-label">' + escapeHtml(it.label) + '</span>' +
+          '<span class="bar-track"><span class="bar-fill" style="width:' + Math.min(100, share * 100).toFixed(2) + '%;"></span></span>' +
+          '<span class="bar-count">' + escapeHtml(format(it.count)) + ' <span class="bar-pct">· ' + pctText(share) + '</span></span>' +
           '</div>'
         );
       })
@@ -54,31 +64,71 @@
     return (
       '<div class="chart-group">' +
       '<h3>' + escapeHtml(title) + '</h3>' +
+      (note ? '<p class="chart-note">' + escapeHtml(note) + '</p>' : '') +
       rows +
       '</div>'
     );
   }
 
-  // Build a breakdown table (label + exact count).
-  function renderTable(caption, headLabel, items) {
-    if (!items.length) return '';
-    const rows = items
-      .map(function (it) {
-        return (
-          '<tr><td>' + escapeHtml(it.label) + '</td>' +
-          '<td class="count-cell">' + it.count + '</td></tr>'
-        );
-      })
-      .join('');
+  // Long category lists: the top N as bars, the rest folded into "Other".
+  function topWithOther(items, n, otherNoun) {
+    if (items.length <= n + 1) return items;
+    const rest = items.slice(n);
+    return items.slice(0, n).concat([{
+      label: 'Other (' + rest.length + ' ' + otherNoun + ')',
+      count: rest.reduce(function (s, it) { return s + it.count; }, 0),
+      kind: 'other',
+      title: rest.map(function (it) { return it.label; }).join(', '),
+    }]);
+  }
+
+  function sumCounts(items) {
+    return (items || []).reduce(function (s, it) { return s + (it.count || 0); }, 0);
+  }
+
+  function withMissing(items, missing) {
+    return missing ? items.concat([{ label: 'Missing', count: missing, kind: 'missing' }]) : items;
+  }
+
+  // Generic table: columns = [{ head, cell(row) -> html, num? }]
+  function renderTable(caption, columns, rows) {
+    if (!rows.length) return '';
+    const head = columns.map(function (c) {
+      return '<th' + (c.num ? ' class="count-cell"' : '') + '>' + escapeHtml(c.head) + '</th>';
+    }).join('');
+    const body = rows.map(function (r) {
+      return '<tr>' + columns.map(function (c) {
+        return '<td' + (c.num ? ' class="count-cell"' : '') + '>' + c.cell(r) + '</td>';
+      }).join('') + '</tr>';
+    }).join('');
     return (
       '<div class="table-wrap">' +
       '<table class="report-table">' +
       '<caption>' + escapeHtml(caption) + '</caption>' +
-      '<thead><tr><th>' + escapeHtml(headLabel) + '</th><th class="count-cell">Count</th></tr></thead>' +
-      '<tbody>' + rows + '</tbody>' +
+      '<thead><tr>' + head + '</tr></thead>' +
+      '<tbody>' + body + '</tbody>' +
       '</table>' +
       '</div>'
     );
+  }
+
+  const SHAPE_LABELS = {
+    Polygon: 'Polygon (outline)', MultiPolygon: 'Polygon (multi-part)',
+    LineString: 'Line', MultiLineString: 'Line (multi-part)',
+    Point: 'Point', MultiPoint: 'Point (multi)',
+  };
+
+  function areaUnit(data) {
+    return (data.total_area || {}).unit === 'm^2' ? 'm²' : 'relative units';
+  }
+
+  function fmtNum(v, digits) {
+    if (v == null) return '—';
+    const n = Number(v);
+    // Relative (non-georeferenced) areas are tiny numbers; 2 decimals would
+    // print every one of them as 0.
+    if (n !== 0 && Math.abs(n) < 0.01) return n.toPrecision(3);
+    return n.toLocaleString(undefined, { maximumFractionDigits: digits == null ? 2 : digits });
   }
 
   function statTile(label, value, sub) {
@@ -164,6 +214,7 @@
     lines.push(csvRow(['Metric', 'Value']));
     lines.push(csvRow(['Annotations', data.annotation_count]));
     lines.push(csvRow(['Distinct species', (data.by_species || []).length]));
+    lines.push(csvRow(['Complete (species + condition)', data.complete_count == null ? '' : data.complete_count]));
     lines.push(csvRow(['Total area value', area.value === null || area.value === undefined ? '' : area.value]));
     lines.push(csvRow(['Total area unit', areaUnit]));
     lines.push(csvRow(['Area computable count', area.computable_count || 0]));
@@ -185,9 +236,28 @@
       });
       lines.push('');
     }
-    block('By species', 'Species', data.by_species, function (d) { return d.name || d.spcode; });
-    block('By condition', 'Condition', data.by_condition, function (d) { return d.condition; });
+    // Species with area and size (one row per species)
+    const unit = areaUnit(data);
+    lines.push(csvRow(['By species']));
+    lines.push(csvRow(['Species code', 'Name', 'Count', 'Share of annotations', 'Area (' + unit + ')', 'Mean size (cm)']));
+    (data.by_species || []).forEach(function (d) {
+      lines.push(csvRow([d.spcode, d.name, d.count, pctText(d.count / (data.annotation_count || 1)),
+        d.area == null ? '' : d.area, d.mean_size_cm == null ? '' : d.mean_size_cm]));
+    });
+    lines.push('');
+    block('By condition (con_1)', 'Condition', data.by_condition, function (d) { return d.condition; });
+    block('By condition (any of con_1..con_3)', 'Condition', data.by_condition_any, function (d) { return d.condition; });
+    block('By severity', 'Severity', data.by_severity, function (d) { return d.severity; });
+    block('By morphology', 'Morphology', data.by_morphology, function (d) { return d.morph_code; });
+    block('By size class', 'Size class', data.by_size_class, function (d) { return d.size_class; });
     block('By shape type', 'Shape type', data.by_shape_type, function (d) { return d.shape_type; });
+    block('By annotator', 'Annotator', data.by_annotator, function (d) { return d.annotator; });
+    block('By transect / segment', 'Transect / segment', data.by_transect_segment,
+      function (d) { return d.transect + ' / ' + d.segment; });
+    block('Unrecognized species codes', 'Code', data.by_unrecognized_species, function (d) { return d.spcode; });
+    const flags = data.colony_flags || {};
+    block('Colony flags', 'Flag', Object.keys(flags).map(function (k) { return { flag: k, count: flags[k] }; }),
+      function (d) { return d.flag; });
 
     // Missing fields
     const missing = data.missing_fields || {};
@@ -226,15 +296,12 @@
       title.textContent = '#' + data.project_id + ' — ' + data.project_name;
     }
 
-    const species = (data.by_species || []).map(function (d) {
-      return { label: d.name || d.spcode, count: d.count };
-    });
-    const conditions = (data.by_condition || []).map(function (d) {
-      return { label: d.condition, count: d.count };
-    });
-    const shapes = (data.by_shape_type || []).map(function (d) {
-      return { label: d.shape_type, count: d.count };
-    });
+    const total = data.annotation_count || 0;
+    const missing = data.missing_fields || {};
+    const bySpecies = data.by_species || [];
+    const speciesLabel = function (d) {
+      return d.name && d.name !== d.spcode ? d.spcode + ' — ' + d.name : d.spcode;
+    };
 
     // ── Summary tiles (always shown, even when empty) ──
     const area = formatArea(data.total_area);
@@ -242,43 +309,103 @@
     const summary = $('reportSummary');
     if (summary) {
       summary.innerHTML =
-        statTile('Annotations', data.annotation_count, null) +
-        statTile('Distinct species', species.length, null) +
+        statTile('Annotations', total.toLocaleString(), null) +
+        statTile('Distinct species', bySpecies.length, null) +
+        statTile('Complete', data.complete_count == null || !total ? '—' : pctText(data.complete_count / total),
+          data.complete_count == null ? null : data.complete_count + ' of ' + total + ' have species and condition') +
         statTile('Total area', area.value, area.sub) +
         statTile('Total length', length.value, length.sub);
     }
 
     // ── Empty case: no charts/tables, keep summary + empty message ──
-    if (data.annotation_count === 0) {
+    if (total === 0) {
       const empty = $('reportEmpty');
       if (empty) empty.style.display = 'block';
       $('reportCharts').innerHTML = '';
       $('reportTables').innerHTML = '';
       $('reportMissing').style.display = 'none';
+      $('reportUnrecognized').style.display = 'none';
       return;
     }
 
-    // ── Bar charts ──
+    // ── Bar charts: share of all annotations unless noted ──
+    const species = topWithOther(bySpecies.map(function (d) {
+      return { label: speciesLabel(d), count: d.count };
+    }), 15, 'species');
+    const areaItems = bySpecies.filter(function (d) { return d.area; })
+      .sort(function (a, b) { return b.area - a.area; })
+      .map(function (d) { return { label: speciesLabel(d), count: d.area }; });
+    const areaTotal = areaItems.reduce(function (s, it) { return s + it.count; }, 0);
+    const conditionsAny = (data.by_condition_any || []).map(function (d) { return { label: d.condition, count: d.count }; });
+    const severity = (data.by_severity || []).map(function (d) { return { label: 'Severity ' + d.severity, count: d.count }; });
+    const morph = (data.by_morphology || []).map(function (d) { return { label: d.morph_code, count: d.count }; });
+    const sizes = (data.by_size_class || []).map(function (d) { return { label: d.size_class, count: d.count }; });
+    const shapes = (data.by_shape_type || []).map(function (d) {
+      return { label: SHAPE_LABELS[d.shape_type] || d.shape_type, count: d.count };
+    });
+    const annotators = (data.by_annotator || []).map(function (d) { return { label: d.annotator, count: d.count }; });
+    const flags = data.colony_flags || {};
+    const flagItems = [['juvenile', 'Juvenile'], ['remnant', 'Remnant'], ['no_colony', 'No colony'], ['ex_bound', 'Out of bounds']]
+      .filter(function (f) { return flags[f[0]]; })
+      .map(function (f) { return { label: f[1], count: flags[f[0]] }; });
+
     const charts = $('reportCharts');
     if (charts) {
-      const groups =
-        renderBarGroup('By species', species) +
-        renderBarGroup('By condition', conditions) +
-        renderBarGroup('By shape type', shapes);
+      const groups = [
+        renderBarGroup('Species', withMissing(species, missing.spcode), total),
+        // Area bars are shares of the total mapped area, not of annotations.
+        areaItems.length ? renderAreaGroup(topWithOther(areaItems, 15, 'species'), areaTotal, areaUnit(data)) : '',
+        renderBarGroup('Morphology', withMissing(morph, data.missing_morphology), total),
+        renderBarGroup('Condition (con_1)', withMissing((data.by_condition || []).map(function (d) {
+          return { label: d.condition, count: d.count };
+        }), missing.con_1), total),
+        // Only worth a second chart when con_2/con_3 hold something.
+        sumCounts(data.by_condition_any) > sumCounts(data.by_condition)
+          ? renderBarGroup('Condition (any of con_1–con_3)', conditionsAny, total,
+            'An annotation can have up to three conditions, so these can add up to more than 100%.')
+          : '',
+        renderBarGroup('Severity', severity, severity.reduce(function (s, it) { return s + it.count; }, 0),
+          'Share of all severities recorded (con_1–con_3).'),
+        renderBarGroup('Size class (max diameter)', withMissing(sizes, sizes.length ? data.missing_size : 0), total),
+        renderBarGroup('Shape type', shapes, total),
+        annotators.length > 1 ? renderBarGroup('Annotator', annotators, total) : '',
+        renderBarGroup('Colony flags', flagItems, total, 'Share of annotations with each flag set.'),
+      ].join('');
       charts.innerHTML =
         '<div class="report-section cat-card">' +
         '<h2>Breakdowns</h2>' +
-        (groups || '<p style="font-size:13px;color:var(--cat-ink-soft);">No categorized annotations.</p>') +
+        (groups ? '<div class="chart-grid">' + groups + '</div>'
+          : '<p style="font-size:13px;color:var(--cat-ink-soft);">No categorized annotations.</p>') +
         '</div>';
     }
 
     // ── Tables ──
     const tables = $('reportTables');
     if (tables) {
+      const unit = areaUnit(data);
       const tbls =
-        renderTable('Species', 'Species', species) +
-        renderTable('Condition', 'Condition', conditions) +
-        renderTable('Shape type', 'Shape type', shapes);
+        renderTable('Species detail', [
+          { head: 'Code', cell: function (d) { return escapeHtml(d.spcode); } },
+          { head: 'Name', cell: function (d) { return escapeHtml(d.name && d.name !== d.spcode ? d.name : '—'); } },
+          { head: 'Count', num: true, cell: function (d) { return d.count.toLocaleString(); } },
+          { head: '% of annotations', num: true, cell: function (d) { return pctText(d.count / total); } },
+          { head: 'Area (' + unit + ')', num: true, cell: function (d) { return fmtNum(d.area); } },
+          { head: '% of area', num: true, cell: function (d) { return d.area && areaTotal ? pctText(d.area / areaTotal) : '—'; } },
+          { head: 'Mean size (cm)', num: true, cell: function (d) { return fmtNum(d.mean_size_cm, 1); } },
+        ], bySpecies) +
+        renderTable('Conditions and severity (con_1–con_3)', [
+          { head: 'Condition', cell: function (d) { return escapeHtml(d.condition); } },
+          { head: 'Count', num: true, cell: function (d) { return d.count.toLocaleString(); } },
+          { head: 'Severities recorded', cell: function (d) {
+            return (d.by_severity || []).map(function (s) { return escapeHtml(s.severity) + ': ' + s.count; }).join(' · ') || '—';
+          } },
+        ], data.by_condition_any || []) +
+        renderTable('Transect / segment', [
+          { head: 'Transect', cell: function (d) { return escapeHtml(d.transect); } },
+          { head: 'Segment', cell: function (d) { return escapeHtml(d.segment); } },
+          { head: 'Annotations', num: true, cell: function (d) { return d.count.toLocaleString(); } },
+          { head: '% of annotations', num: true, cell: function (d) { return pctText(d.count / total); } },
+        ], data.by_transect_segment || []);
       tables.innerHTML =
         '<div class="report-section cat-card">' +
         '<h2>Detail tables</h2>' +
@@ -286,8 +413,27 @@
         '</div>';
     }
 
-    // ── Missing-fields note ──
+    // ── Missing-fields and unrecognized-codes notes ──
     renderMissing(data.missing_fields);
+    renderUnrecognized(data.by_unrecognized_species || [], total);
+  }
+
+  function renderAreaGroup(items, areaTotal, unit) {
+    // Area values are measurements, not counts: 2 decimals.
+    return renderBarGroup('Area by species', items, areaTotal,
+      'Share of total outlined area (' + unit + '), polygons only.',
+      function (v) { return fmtNum(v, 2); });
+  }
+
+  function renderUnrecognized(items, total) {
+    const el = $('reportUnrecognized');
+    if (!el) return;
+    if (!items.length) { el.style.display = 'none'; return; }
+    const n = items.reduce(function (s, u) { return s + u.count; }, 0);
+    el.textContent = n + ' annotation' + (n === 1 ? '' : 's') + ' (' + pctText(n / (total || 1)) + ') use species codes that are not in the species list: ' +
+      items.map(function (u) { return u.spcode + ' (' + u.count + ')'; }).join(', ') +
+      '. Likely typos or retired codes — fix them in the annotation table.';
+    el.style.display = 'block';
   }
 
   function load() {

@@ -17,7 +17,7 @@
     let storageBackend = 'oracle';
     let currentDbSessionId = null;
     let autoSaveIntervalId = null;
-    const AUTO_SAVE_INTERVAL_MS = 30000; // 30 seconds
+    const AUTO_SAVE_INTERVAL_MS = 60000; // 60 seconds: fewer, larger batched saves
     let autoSaveInProgress = false;
     
     // ========== Annotation Timer Tracking (File Mode) ==========
@@ -234,6 +234,23 @@
       startTimerIntervals();
     }
     
+    // Start (or resume after a pause) the timer because the user is
+    // annotating. Every way of creating a shape must call this: bulk draw
+    // (v2-bulk.js) and the AI box (annotation-runtime-sam3.js) handle
+    // draw:created themselves and return before the normal handler's timer
+    // code, so drawing in those modes never started the timer.
+    function startTimerForAnnotating() {
+      if (window.catReadOnly) return;
+      if (!timerState.isRunning) {
+        console.log('🎬 First annotation drawn — starting timer');
+        startTimer();
+      } else if (timerState.isPaused) {
+        console.log('▶️ Annotation drawn — resuming timer');
+        startTimer();
+      }
+    }
+    window.startTimerForAnnotating = startTimerForAnnotating;
+
     function startTimerIntervals() {
       // Clear existing intervals
       if (timerState.displayInterval) clearInterval(timerState.displayInterval);

@@ -16,6 +16,7 @@ persistence, nothing to clean up.
 
 import csv
 import io
+import os
 import re
 import time
 from collections import deque
@@ -40,15 +41,46 @@ TRACKED_PREFIXES = (
     ("/bounds", "bounds"),
 )
 
+# Non-raster requests whose latency matters for "saving randomly fails" and
+# "the header is slow" on cloud workstations. Kept in their own ring so a
+# burst of tile requests can't push the saves out of the buffer.
+APP_EXACT = {
+    "/health": "health",
+    "/api/config": "config",
+    "/api/auth/me": "auth-me",
+}
+APP_GROUPS = ("db-write", "db-read", "auth-me", "config", "health")
+
 RING_SIZE = 300
 _ring: deque = deque(maxlen=RING_SIZE)
+_app_ring: deque = deque(maxlen=RING_SIZE)
+
+# Requests currently inside the app (all paths), and the peak since start.
+_in_flight = 0
+_in_flight_peak = 0
 
 
-def group_for_path(path: str):
+def group_for_path(path: str, method: str = "GET"):
     for prefix, label in TRACKED_PREFIXES:
         if path.startswith(prefix):
             return label
+    if path in APP_EXACT:
+        return APP_EXACT[path]
+    if path.startswith("/api/db/"):
+        return "db-read" if method in ("GET", "HEAD") else "db-write"
     return None
+
+
+def request_started() -> None:
+    global _in_flight, _in_flight_peak
+    _in_flight += 1
+    if _in_flight > _in_flight_peak:
+        _in_flight_peak = _in_flight
+
+
+def request_finished() -> None:
+    global _in_flight
+    _in_flight = max(0, _in_flight - 1)
 
 
 def _cog_name(url_param: str) -> str:
@@ -60,8 +92,8 @@ def _cog_name(url_param: str) -> str:
     return name or decoded
 
 
-def record(path: str, query_string: str, duration_ms: float, status_code: int) -> None:
-    group = group_for_path(path)
+def record(path: str, query_string: str, duration_ms: float, status_code: int, method: str = "GET") -> None:
+    group = group_for_path(path, method)
     if group is None:
         return
 
@@ -71,9 +103,10 @@ def record(path: str, query_string: str, duration_ms: float, status_code: int) -
             url_param = part[len("url="):]
             break
 
-    _ring.append({
+    (_app_ring if group in APP_GROUPS else _ring).append({
         "ts": time.time(),
         "group": group,
+        "method": method,
         "path": path,
         "cog": _cog_name(url_param),
         "ms": round(duration_ms, 1),
@@ -99,14 +132,14 @@ def tile_stats() -> Dict[str, Any]:
     Returns entries newest-first so the page's recent-requests table doesn't
     need to reverse anything.
     """
-    entries = list(_ring)
+    entries = sorted(list(_ring) + list(_app_ring), key=lambda e: e["ts"])
 
     by_group: Dict[str, List[float]] = {}
     for e in entries:
         by_group.setdefault(e["group"], []).append(e["ms"])
 
     summary = []
-    for label in dict.fromkeys(label for _, label in TRACKED_PREFIXES):
+    for label in dict.fromkeys([label for _, label in TRACKED_PREFIXES] + list(APP_GROUPS)):
         values = sorted(by_group.get(label, []))
         if not values:
             continue
@@ -119,10 +152,60 @@ def tile_stats() -> Dict[str, Any]:
         })
 
     return {
-        "ring_size": RING_SIZE,
+        "ring_size": RING_SIZE * 2,
         "recorded": len(entries),
         "summary": summary,
         "recent": list(reversed(entries)),
+    }
+
+
+def _running_keepalive() -> str:
+    """The keep-alive uvicorn was actually started with.
+
+    Read from the process command line rather than CAT_KEEPALIVE_S: a
+    container running a new compose file on an old image has the variable
+    set but still starts uvicorn without the flag (its 5s default).
+    """
+    try:
+        with open("/proc/self/cmdline", "rb") as fh:
+            args = fh.read().decode(errors="replace").split("\0")
+    except OSError:
+        return "unknown"
+    if "--timeout-keep-alive" in args:
+        i = args.index("--timeout-keep-alive")
+        if i + 1 < len(args):
+            return args[i + 1]
+    return "5 (uvicorn default - rebuild the image to apply CAT_KEEPALIVE_S)"
+
+
+@router.get("/api/debug/runtime")
+async def runtime_stats() -> Dict[str, Any]:
+    """Point-in-time gauges for "is the server saturated?".
+
+    async on purpose: it must answer even when every worker thread is busy
+    (and the thread limiter can only be read from the event loop).
+    """
+    threads: Dict[str, Any] = {}
+    try:
+        import anyio.to_thread
+        limiter = anyio.to_thread.current_default_thread_limiter()
+        threads = {"in_use": limiter.borrowed_tokens, "limit": limiter.total_tokens}
+    except Exception as exc:  # pragma: no cover - diagnostic only
+        threads = {"error": str(exc)}
+
+    try:
+        from cat.db.oracle import pool_stats
+        db_pool = pool_stats()
+    except Exception as exc:  # pragma: no cover - diagnostic only
+        db_pool = {"error": str(exc)}
+
+    return {
+        "ts": time.time(),
+        "requests_in_flight": _in_flight,
+        "requests_in_flight_peak": _in_flight_peak,
+        "threadpool": threads,
+        "db_pool": db_pool,
+        "keepalive_s": _running_keepalive(),
     }
 
 
@@ -136,12 +219,13 @@ def tile_stats_csv() -> StreamingResponse:
     """
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["timestamp_iso", "epoch", "group", "path", "cog", "status", "ms"])
-    for e in _ring:
+    writer.writerow(["timestamp_iso", "epoch", "group", "method", "path", "cog", "status", "ms"])
+    for e in sorted(list(_ring) + list(_app_ring), key=lambda e: e["ts"]):
         writer.writerow([
             time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(e["ts"])),
             e["ts"],
             e["group"],
+            e.get("method", "GET"),
             e["path"],
             e["cog"],
             e["status"],

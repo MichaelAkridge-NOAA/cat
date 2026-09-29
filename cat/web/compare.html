@@ -31,6 +31,19 @@
     #cmpMap { flex: 1; min-width: 0; }
     #cmpStatus { font-size: 12px; color: var(--cat-ink-soft); min-height: 16px; }
     .cmp-empty { font-size: 12px; color: var(--cat-ink-soft); }
+    .cmp-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; margin: 6px 0; }
+    .cmp-field label { color: var(--cat-ink-soft); }
+    .cmp-field input[type=range] { width: 100%; }
+    .cmp-badge { font-size: 9px; color: #fff; border-radius: 3px; padding: 1px 5px; text-transform: uppercase; flex: none; }
+    #cmpSpecies { max-height: 220px; overflow-y: auto; }
+    /* Same look as the annotation page's labels (annotation-runtime-panel-ui.js). */
+    .cmp-label { background: transparent; border: none; }
+    .cmp-label > div {
+      color: #fff; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: bold;
+      white-space: nowrap; box-shadow: 0 1px 3px rgba(0,0,0,0.3); text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+      transform: translate(-50%, -50%); display: inline-block;
+    }
+    .cmp-label.overlay > div { background: rgba(15, 23, 42, 0.75); font-weight: 600; }
     @media (max-width: 720px) {
       .cmp-shell { flex-direction: column; }
       .cmp-side { width: 100%; max-height: 45vh; border-right: none; border-bottom: 1px solid var(--cat-border); }
@@ -43,7 +56,7 @@
     <aside class="cmp-side">
       <div>
         <h1>Compare projects</h1>
-        <p class="hint">Layer several projects from the same site on one map, coloured by annotator. Read-only — nothing can be changed here.</p>
+        <p class="hint">Layer several projects from the same site on one map, with labels, species and transects/segments. Read-only — nothing can be changed here.</p>
       </div>
 
       <div class="cmp-block">
@@ -61,8 +74,48 @@
       </div>
 
       <div class="cmp-block">
+        <h2>Display</h2>
+        <div class="cmp-field">
+          <label for="cmpColorBy">Color by</label>
+          <select id="cmpColorBy">
+            <option value="annotator">Annotator</option>
+            <option value="species">Species</option>
+            <option value="project">Project</option>
+          </select>
+        </div>
+        <label class="cmp-row"><input type="checkbox" id="cmpShowLabels"> <span class="grow">Show labels</span></label>
+        <div class="cmp-field">
+          <label for="cmpLabelMode">Label text</label>
+          <select id="cmpLabelMode">
+            <option value="species_id">Species + ID</option>
+            <option value="species">Species</option>
+            <option value="annotator">Annotator</option>
+            <option value="id">ID</option>
+          </select>
+        </div>
+        <div class="cmp-field">
+          <label for="cmpLineWidth">Line width <span id="cmpLineWidthValue">4</span></label>
+          <input type="range" id="cmpLineWidth" min="1" max="10" value="4">
+        </div>
+      </div>
+
+      <div class="cmp-block">
         <h2>Annotators</h2>
         <div id="cmpAnnotators" class="cmp-empty">—</div>
+      </div>
+
+      <div class="cmp-block">
+        <h2>Species</h2>
+        <div class="cmp-actions" style="margin-bottom:6px;">
+          <button type="button" class="cat-btn cat-btn--secondary" id="cmpAllSpecies">All</button>
+          <button type="button" class="cat-btn cat-btn--secondary" id="cmpNoSpecies">None</button>
+        </div>
+        <div id="cmpSpecies" class="cmp-empty">—</div>
+      </div>
+
+      <div class="cmp-block">
+        <h2>Transects &amp; segments</h2>
+        <div id="cmpOverlays" class="cmp-empty">—</div>
       </div>
 
       <div class="cmp-block">

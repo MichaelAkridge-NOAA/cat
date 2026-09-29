@@ -98,6 +98,10 @@ services:
       - CAT_MODE=${CAT_MODE:-db}  # 'file' or 'db' (default: db)
       - CAT_HOST=0.0.0.0
       - CAT_PORT=8000
+      # Idle keep-alive (s); must stay above the workstation gateway's ~600s
+      - CAT_KEEPALIVE_S=${CAT_KEEPALIVE_S:-650}
+      # Max seconds to wait for a free DB connection before failing a request
+      - CAT_DB_POOL_WAIT_S=${CAT_DB_POOL_WAIT_S:-15}
 
       # Optional outbound proxy settings
       - HTTP_PROXY=${HTTP_PROXY:-}

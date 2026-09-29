@@ -48,7 +48,7 @@
 
     .qc-table-wrap {
       background: var(--cat-surface); border: 1px solid var(--cat-border); border-radius: var(--cat-radius);
-      overflow: hidden; margin-bottom: var(--cat-space-4);
+      overflow-x: auto; margin-bottom: var(--cat-space-4);
     }
     table.qc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
     table.qc-table th, table.qc-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--cat-border); vertical-align: top; }
@@ -57,18 +57,65 @@
       background: var(--cat-surface-alt);
     }
     table.qc-table tbody tr:last-child td { border-bottom: none; }
-    table.qc-table tbody tr.has-flags { background: rgba(213, 67, 9, 0.04); }
     table.qc-table a { color: var(--cat-primary); text-decoration: none; }
     table.qc-table a:hover { text-decoration: underline; }
 
+    /* Status levels. Colours validated for colour-blind separation
+       (critical vs warning vs note); every level also has an icon + word,
+       and text stays in ink colours — colour is never the only signal. */
+    :root {
+      --qc-critical: #b50909;  /* USWDS red-60v */
+      --qc-warning: #c2850c;   /* USWDS gold-50v (dark enough for 3:1 on white) */
+      --qc-note: #005ea2;      /* = --cat-primary */
+      --qc-ok: #71767a;        /* neutral: nothing to see */
+    }
     .qc-flag {
-      display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
-      background: rgba(213, 67, 9, 0.12); color: var(--cat-error); margin: 2px 4px 2px 0;
-      white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 2px 8px 2px 6px;
+      border-radius: 4px; margin: 2px 4px 2px 0; white-space: nowrap; color: var(--cat-ink);
+      border: 1px solid var(--cat-border); border-left-width: 4px; background: var(--cat-surface);
     }
-    .qc-flag--clean {
-      background: rgba(0,0,0,0.06); color: var(--cat-ink-soft);
+    .qc-flag-icon { font-weight: 700; }
+    .qc-flag--critical { border-left-color: var(--qc-critical); background: rgba(181, 9, 9, 0.06); }
+    .qc-flag--critical .qc-flag-icon { color: var(--qc-critical); }
+    .qc-flag--warning { border-left-color: var(--qc-warning); background: rgba(194, 133, 12, 0.08); }
+    .qc-flag--warning .qc-flag-icon { color: var(--qc-warning); }
+    .qc-flag--note { border-left-color: var(--qc-note); }
+    .qc-flag--note .qc-flag-icon { color: var(--qc-note); }
+    .qc-flag--ok { color: var(--cat-ink-soft); border-left-color: var(--qc-ok); }
+    .qc-flag--ok .qc-flag-icon { color: var(--qc-ok); }
+    .qc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+    .qc-status { white-space: nowrap; font-size: 12px; color: var(--cat-ink); }
+    .qc-status-dot {
+      display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+      border-radius: 50%; color: #fff; font-size: 10px; font-weight: 700; margin-right: 6px; vertical-align: middle;
     }
+    .qc-status-dot--critical { background: var(--qc-critical); }
+    .qc-status-dot--warning { background: var(--qc-warning); }
+    .qc-status-dot--note { background: var(--qc-note); }
+    .qc-status-dot--ok { background: var(--qc-ok); }
+    table.qc-table tbody tr.qc-row--critical td:first-child { box-shadow: inset 4px 0 0 var(--qc-critical); }
+    table.qc-table tbody tr.qc-row--warning td:first-child { box-shadow: inset 4px 0 0 var(--qc-warning); }
+
+    .qc-complete { white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .qc-meter {
+      display: inline-block; width: 72px; height: 6px; border-radius: 3px; background: var(--cat-surface-alt);
+      vertical-align: middle; margin-right: 8px; overflow: hidden;
+    }
+    .qc-meter > span { display: block; height: 100%; background: var(--cat-primary); border-radius: 3px; }
+    .qc-meter-value { font-size: 12px; color: var(--cat-ink); }
+
+    .stat-tile--critical { box-shadow: inset 4px 0 0 var(--qc-critical); }
+    .stat-tile--critical .stat-value .qc-flag-icon { color: var(--qc-critical); }
+    .stat-tile--warning { box-shadow: inset 4px 0 0 var(--qc-warning); }
+    .stat-tile--warning .stat-value .qc-flag-icon { color: var(--qc-warning); }
+    .stat-tile--critical .stat-value, .stat-tile--warning .stat-value { color: var(--cat-ink); }
+
+    .qc-legend {
+      display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center;
+      font-size: 12px; color: var(--cat-ink-soft); margin: -4px 0 var(--cat-space-3);
+    }
+    .qc-legend .qc-status-dot { width: 16px; height: 16px; margin-right: 4px; }
     .qc-count-cell { text-align: right; font-variant-numeric: tabular-nums; }
 
     #qcEmpty, #qcError {
@@ -114,14 +161,22 @@
       <div id="qcSummary"></div>
 
       <h2 class="qc-section-title">Projects</h2>
+      <div class="qc-legend">
+        <span><span class="qc-status-dot qc-status-dot--critical" aria-hidden="true">✖</span>Critical: missing species ≥10%, missing condition ≥25% or unrecognized codes ≥5% of annotations</span>
+        <span><span class="qc-status-dot qc-status-dot--warning" aria-hidden="true">⚠</span>Warning: below those</span>
+        <span><span class="qc-status-dot qc-status-dot--note" aria-hidden="true">ℹ</span>Note: no annotations yet</span>
+        <span><span class="qc-status-dot qc-status-dot--ok" aria-hidden="true">✓</span>OK</span>
+      </div>
       <div class="qc-table-wrap">
         <table class="qc-table">
           <thead>
             <tr>
+              <th>Status</th>
               <th>Project</th>
               <th>Region</th>
               <th>Year</th>
               <th class="qc-count-cell">Annotations</th>
+              <th title="Annotations with both species and condition">Complete</th>
               <th>Flags</th>
             </tr>
           </thead>

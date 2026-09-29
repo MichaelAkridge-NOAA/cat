@@ -1,11 +1,12 @@
 """Oracle-backed project API for CAT."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import logging
 import tempfile
 import zipfile
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -707,6 +708,7 @@ def projects_qc(
             "missing_species": missing_spcode,
             "missing_condition": missing_con1,
             "unrecognized_species_count": unrecognized_total,
+            "complete_count": stats["complete_count"],
             "flags": flags,
         })
 
@@ -1572,6 +1574,139 @@ def update_annotation(
     return {"success": True, "annotation": _normalize_annotation_row(row)}
 
 
+class AnnotationSyncItem(BaseModel):
+    # annotation_id set -> update (same fields/rules as the PUT), else create
+    # (same fields/rules as the POST, including retry-safe client_uuid).
+    annotation_id: Optional[int] = None
+    asset_id: Optional[int] = None
+    feature: Optional[Dict[str, Any]] = None
+    properties: Optional[Dict[str, Any]] = None
+    created_by: Optional[str] = None
+    version: Optional[int] = None
+    client_uuid: Optional[str] = Field(default=None, max_length=64)
+
+
+ANNOTATION_BATCH_MAX = 100
+
+
+class AnnotationBatchSync(BaseModel):
+    items: List[AnnotationSyncItem] = Field(default_factory=list, max_length=ANNOTATION_BATCH_MAX)
+
+
+def _same_content(item: AnnotationSyncItem, current: Dict[str, Any]) -> bool:
+    """True when the stored annotation already holds exactly what was sent."""
+    if item.feature is not None and item.feature != current.get("feature"):
+        return False
+    if item.properties is not None and item.properties != (current.get("properties") or {}):
+        return False
+    return True
+
+
+@router.post("/projects/{project_id}/annotations/batch-sync")
+def batch_sync_annotations(
+    project_id: int,
+    payload: AnnotationBatchSync,
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Create/update many annotations in one request (autosave).
+
+    Every browser->server round trip crosses the internet and the Cloud
+    Workstations gateway, so saving N annotations one request at a time cost
+    N round trips. Each item still goes through create_annotation /
+    update_annotation unchanged (own transaction, version check, soft-delete
+    and empty-properties guards); a failure answers that item only, with the
+    status the single-item route would have returned.
+
+    One addition: an update refused as a version conflict whose stored row
+    already equals what was sent is reported as saved. That is the retry of
+    a save that went through but whose answer was lost on the way back --
+    previously shown as an error or a false "someone else changed it".
+    """
+    _ensure_oracle_mode()
+    _require_project_role(project_id, current_user, "editor")
+
+    results: List[Dict[str, Any]] = []
+    for item in payload.items:
+        try:
+            if item.annotation_id is not None:
+                out = update_annotation(
+                    project_id,
+                    item.annotation_id,
+                    AnnotationUpdate(
+                        feature=item.feature,
+                        properties=item.properties,
+                        created_by=item.created_by,
+                        version=item.version,
+                    ),
+                    current_user=current_user,
+                )
+            else:
+                if item.feature is None:
+                    raise HTTPException(status_code=422, detail="feature is required to create an annotation")
+                out = create_annotation(
+                    project_id,
+                    AnnotationCreate(
+                        asset_id=item.asset_id,
+                        feature=item.feature,
+                        properties=item.properties or {},
+                        created_by=item.created_by,
+                        client_uuid=item.client_uuid,
+                    ),
+                    current_user=current_user,
+                )
+            results.append({"status": 200, "annotation": out["annotation"]})
+        except HTTPException as exc:
+            detail = exc.detail
+            if exc.status_code == 409 and isinstance(detail, dict):
+                current = detail.get("current_annotation")
+                if current and _same_content(item, current):
+                    results.append({"status": 200, "annotation": current, "replayed": True})
+                    continue
+            results.append({"status": exc.status_code, "detail": jsonable_encoder(detail)})
+        except Exception as exc:  # one bad row must not sink the whole batch
+            logger.exception("batch-sync item failed in project %s: %s", project_id, exc)
+            results.append({"status": 500, "detail": "Server error while saving this annotation"})
+    return {"success": True, "results": results}
+
+
+ANNOTATION_BATCH_DELETE_MAX = 500
+
+
+class AnnotationBatchDelete(BaseModel):
+    annotation_ids: List[int] = Field(default_factory=list, max_length=ANNOTATION_BATCH_DELETE_MAX)
+
+
+@router.post("/projects/{project_id}/annotations/batch-delete")
+def batch_delete_annotations(
+    project_id: int,
+    payload: AnnotationBatchDelete,
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Dict[str, Any]:
+    """Soft-delete many annotations in one request (bulk delete / clear all).
+
+    Same reason as batch-sync: one request per annotation cost one internet
+    round trip each on a Cloud Workstation. Each id still goes through
+    delete_annotation (soft delete, version bump, activity log), so every
+    one stays restorable. Per-id status; 404 means it was already gone.
+    """
+    _ensure_oracle_mode()
+    _require_project_role(project_id, current_user, "editor")
+
+    results: List[Dict[str, Any]] = []
+    for annotation_id in payload.annotation_ids:
+        try:
+            delete_annotation(project_id, annotation_id, current_user=current_user)
+            results.append({"annotation_id": annotation_id, "status": 200})
+        except HTTPException as exc:
+            results.append({"annotation_id": annotation_id, "status": exc.status_code,
+                            "detail": jsonable_encoder(exc.detail)})
+        except Exception as exc:  # one bad row must not sink the rest
+            logger.exception("batch-delete of annotation %s in project %s failed: %s", annotation_id, project_id, exc)
+            results.append({"annotation_id": annotation_id, "status": 500,
+                            "detail": "Server error while deleting this annotation"})
+    return {"success": True, "results": results}
+
+
 @router.delete("/projects/{project_id}/annotations/{annotation_id}")
 def delete_annotation(
     project_id: int,
@@ -2216,17 +2351,87 @@ def _chunked_in(ids: List[Any], size: int = 500):
 
 
 def _load_species_lookup() -> Dict[str, Dict[str, Any]]:
-    # {spcode: {"name": taxon_name, "genus": genus}}. The table may be empty;
-    # unknown/absent spcodes fall back to the code as the name.
+    """{SPCODE (upper case): {"name": taxon_name, "genus": genus}}.
+
+    Same source as the annotation form's species list (coral_species
+    _get_species_list): the cat_coral_species table once it has been
+    imported, else the bundled reference CSV. QC used to read only the
+    table, which is empty until someone clicks "Import CSV" -- so on a
+    fresh install every code, even PMEA, was flagged "unrecognized".
+    """
     lookup: Dict[str, Dict[str, Any]] = {}
     try:
         for s in fetch_all("SELECT spcode, taxon_name, genus FROM cat_coral_species"):
-            code = s.get("spcode")
+            code = _norm_code(s.get("spcode"))
             if code:
                 lookup[code] = {"name": s.get("taxon_name"), "genus": s.get("genus")}
     except Exception:
         lookup = {}
+    if not lookup:
+        try:
+            from cat.api.coral_species import load_species_list
+            for s in load_species_list():
+                code = _norm_code(s.get("code"))
+                if code:
+                    lookup[code] = {"name": s.get("taxon_name"), "genus": s.get("genus")}
+        except Exception:
+            lookup = {}
     return lookup
+
+
+# Values annotators type for "not recorded" -- counted as missing, not as a
+# species/condition called "-".
+_PLACEHOLDER_CODES = {"", "-", "--", "UNKNOWN", "NONE", "N/A", "NA", "NULL"}
+
+
+def _norm_code(value: Any) -> Optional[str]:
+    """Trimmed, upper-case code, or None when blank/placeholder, so "pmea",
+    " PMEA" and "PMEA" are one species and "-" is missing."""
+    if value is None:
+        return None
+    text = str(value).strip().upper()
+    return None if text in _PLACEHOLDER_CODES else text
+
+
+def _is_yes(value: Any) -> bool:
+    """CAT's yes/no fields store -1 for yes and 0 for no."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("-1", "yes", "y", "true")
+
+
+def _size_cm(props: Dict[str, Any]) -> Optional[float]:
+    for key in ("size_cm", "SIZE_CM", "diameter", "DIAMETER"):
+        value = props.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            size = float(value)
+        except (TypeError, ValueError):
+            continue
+        if size > 0:
+            return size
+    return None
+
+
+# Colony size classes (cm, maximum diameter), in order.
+_SIZE_CLASSES = [(0, 5, "<5 cm"), (5, 10, "5–9.9 cm"), (10, 20, "10–19.9 cm"), (20, 40, "20–39.9 cm"),
+                 (40, 80, "40–79.9 cm"), (80, 160, "80–159.9 cm"), (160, float("inf"), "≥160 cm")]
+
+
+def _size_class(size: float) -> str:
+    for low, high, label in _SIZE_CLASSES:
+        if low <= size < high:
+            return label
+    return _SIZE_CLASSES[-1][2]
+
+
+def _ordinal_key(value: Any):
+    """Numbers in numeric order, then text: segments 0/5/10/15, severity 1-5."""
+    try:
+        return (0, float(value), "")
+    except (TypeError, ValueError):
+        return (1, 0.0, str(value))
 
 
 def _load_aggregate_inputs(project_ids: List[int]):
@@ -2238,7 +2443,7 @@ def _load_aggregate_inputs(project_ids: List[int]):
     epsgs_by_project: Dict[int, List[Optional[int]]] = {}
     for in_clause, binds in _chunked_in(project_ids):
         rows.extend(fetch_all(
-            "SELECT project_id, feature_geojson, properties_json FROM cat_annotations "
+            "SELECT project_id, created_by, feature_geojson, properties_json FROM cat_annotations "
             f"WHERE project_id IN ({in_clause}) AND deleted_at IS NULL",
             binds,
         ))
@@ -2314,6 +2519,19 @@ def _aggregate_rows(rows: List[Dict[str, Any]], species_lookup: Dict[str, Dict[s
     # SAM3 "max diameter" line saved alongside its source polygon) -- excluded
     # from species/condition/shape/annotation counts so a "save both" SAM3 run
     # doesn't silently double colony counts, but still measured (total_length).
+    complete_count = 0              # has both species and condition (con_1)
+    species_area: Dict[str, float] = {}
+    species_sizes: Dict[str, List[float]] = {}
+    morph_counts: Dict[str, int] = {}
+    missing_morph = 0
+    condition_any_counts: Dict[str, int] = {}          # con_1..con_3 together
+    condition_severity: Dict[str, Dict[str, int]] = {}  # condition -> severity -> n
+    severity_counts: Dict[str, int] = {}
+    size_class_counts: Dict[str, int] = {}
+    missing_size = 0
+    transect_segment_counts: Dict[tuple, int] = {}
+    annotator_counts: Dict[str, int] = {}
+    colony_flags = {"juvenile": 0, "remnant": 0, "no_colony": 0, "ex_bound": 0}
 
     for row in rows:
         try:
@@ -2330,19 +2548,60 @@ def _aggregate_rows(rows: List[Dict[str, Any]], species_lookup: Dict[str, Dict[s
             gtype = geom.get("type") if isinstance(geom, dict) else None
 
             if not is_derived:
-                spcode = props.get("spcode")
-                if spcode is None or (isinstance(spcode, str) and not spcode.strip()):
+                spcode = _norm_code(props.get("spcode"))
+                if spcode is None:
                     missing_spcode += 1
                 else:
                     species_counts[spcode] = species_counts.get(spcode, 0) + 1
                     if spcode not in species_lookup:
                         unrecognized_species_counts[spcode] = unrecognized_species_counts.get(spcode, 0) + 1
 
-                con1 = props.get("con_1")
-                if con1 is None or (isinstance(con1, str) and not con1.strip()):
+                con1 = _norm_code(props.get("con_1"))
+                if con1 is None:
                     missing_con1 += 1
                 else:
                     condition_counts[con1] = condition_counts.get(con1, 0) + 1
+                if spcode is not None and con1 is not None:
+                    complete_count += 1
+
+                # Conditions in any slot, each with its own severity.
+                for slot in ("1", "2", "3"):
+                    con = _norm_code(props.get("con_" + slot))
+                    if con is None:
+                        continue
+                    condition_any_counts[con] = condition_any_counts.get(con, 0) + 1
+                    sev = _norm_code(props.get("sev_" + slot))
+                    if sev is not None:
+                        severity_counts[sev] = severity_counts.get(sev, 0) + 1
+                        by_sev = condition_severity.setdefault(con, {})
+                        by_sev[sev] = by_sev.get(sev, 0) + 1
+
+                morph = _norm_code(props.get("morph_code"))
+                if morph is None:
+                    missing_morph += 1
+                else:
+                    morph_counts[morph] = morph_counts.get(morph, 0) + 1
+
+                size = _size_cm(props)
+                if size is None:
+                    missing_size += 1
+                else:
+                    size_class_counts[_size_class(size)] = size_class_counts.get(_size_class(size), 0) + 1
+                    if spcode is not None:
+                        species_sizes.setdefault(spcode, []).append(size)
+
+                transect = str(props.get("transect") or "").strip()
+                segment = str(props.get("segment") or "").strip()
+                if transect or segment:
+                    key = (transect or "—", segment or "—")
+                    transect_segment_counts[key] = transect_segment_counts.get(key, 0) + 1
+
+                who = str(row.get("created_by") or props.get("analyst") or "").strip() or "Unknown"
+                annotator_counts[who] = annotator_counts.get(who, 0) + 1
+
+                for flag in colony_flags:
+                    if _is_yes(props.get(flag)):
+                        colony_flags[flag] += 1
 
                 if gtype:
                     shape_counts[gtype] = shape_counts.get(gtype, 0) + 1
@@ -2355,6 +2614,8 @@ def _aggregate_rows(rows: List[Dict[str, Any]], species_lookup: Dict[str, Dict[s
                     else:
                         total_area_value += area
                         area_computable += 1
+                        if spcode is not None:
+                            species_area[spcode] = species_area.get(spcode, 0.0) + area
 
             if gtype in ("LineString", "MultiLineString"):
                 coords = geom.get("coordinates") if isinstance(geom, dict) else None
@@ -2374,6 +2635,9 @@ def _aggregate_rows(rows: List[Dict[str, Any]], species_lookup: Dict[str, Dict[s
             "spcode": code,
             "name": (species_lookup.get(code) or {}).get("name") or code,
             "count": cnt,
+            "area": round(species_area[code], 6) if code in species_area else None,
+            "mean_size_cm": (round(sum(species_sizes[code]) / len(species_sizes[code]), 1)
+                             if species_sizes.get(code) else None),
         }
         for code, cnt in species_counts.items()
     ]
@@ -2412,6 +2676,36 @@ def _aggregate_rows(rows: List[Dict[str, Any]], species_lookup: Dict[str, Dict[s
             "missing_count": length_missing,
         },
         "missing_fields": {"spcode": missing_spcode, "con_1": missing_con1},
+        "complete_count": complete_count,
+        "by_morphology": sorted(
+            ({"morph_code": k, "count": c} for k, c in morph_counts.items()),
+            key=lambda d: (-d["count"], d["morph_code"]),
+        ),
+        "missing_morphology": missing_morph,
+        # Every condition recorded in con_1..con_3 (an annotation can have up
+        # to three), with how often each severity was given for it.
+        "by_condition_any": sorted(
+            ({"condition": k, "count": c,
+              "by_severity": [{"severity": s, "count": n}
+                              for s, n in sorted(condition_severity.get(k, {}).items(), key=lambda i: _ordinal_key(i[0]))]}
+             for k, c in condition_any_counts.items()),
+            key=lambda d: (-d["count"], d["condition"]),
+        ),
+        "by_severity": [{"severity": s, "count": c}
+                        for s, c in sorted(severity_counts.items(), key=lambda i: _ordinal_key(i[0]))],
+        "by_size_class": [{"size_class": label, "count": size_class_counts[label]}
+                          for _low, _high, label in _SIZE_CLASSES if label in size_class_counts],
+        "missing_size": missing_size,
+        "by_transect_segment": [
+            {"transect": t, "segment": s, "count": c}
+            for (t, s), c in sorted(transect_segment_counts.items(),
+                                    key=lambda i: (_ordinal_key(i[0][0]), _ordinal_key(i[0][1])))
+        ],
+        "by_annotator": sorted(
+            ({"annotator": k, "count": c} for k, c in annotator_counts.items()),
+            key=lambda d: (-d["count"], d["annotator"]),
+        ),
+        "colony_flags": colony_flags,
     }
 
 
@@ -2640,6 +2934,224 @@ def export_projects_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ArcGIS feature classes hold ONE geometry type, so a GIS-file export splits
+# annotations into one layer per geometry family.
+_GIS_LAYER_BY_GEOM = {
+    "Polygon": "cat_polygons", "MultiPolygon": "cat_polygons",
+    "LineString": "cat_lines", "MultiLineString": "cat_lines",
+    "Point": "cat_points", "MultiPoint": "cat_points",
+}
+# Names a File Geodatabase reserves or manages itself.
+_GIS_RESERVED_FIELDS = {"objectid", "shape", "shape_length", "shape_area", "fid", "geometry"}
+_GIS_BASE_FIELDS = (
+    "annotation_id", "project_id", "project_name", "project_region", "project_year",
+    "created_by", "created_at", "updated_at", "version", "taxon_name",
+)
+
+
+def _gis_field_name(key: str, taken: set) -> str:
+    """A name valid in a File Geodatabase / GeoPackage and unique ignoring
+    case (FileGDB field names are case-insensitive: "SPCODE" and "spcode"
+    in the free-form properties would otherwise collide)."""
+    name = re.sub(r"[^A-Za-z0-9_]", "_", str(key)).strip("_") or "field"
+    if name[0].isdigit():
+        name = "f_" + name
+    if name.lower() in _GIS_RESERVED_FIELDS:
+        name = "attr_" + name
+    name = name[:60]
+    candidate, n = name, 2
+    while candidate.lower() in taken:
+        candidate = f"{name[:56]}_{n}"
+        n += 1
+    taken.add(candidate.lower())
+    return candidate
+
+
+def _gis_value(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, default=_numpy_safe_json)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, datetime):
+        # Stored in UTC without a zone; say so in the exported text.
+        return value.isoformat() + ("Z" if value.tzinfo is None else "")
+    return value
+
+
+def _build_gis_layers(project_by_id, annotations, species_lookup):
+    """{layer name: GeoDataFrame} (EPSG:4326) plus a skipped-geometry count."""
+    import numbers
+
+    import geopandas as gpd
+    import pandas as pd
+    from shapely.geometry import shape, MultiPolygon, MultiLineString, MultiPoint
+
+    promote = {"Polygon": MultiPolygon, "LineString": MultiLineString, "Point": None}
+    rows_by_layer: Dict[str, List[Dict[str, Any]]] = {}
+    geoms_by_layer: Dict[str, List[Any]] = {}
+    skipped = 0
+    for ann in annotations:
+        geometry = ann.get("geometry")
+        layer = _GIS_LAYER_BY_GEOM.get((geometry or {}).get("type")) if isinstance(geometry, dict) else None
+        if not layer:
+            skipped += 1
+            continue
+        try:
+            geom = shape(geometry)
+        except Exception:
+            skipped += 1
+            continue
+        # One consistent type per layer (Polygon + MultiPolygon -> Multi*).
+        multi = promote.get(geom.geom_type)
+        if multi is not None:
+            geom = multi([geom])
+        props = ann.get("properties") or {}
+        proj = project_by_id.get(ann.get("project_id")) or {}
+        spcode = props.get("spcode")
+        row = {
+            "annotation_id": ann.get("annotation_id"),
+            "project_id": ann.get("project_id"),
+            "project_name": proj.get("name"),
+            "project_region": proj.get("region"),
+            "project_year": proj.get("year"),
+            "created_by": ann.get("created_by"),
+            "created_at": _gis_value(ann.get("created_at")),
+            "updated_at": _gis_value(ann.get("updated_at")),
+            "version": ann.get("version"),
+            "taxon_name": species_lookup.get(spcode) if spcode else None,
+        }
+        for key, value in props.items():
+            if key in row or key == "geometry":
+                continue  # server fields win over same-named stored ones
+            row[key] = _gis_value(value)
+        rows_by_layer.setdefault(layer, []).append(row)
+        geoms_by_layer.setdefault(layer, []).append(geom)
+
+    layers = {}
+    for layer, rows in rows_by_layer.items():
+        df = pd.DataFrame(rows)
+        taken: set = set()
+        df.columns = [_gis_field_name(c, taken) for c in df.columns]
+        for col in df.columns:
+            values = df[col].dropna()
+            if values.empty:
+                df[col] = df[col].astype(object)
+            elif not all(isinstance(v, numbers.Number) for v in values):
+                # Mixed numbers and text in one property: store as text.
+                df[col] = df[col].map(lambda v: None if v is None or v != v else str(v))
+        _gis_int_columns(df, ("annotation_id", "project_id", "project_year", "version"))
+        layers[layer] = gpd.GeoDataFrame(df, geometry=geoms_by_layer[layer], crs="EPSG:4326")
+    return layers, skipped
+
+
+def _gis_int_columns(df, columns) -> None:
+    """Whole-number columns as 32-bit integers: a File Geodatabase stores
+    int64 as Float64 (2026 -> 2026.0) unless it targets ArcGIS Pro 3.2+.
+    Nullable Int32 keeps a missing year empty instead of 0."""
+    for col in columns:
+        if col in df.columns:
+            try:
+                df[col] = df[col].astype("Int32")
+            except (TypeError, ValueError):
+                pass  # not whole numbers after all; leave as stored
+
+
+def _export_gis_file(ids: List[int], fmt: str) -> Response:
+    import shutil
+
+    import pandas as pd
+    import pyogrio
+    from fastapi.responses import FileResponse
+    from starlette.background import BackgroundTask
+
+    project_by_id, annotations = _fetch_export_annotations(ids)
+    layers, skipped = _build_gis_layers(project_by_id, annotations, _species_taxon_lookup())
+    if not layers:
+        raise HTTPException(status_code=404, detail="No annotations with geometry match this selection")
+
+    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    base = f"cat_export_{stamp}"
+    tmp = tempfile.mkdtemp(prefix="cat_export_")
+    try:
+        counts: Dict[Any, int] = {}
+        for ann in annotations:
+            counts[ann.get("project_id")] = counts.get(ann.get("project_id"), 0) + 1
+        projects_table = pd.DataFrame([
+            {"project_id": int(pid), "project_name": p.get("name"), "project_region": p.get("region"),
+             "project_year": p.get("year"), "annotation_count": counts.get(pid, 0)}
+            for pid, p in sorted(project_by_id.items())
+        ])
+        _gis_int_columns(projects_table, ("project_id", "project_year", "annotation_count"))
+
+        driver = "OpenFileGDB" if fmt == "gdb" else "GPKG"
+        path = os.path.join(tmp, base + (".gdb" if fmt == "gdb" else ".gpkg"))
+        for name, gdf in layers.items():
+            gdf.to_file(path, layer=name, driver=driver)
+        # Non-spatial lookup table: one row per exported project.
+        pyogrio.write_dataframe(projects_table, path, layer="cat_projects", driver=driver)
+
+        if fmt == "gdb":
+            # A .gdb is a folder: ship it zipped; unzip, then add the .gdb in ArcGIS.
+            out_path = os.path.join(tmp, base + ".gdb.zip")
+            with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for root, _dirs, files in os.walk(path):
+                    for f in files:
+                        full = os.path.join(root, f)
+                        zf.write(full, os.path.relpath(full, tmp))
+            media_type = "application/zip"
+        else:
+            out_path, media_type = path, "application/geopackage+sqlite3"
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+    if skipped:
+        logger.info("GIS export %s: skipped %d annotation(s) without usable geometry", base, skipped)
+    return FileResponse(
+        out_path,
+        media_type=media_type,
+        filename=os.path.basename(out_path),
+        background=BackgroundTask(shutil.rmtree, tmp, ignore_errors=True),
+    )
+
+
+@router.get("/projects/export/gdb")
+def export_projects_gdb(
+    project_ids: Optional[str] = None,
+    region: Optional[str] = None,
+    year: Optional[int] = None,
+    scope: Optional[str] = "all",
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Response:
+    """Esri File Geodatabase (zipped .gdb) across one or more projects (same
+    selection rules as the GeoJSON export). One feature class per geometry
+    type (cat_polygons / cat_lines / cat_points, EPSG:4326) with project and
+    species columns and every stored property as its own field, plus a
+    cat_projects table. Opens directly in ArcGIS Pro and QGIS."""
+    _ensure_oracle_mode()
+    ids = _resolve_export_project_ids(project_ids, region, year, current_user, scope)
+    if not ids:
+        raise HTTPException(status_code=404, detail="No projects match this selection")
+    return _export_gis_file(ids, "gdb")
+
+
+@router.get("/projects/export/gpkg")
+def export_projects_gpkg(
+    project_ids: Optional[str] = None,
+    region: Optional[str] = None,
+    year: Optional[int] = None,
+    scope: Optional[str] = "all",
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Response:
+    """Same content as the File Geodatabase export, as one GeoPackage file
+    (open standard; ArcGIS Pro and QGIS read it directly)."""
+    _ensure_oracle_mode()
+    ids = _resolve_export_project_ids(project_ids, region, year, current_user, scope)
+    if not ids:
+        raise HTTPException(status_code=404, detail="No projects match this selection")
+    return _export_gis_file(ids, "gpkg")
 
 
 @router.post("/projects/{project_id}/overlay-layers")
@@ -4100,6 +4612,28 @@ def _day_of(value: Any) -> Any:
     return value.date() if hasattr(value, "date") else str(value)[:10]
 
 
+def _activity_sessions(project_id: Optional[int], site: Optional[str], days: Optional[int]) -> List[Dict[str, Any]]:
+    """Sessions in scope that recorded time (or are live), newest first."""
+    s_where, s_params = _activity_filters(project_id, site, days, "s", "start_time")
+    sessions = fetch_all(
+        f"""
+        SELECT s.session_id, s.project_id, p.project_name, p.site, s.username,
+               u.user_id, NVL(u.display_name, s.username) AS annotator,
+               s.start_time, s.end_time, NVL(s.total_seconds, 0) AS total_seconds,
+               NVL(s.annotation_count, 0) AS annotation_count, s.is_active, s.last_heartbeat
+        FROM cat_annotation_sessions s
+        JOIN cat_projects p ON p.project_id = s.project_id
+        LEFT JOIN cat_users u ON LOWER(u.username) = LOWER(s.username)
+        WHERE 1=1 {s_where}
+        ORDER BY s.start_time DESC
+        """,
+        s_params,
+    )
+    # Every page load opens a session; ones that never recorded any time
+    # (quick look, reload) would only pad counts and averages.
+    return [s for s in sessions if int(s.get("total_seconds") or 0) > 0 or s.get("is_active") == 1]
+
+
 @router.get("/activity/report")
 def activity_report(
     project_id: Optional[int] = None,
@@ -4116,20 +4650,7 @@ def activity_report(
     _ensure_oracle_mode()
 
     s_where, s_params = _activity_filters(project_id, site, days, "s", "start_time")
-    sessions = fetch_all(
-        f"""
-        SELECT s.session_id, s.project_id, p.project_name, p.site, s.username,
-               u.user_id, NVL(u.display_name, s.username) AS annotator,
-               s.start_time, s.end_time, NVL(s.total_seconds, 0) AS total_seconds,
-               NVL(s.annotation_count, 0) AS annotation_count, s.is_active, s.last_heartbeat
-        FROM cat_annotation_sessions s
-        JOIN cat_projects p ON p.project_id = s.project_id
-        LEFT JOIN cat_users u ON LOWER(u.username) = LOWER(s.username)
-        WHERE 1=1 {s_where}
-        ORDER BY s.start_time DESC
-        """,
-        s_params,
-    )
+    sessions = _activity_sessions(project_id, site, days)
 
     # Who is annotating right now: a live session that reported in the last
     # 10 minutes (the page reports every minute while its timer runs).
@@ -4143,9 +4664,6 @@ def activity_report(
         s_params,
     ) or {}
     active_now = int(now_row.get("n") or 0)
-    # Every page load opens a session; ones that never recorded any time
-    # (quick look, reload) would only pad counts and averages.
-    sessions = [s for s in sessions if int(s.get("total_seconds") or 0) > 0 or s.get("is_active") == 1]
 
     a_where, a_params = _activity_filters(project_id, site, days, "a", "created_at")
     created = fetch_all(
@@ -4317,3 +4835,224 @@ def activity_report(
             for s in sessions[:100]
         ],
     })
+
+
+ACTIVITY_EXPORT_TABLES = ("projects", "annotator_projects", "annotators", "sessions", "daily")
+
+
+def _export_tz(tz: Optional[str], tz_offset_min: Optional[int]):
+    """The viewer's time zone for dates in the CSV (stored times are UTC).
+    A zone name from the browser if the server knows it, else a fixed offset."""
+    from datetime import timedelta, timezone as dt_timezone
+    if tz:
+        try:
+            from zoneinfo import ZoneInfo
+            return ZoneInfo(tz), tz
+        except Exception:
+            pass
+    if tz_offset_min is not None and -14 * 60 <= tz_offset_min <= 14 * 60:
+        sign = "+" if tz_offset_min >= 0 else "-"
+        label = f"UTC{sign}{abs(tz_offset_min) // 60:02d}:{abs(tz_offset_min) % 60:02d}"
+        return dt_timezone(timedelta(minutes=tz_offset_min)), label
+    return dt_timezone.utc, "UTC"
+
+
+@router.get("/activity/export")
+def activity_export(
+    table: str = "projects",
+    project_id: Optional[int] = None,
+    site: Optional[str] = None,
+    days: Optional[int] = None,
+    tz: Optional[str] = None,
+    tz_offset_min: Optional[int] = None,
+    current_user: Dict[str, Any] = Depends(require_auth),
+) -> Response:
+    """Time & Activity as CSV, same filters and numbers as the page.
+
+    table: projects | annotator_projects | annotators | sessions | daily, or
+    "all" for a zip of every table. Times are converted to the viewer's
+    time zone (tz = browser zone name; tz_offset_min as a fallback).
+    """
+    import csv
+    import io
+
+    _ensure_oracle_mode()
+    table = (table or "projects").strip().lower()
+    if table != "all" and table not in ACTIVITY_EXPORT_TABLES:
+        raise HTTPException(status_code=400, detail=f"table must be one of: {', '.join(ACTIVITY_EXPORT_TABLES)}, all")
+    zone, zone_label = _export_tz(tz, tz_offset_min)
+
+    def local(value: Any) -> Optional[datetime]:
+        if not isinstance(value, datetime):
+            if not value:
+                return None
+            try:
+                value = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(zone)
+
+    def ts(value: Any) -> str:
+        v = local(value)
+        return v.strftime("%Y-%m-%d %H:%M") if v else ""
+
+    def hours(seconds: Any) -> str:
+        return f"{(int(seconds or 0)) / 3600:.2f}"
+
+    def hmm(seconds: Any) -> str:
+        s = int(seconds or 0)
+        return f"{s // 3600}:{(s % 3600) // 60:02d}"
+
+    def pace(annotations: int, seconds: int):
+        per_hour = round(annotations / (seconds / 3600), 1) if seconds >= 900 and annotations else ""
+        per_ann = int(seconds / annotations) if annotations and seconds else ""
+        return per_hour, per_ann
+
+    report = activity_report(project_id=project_id, site=site, days=days, current_user=current_user)
+    sessions = _activity_sessions(project_id, site, days)
+
+    # Annotations created, per annotator, project and local day.
+    a_where, a_params = _activity_filters(project_id, site, days, "a", "created_at")
+    created_rows = fetch_all(
+        f"""
+        SELECT a.project_id, p.project_name, p.site, a.created_by_user_id AS user_id,
+               NVL(u.display_name, NVL(u.username, NVL(a.created_by, 'Unknown'))) AS annotator,
+               a.created_at
+        FROM cat_annotations a
+        JOIN cat_projects p ON p.project_id = a.project_id
+        LEFT JOIN cat_users u ON u.user_id = a.created_by_user_id
+        WHERE a.deleted_at IS NULL {a_where}
+        """,
+        a_params,
+    )
+
+    def person_key(user_id: Any, name: Any) -> str:
+        return f"u{user_id}" if user_id is not None else f"n{str(name or 'Unknown').lower()}"
+
+    tables: Dict[str, List[List[Any]]] = {}
+
+    # -- projects ------------------------------------------------------------
+    first_last: Dict[Any, List[Any]] = {}
+    for s in sessions:
+        fl = first_last.setdefault(s["project_id"], [None, None])
+        start, last = s.get("start_time"), s.get("last_heartbeat") or s.get("end_time") or s.get("start_time")
+        if start is not None and (fl[0] is None or start < fl[0]):
+            fl[0] = start
+        if last is not None and (fl[1] is None or last > fl[1]):
+            fl[1] = last
+    rows = [["project_id", "project", "site", "hours", "time_h_mm", "sessions", "annotations",
+             "annotations_per_hour", "seconds_per_annotation", "annotators", "annotator_names",
+             f"first_session ({zone_label})", f"last_activity ({zone_label})"]]
+    for p in report["projects"]:
+        secs, n = int(p["total_seconds"] or 0), int(p["annotations"] or 0)
+        per_hour, per_ann = pace(n, secs)
+        fl = first_last.get(p["project_id"], [None, None])
+        rows.append([p["project_id"], p["project_name"], p["site"] or "", hours(secs), hmm(secs), p["sessions"], n,
+                     per_hour, per_ann, len(p["annotators"]), "; ".join(p["annotators"]), ts(fl[0]), ts(fl[1])])
+    tables["projects"] = rows
+
+    # -- annotator x project ---------------------------------------------------
+    ap: Dict[tuple, Dict[str, Any]] = {}
+
+    def ap_row(user_id, name, pid, pname, psite):
+        key = (person_key(user_id, name), pid)
+        return ap.setdefault(key, {"annotator": name or "Unknown", "project_id": pid, "project": pname,
+                                   "site": psite or "", "seconds": 0, "sessions": 0, "annotations": 0,
+                                   "first": None, "last": None})
+
+    for s in sessions:
+        r = ap_row(s["user_id"], s["annotator"], s["project_id"], s["project_name"], s["site"])
+        secs = int(s["total_seconds"] or 0)
+        r["seconds"] += secs
+        r["sessions"] += 1 if secs > 0 else 0
+        for t in (s.get("start_time"), s.get("last_heartbeat")):
+            if t is not None:
+                r["first"] = t if r["first"] is None or t < r["first"] else r["first"]
+                r["last"] = t if r["last"] is None or t > r["last"] else r["last"]
+    for c in created_rows:
+        r = ap_row(c["user_id"], c["annotator"], c["project_id"], c["project_name"], c["site"])
+        r["annotations"] += 1
+        t = c.get("created_at")
+        if t is not None:
+            r["first"] = t if r["first"] is None or t < r["first"] else r["first"]
+            r["last"] = t if r["last"] is None or t > r["last"] else r["last"]
+    rows = [["annotator", "project_id", "project", "site", "hours", "time_h_mm", "sessions", "annotations",
+             "annotations_per_hour", "seconds_per_annotation", f"first_activity ({zone_label})", f"last_activity ({zone_label})"]]
+    for r in sorted(ap.values(), key=lambda r: (str(r["annotator"]).lower(), -r["seconds"])):
+        per_hour, per_ann = pace(r["annotations"], r["seconds"])
+        rows.append([r["annotator"], r["project_id"], r["project"], r["site"], hours(r["seconds"]), hmm(r["seconds"]),
+                     r["sessions"], r["annotations"], per_hour, per_ann, ts(r["first"]), ts(r["last"])])
+    tables["annotator_projects"] = rows
+
+    # -- annotators ------------------------------------------------------------
+    rows = [["annotator", "hours", "time_h_mm", "sessions", "avg_session_h_mm", "longest_session_h_mm",
+             "annotations", "annotations_per_hour", "seconds_per_annotation", "species", "days_active",
+             "projects", f"last_active ({zone_label})"]]
+    for a in report["annotators"]:
+        rows.append([a["annotator"], hours(a["total_seconds"]), hmm(a["total_seconds"]), a["sessions"],
+                     hmm(a["avg_session_seconds"]), hmm(a["longest_session_seconds"]), a["annotations"],
+                     a["annotations_per_hour"] if a["annotations_per_hour"] is not None else "",
+                     a["seconds_per_annotation"] if a["seconds_per_annotation"] is not None else "",
+                     a["species"] if a["species"] is not None else "", a["days_active"], a["projects"],
+                     ts(a["last_active"])])
+    tables["annotators"] = rows
+
+    # -- sessions (all of them, not just the page's 100 most recent) ----------
+    rows = [["session_id", f"start ({zone_label})", f"end ({zone_label})", f"last_heartbeat ({zone_label})",
+             "annotator", "project_id", "project", "site", "active_minutes", "time_h_mm", "annotations", "live"]]
+    for s in sessions:
+        secs = int(s["total_seconds"] or 0)
+        rows.append([s["session_id"], ts(s.get("start_time")), ts(s.get("end_time")), ts(s.get("last_heartbeat")),
+                     s["annotator"], s["project_id"], s["project_name"], s["site"] or "",
+                     f"{secs / 60:.1f}", hmm(secs), int(s["annotation_count"] or 0),
+                     "yes" if s.get("is_active") == 1 else ""])
+    tables["sessions"] = rows
+
+    # -- daily (local day of the session start / annotation) -------------------
+    daily: Dict[tuple, Dict[str, Any]] = {}
+
+    def day_row(day, user_id, name, pid, pname):
+        key = (day, person_key(user_id, name), pid)
+        return daily.setdefault(key, {"day": day, "annotator": name or "Unknown", "project_id": pid,
+                                      "project": pname, "seconds": 0, "sessions": 0, "annotations": 0})
+
+    for s in sessions:
+        start = local(s.get("start_time"))
+        if start is None:
+            continue
+        r = day_row(start.date().isoformat(), s["user_id"], s["annotator"], s["project_id"], s["project_name"])
+        r["seconds"] += int(s["total_seconds"] or 0)
+        r["sessions"] += 1
+    for c in created_rows:
+        t = local(c.get("created_at"))
+        if t is None:
+            continue
+        day_row(t.date().isoformat(), c["user_id"], c["annotator"], c["project_id"], c["project_name"])["annotations"] += 1
+    rows = [[f"date ({zone_label})", "annotator", "project_id", "project", "hours", "time_h_mm", "sessions", "annotations"]]
+    for r in sorted(daily.values(), key=lambda r: (r["day"], str(r["annotator"]).lower(), str(r["project"]))):
+        rows.append([r["day"], r["annotator"], r["project_id"], r["project"], hours(r["seconds"]), hmm(r["seconds"]),
+                     r["sessions"], r["annotations"]])
+    tables["daily"] = rows
+
+    def to_csv(rows: List[List[Any]]) -> bytes:
+        buf = io.StringIO()
+        csv.writer(buf).writerows(rows)
+        return ("﻿" + buf.getvalue()).encode("utf-8")  # BOM: Excel opens UTF-8 names correctly
+
+    scope = "_".join(filter(None, [
+        f"project{project_id}" if project_id else "",
+        re.sub(r"[^A-Za-z0-9_-]", "", site or "") if site else "",
+        f"last{days}d" if days else "alltime",
+    ]))
+    stamp = datetime.now(zone).strftime("%Y%m%d_%H%M")
+    if table == "all":
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name in ACTIVITY_EXPORT_TABLES:
+                zf.writestr(f"cat_activity_{name}_{scope}_{stamp}.csv", to_csv(tables[name]))
+        return Response(content=buf.getvalue(), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="cat_activity_{scope}_{stamp}.zip"'})
+    return Response(content=to_csv(tables[table]), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="cat_activity_{table}_{scope}_{stamp}.csv"'})

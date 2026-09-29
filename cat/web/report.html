@@ -117,12 +117,22 @@
       margin-bottom: var(--cat-space-2);
       color: var(--cat-ink);
     }
+    .chart-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+      gap: var(--cat-space-4) var(--cat-space-5);
+    }
+    .chart-grid .chart-group { margin-bottom: 0; }
+    .chart-note { font-size: 12px; color: var(--cat-ink-soft); margin: -4px 0 8px; }
+    /* One series per chart, so one hue (primary). Bars are a share of the
+       group's total (label shows count · %); thin bars, 4px rounded data
+       end, recessive track. */
     .bar-row {
       display: grid;
-      grid-template-columns: 180px 1fr 48px;
+      grid-template-columns: minmax(120px, 38%) 1fr 104px;
       align-items: center;
       gap: var(--cat-space-2);
-      margin-bottom: 6px;
+      padding: 3px 0;
       font-size: 13px;
     }
     .bar-row .bar-label {
@@ -133,21 +143,41 @@
     }
     .bar-track {
       background: var(--cat-surface-alt);
-      border-radius: var(--cat-radius);
-      overflow: hidden;
-      height: 18px;
+      border-radius: 0 4px 4px 0;
+      height: 10px;
     }
     .bar-fill {
+      display: block;
       background: var(--cat-primary);
       height: 100%;
-      border-radius: var(--cat-radius);
+      border-radius: 0 4px 4px 0;
       min-width: 2px;
     }
     .bar-row .bar-count {
       text-align: right;
       font-variant-numeric: tabular-nums;
-      color: var(--cat-ink-soft);
+      color: var(--cat-ink);
       font-weight: 600;
+      white-space: nowrap;
+    }
+    .bar-row .bar-pct { color: var(--cat-ink-soft); font-weight: 400; }
+    .bar-row:hover .bar-label { text-decoration: underline; }
+    /* "Missing" is not a category: neutral, hatched. "Other" is folded. */
+    .bar-row--missing .bar-label, .bar-row--other .bar-label { color: var(--cat-ink-soft); font-style: italic; }
+    .bar-row--missing .bar-fill {
+      background: repeating-linear-gradient(135deg, #a9aeb1 0 3px, #dfe1e2 3px 6px);
+    }
+    .bar-row--other .bar-fill { background: #73b3e7; }
+
+    #reportUnrecognized {
+      font-size: 13px;
+      color: var(--cat-ink);
+      background: var(--cat-surface);
+      border: 1px solid var(--cat-border);
+      border-left: 4px solid #c2850c;
+      border-radius: var(--cat-radius);
+      padding: var(--cat-space-3);
+      margin-bottom: var(--cat-space-4);
     }
 
     .report-table {
@@ -227,6 +257,7 @@
         border: 1px solid #ccc !important;
       }
       .bar-fill { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .chart-grid { grid-template-columns: 1fr 1fr; }
 
       /* Avoid splitting a breakdown group / table across pages, and never
          leave a section heading orphaned at the bottom of a page. */
@@ -244,7 +275,7 @@
       <div class="brand">
         <span class="acronym">CAT</span>
         <span class="full-name">Project Report</span>
-        <span class="tagline">Annotation summary for a single project.</span>
+        <span class="tagline">Annotation summary for a single project: species, area, morphology, condition, size and data completeness.</span>
       </div>
     </div>
   </div>
@@ -268,6 +299,8 @@
       <div id="reportSummary"></div>
 
       <div id="reportMissing" style="display:none;"></div>
+
+      <div id="reportUnrecognized" style="display:none;"></div>
 
       <div id="reportEmpty" style="display:none;">No annotations yet for this project.</div>
 

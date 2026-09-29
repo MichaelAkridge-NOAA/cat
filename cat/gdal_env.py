@@ -18,6 +18,15 @@ GCS_GDAL_ENV: Dict[str, str] = {
     "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.geotiff",
     "GDAL_HTTP_MULTIPLEX": "YES",
     "GDAL_HTTP_VERSION": "2",
+    # Every tile/thumbnail render holds one of the server's worker threads
+    # while it reads from GCS. Without a timeout a stalled read held its
+    # thread indefinitely -- and saves, login checks and page loads wait for
+    # a free thread from the same pool. Fail the one tile instead (the map
+    # just re-requests it), retrying transient errors briefly first.
+    "GDAL_HTTP_CONNECTTIMEOUT": "10",
+    "GDAL_HTTP_TIMEOUT": "30",
+    "GDAL_HTTP_MAX_RETRY": "2",
+    "GDAL_HTTP_RETRY_DELAY": "1",
 }
 
 

@@ -82,11 +82,14 @@
       }
 
       const failed = [];
+      // One request for the whole selection instead of one per annotation.
+      const dbOutcome = (typeof isOracleProjectMode === 'function' && isOracleProjectMode())
+        ? await deleteAnnotationsFromDb(removed.map(item => item.ann))
+        : new Map();
       for (const item of removed) {
         try {
-          if (typeof isOracleProjectMode === 'function' && isOracleProjectMode()) {
-            await deleteAnnotationFromDb(item.ann);
-          }
+          const dbErr = dbOutcome.get(item.ann);
+          if (dbErr) throw dbErr;
           const ai = annotations.indexOf(item.ann);
           if (ai !== -1) annotations.splice(ai, 1);
           const pa = typeof getProjectAnnotations === 'function' ? getProjectAnnotations() : null;
@@ -1091,21 +1094,20 @@
       
       try {
         if (isOracleProjectMode()) {
-          // Soft-delete exactly the annotations shown here, one by one (each
-          // is restorable). This used to call /bulk-replace with [], which
-          // hard-deleted every row in the project — other users' too — and
-          // then left every layer on the map (it only removed layers with
-          // options.objectId, which project layers never have).
+          // Soft-delete exactly the annotations shown here (each stays
+          // restorable), batched into a few requests. This used to call
+          // /bulk-replace with [], which hard-deleted every row in the
+          // project — other users' too — and then left every layer on the map
+          // (it only removed layers with options.objectId, which project
+          // layers never have).
           const targets = annotations.slice();
           const failed = [];
           let done = 0;
+          const dbOutcome = await deleteAnnotationsFromDb(targets);
           for (const ann of targets) {
-            try {
-              await deleteAnnotationFromDb(ann);
-              done++;
-            } catch (err) {
-              failed.push({ ann, err });
-            }
+            const err = dbOutcome.get(ann);
+            if (err) failed.push({ ann, err });
+            else done++;
           }
           const failedSet = new Set(failed.map(f => f.ann));
           const layersToRemove = [];

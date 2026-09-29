@@ -344,6 +344,13 @@
 
           _drawCount++;
           updateBulkBannerCount();
+
+          // This handler stops the normal one from running, including its
+          // "start the timer on the first drawing" step — do it here too,
+          // and count the shape, or Time & Activity shows 0 annotations for
+          // bulk-mode sessions.
+          if (typeof window.startTimerForAnnotating === 'function') window.startTimerForAnnotating();
+          if (typeof incrementAnnotationCount === 'function') incrementAnnotationCount();
           showUndoToast(`Line #${nextId} added — keep drawing`);
 
         } catch (err) {

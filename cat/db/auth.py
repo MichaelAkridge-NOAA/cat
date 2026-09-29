@@ -17,7 +17,7 @@ helpers — no raw oracledb calls, no ORM.
 
 import json
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Any, Dict, List, Optional
 
@@ -261,7 +261,9 @@ def validate_session(raw_token: str) -> Optional[Dict[str, Any]]:
     # cat/db/oracle.py opens a brand-new connection per execute() call, and
     # this runs on every authenticated request.
     last_seen_at = row.get("last_seen_at")
-    if last_seen_at is None or datetime.now() - last_seen_at > _LAST_SEEN_REFRESH_INTERVAL:
+    if last_seen_at is not None and last_seen_at.tzinfo is None:
+        last_seen_at = last_seen_at.replace(tzinfo=timezone.utc)  # stored in UTC
+    if last_seen_at is None or datetime.now(timezone.utc) - last_seen_at > _LAST_SEEN_REFRESH_INTERVAL:
         execute(
             "UPDATE cat_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE session_id = :session_id",
             {"session_id": row["session_id"]},

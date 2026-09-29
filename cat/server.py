@@ -58,6 +58,11 @@ from cat.api import debug_stats
 # Shared GDAL settings for every COG read (tiles and thumbnails alike)
 from cat.gdal_env import GCS_GDAL_ENV
 
+# The HTTP timeouts also apply to reads outside titiler's Env (CRS check,
+# raster tools), so no GCS read anywhere can hold a worker thread forever.
+for _k in ("GDAL_HTTP_CONNECTTIMEOUT", "GDAL_HTTP_TIMEOUT", "GDAL_HTTP_MAX_RETRY", "GDAL_HTTP_RETRY_DELAY"):
+    os.environ.setdefault(_k, GCS_GDAL_ENV[_k])
+
 # Import Oracle DB project API (optional backend)
 try:
     from cat.api.db_projects import router as db_projects_router
@@ -128,7 +133,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # CAT DB app version — bump this with each release
-CAT_APP_VERSION = "4.4.0"
+CAT_APP_VERSION = "4.5.0"
 
 # Package directory - where this file lives (contains web/, docs/, etc.)
 BASE_DIR = Path(__file__).parent
@@ -322,6 +327,21 @@ async def lifespan(app: FastAPI):
     # ---- shutdown (nothing needed) ----
 
 
+# Timestamps from Oracle are stored without a time zone, in UTC (the
+# database session is pinned to UTC in cat/db/oracle.py). Sent as
+# "2026-09-29T08:10:03" the browser read them as LOCAL time, so e.g. the
+# Activity page's "last active" showed 8:10 AM for 10:10 PM in Hawaii.
+# Mark every zone-less datetime in API responses as UTC ("...Z"); the pages
+# already format with toLocaleString(), which then shows local time.
+import fastapi.encoders as _fastapi_encoders
+
+
+def _utc_isoformat(value: datetime) -> str:
+    return value.isoformat() + "Z" if value.tzinfo is None else value.isoformat()
+
+
+_fastapi_encoders.ENCODERS_BY_TYPE[datetime] = _utc_isoformat
+
 app = FastAPI(title=CONFIG['viewer']['title'], lifespan=lifespan)
 
 # Include coral species routes
@@ -451,20 +471,34 @@ async def no_stale_page_code_middleware(request: Request, call_next):
 # that rewrite, not just the route handler.
 import time as _time
 
+_access_logger = logging.getLogger("cat.access")
+
 @app.middleware("http")
 async def record_tile_timing_middleware(request: Request, call_next):
-    if debug_stats.group_for_path(request.url.path) is None:
-        return await call_next(request)
+    path = request.url.path
+    group = debug_stats.group_for_path(path, request.method)
+    debug_stats.request_started()
     start = _time.perf_counter()
-    response = await call_next(request)
-    duration_ms = (_time.perf_counter() - start) * 1000
-    debug_stats.record(
-        request.url.path,
-        request.url.query,
-        duration_ms,
-        response.status_code,
-    )
-    return response
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        debug_stats.request_finished()
+        duration_ms = (_time.perf_counter() - start) * 1000
+        if group is not None:
+            debug_stats.record(path, request.url.query, duration_ms, status, request.method)
+        # App requests (saves, auth, config, health) get a timed access line
+        # plus the proxy headers, so a save the browser reports as failed can
+        # be matched -- or shown missing -- in `docker logs cat-app`.
+        if group in debug_stats.APP_GROUPS:
+            _access_logger.info(
+                "%s %s -> %s %.0fms xff=%s via=%s",
+                request.method, path, status, duration_ms,
+                request.headers.get("x-forwarded-for", "-"),
+                request.headers.get("via", "-"),
+            )
 
 # Create a TilerFactory for Cloud-Optimized GeoTIFFs
 # Pass GDAL settings via environment_dependency so they are active inside

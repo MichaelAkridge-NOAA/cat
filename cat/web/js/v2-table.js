@@ -1293,16 +1293,14 @@
     if (deleteBtn) deleteBtn.disabled = true;
 
     try {
+      // One request for the whole selection instead of one per annotation.
+      const dbOutcome = isOracle && typeof deleteAnnotationsFromDb === 'function'
+        ? await deleteAnnotationsFromDb(selected.map(item => item.annotation))
+        : new Map();
       for (const item of selected) {
-        const dbId = isOracle && typeof getDbAnnotationId === 'function'
-          ? getDbAnnotationId(item.annotation)
-          : null;
-        try {
-          if (dbId) await deleteAnnotationFromDb(item.annotation);
-          deleted.push(item);
-        } catch (err) {
-          failed.push({ ...item, error: err });
-        }
+        const err = dbOutcome.get(item.annotation);
+        if (err) failed.push({ ...item, error: err });
+        else deleted.push(item);
       }
 
       if (typeof drawnItems !== 'undefined') {

@@ -218,6 +218,9 @@
     // window.catSam3PendingMode is set to "text", "box" or "tiled".
     window.catSam3HandleRectangle = async function(layer) {
       const mode = window.catSam3PendingMode;
+      // Drawing the AI box is annotating too; the normal handler's timer
+      // start never runs for it (that handler returns into here first).
+      if (typeof window.startTimerForAnnotating === 'function') window.startTimerForAnnotating();
       try {
         const bounds = layer.getBounds();
         const bbox = {

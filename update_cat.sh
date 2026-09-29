@@ -12,8 +12,8 @@
 #   ./update_cat.sh --no-backup       # Skip the pre-update database dump (not recommended)
 #   ./update_cat.sh --branch=dev      # Override the target git branch
 # =============================================================================
-SCRIPT_VERSION="17.0.0"
-CAT_BRANCH="cat_db_v17"
+SCRIPT_VERSION="18.0.0"
+CAT_BRANCH="cat_db_v18"
 CAT_REPO_URL="https://github.com/MichaelAkridge-NOAA/cat.git"
 
 # ── Parse flags ──────────────────────────────────────────────────────────────

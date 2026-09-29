@@ -274,52 +274,65 @@
       const dotPrj = document.getElementById('dotProjects');
       const lblPrj = document.getElementById('lblProjects');
 
-      // 1. App health
-      try {
-        const r = await fetch('/health');
-        if (r.ok) { dotApp.className = 'status-dot ok'; lblApp.textContent = 'App healthy'; }
-        else      { dotApp.className = 'status-dot err'; lblApp.textContent = 'App error'; }
-      } catch(e) { dotApp.className = 'status-dot err'; lblApp.textContent = 'App unreachable'; }
+      // The four checks are independent, so they run at the same time: on a
+      // Cloud Workstation each request is a full internet round trip, and
+      // running them one after another made the page wait for all four.
+      const checkHealth = async () => {
+        try {
+          const r = await fetch('/health');
+          if (r.ok) { dotApp.className = 'status-dot ok'; lblApp.textContent = 'App healthy'; }
+          else      { dotApp.className = 'status-dot err'; lblApp.textContent = 'App error'; }
+        } catch(e) { dotApp.className = 'status-dot err'; lblApp.textContent = 'App unreachable'; }
+      };
 
-      // 2. Backend config + DB status
-      try {
-        const r = await fetch('/api/config');
-        const cfg = await r.json();
-        if (cfg.storage_backend === 'oracle' && cfg.db_api_available) {
-          dotDb.className = 'status-dot ok';
-          lblDb.textContent = 'Oracle DB connected';
-        } else if (cfg.db_api_available) {
-          dotDb.className = 'status-dot warn';
-          lblDb.textContent = 'Backend: ' + cfg.storage_backend;
-        } else {
-          dotDb.className = 'status-dot err';
-          lblDb.textContent = 'DB API unavailable';
-        }
-      } catch(e) { dotDb.className = 'status-dot err'; lblDb.textContent = 'Config error'; }
+      // Backend config + DB status (shares the header's /api/config request)
+      const checkConfig = async () => {
+        try {
+          const cfg = (window.CatAuth && window.CatAuth.getConfig)
+            ? await window.CatAuth.getConfig()
+            : await (await fetch('/api/config')).json();
+          if (cfg.storage_backend === 'oracle' && cfg.db_api_available) {
+            dotDb.className = 'status-dot ok';
+            lblDb.textContent = 'Oracle DB connected';
+          } else if (cfg.db_api_available) {
+            dotDb.className = 'status-dot warn';
+            lblDb.textContent = 'Backend: ' + cfg.storage_backend;
+          } else {
+            dotDb.className = 'status-dot err';
+            lblDb.textContent = 'DB API unavailable';
+          }
+        } catch(e) { dotDb.className = 'status-dot err'; lblDb.textContent = 'Config error'; }
+      };
 
-      // 3. Project count
-      try {
-        const r = await fetch('/api/db/projects');
-        if (r.ok) {
-          const data = await r.json();
-          const count = data.projects ? data.projects.length : 0;
-          dotPrj.className = 'status-dot ok';
-          lblPrj.textContent = count + ' project' + (count !== 1 ? 's' : '');
-        } else {
-          dotPrj.className = 'status-dot warn';
-          lblPrj.textContent = 'Projects unavailable';
-        }
-      } catch(e) { dotPrj.className = 'status-dot warn'; lblPrj.textContent = 'Projects unavailable'; }
+      // Project count
+      const checkProjects = async () => {
+        try {
+          const r = await fetch('/api/db/projects');
+          if (r.ok) {
+            const data = await r.json();
+            const count = data.projects ? data.projects.length : 0;
+            dotPrj.className = 'status-dot ok';
+            lblPrj.textContent = count + ' project' + (count !== 1 ? 's' : '');
+          } else {
+            dotPrj.className = 'status-dot warn';
+            lblPrj.textContent = 'Projects unavailable';
+          }
+        } catch(e) { dotPrj.className = 'status-dot warn'; lblPrj.textContent = 'Projects unavailable'; }
+      };
 
-      // 4. Version — shown once, in the footer (reflects the running app
+      // Version — shown once, in the footer (reflects the running app
       // version from /api/version; silently omitted if unreachable)
-      try {
-        const r = await fetch('/api/version');
-        const data = await r.json();
-        document.getElementById('footerVersion').textContent = ' · v' + data.app_version;
-      } catch (e) {
-        document.getElementById('footerVersion').textContent = '';
-      }
+      const checkVersion = async () => {
+        try {
+          const r = await fetch('/api/version');
+          const data = await r.json();
+          document.getElementById('footerVersion').textContent = ' · v' + data.app_version;
+        } catch (e) {
+          document.getElementById('footerVersion').textContent = '';
+        }
+      };
+
+      await Promise.all([checkHealth(), checkConfig(), checkProjects(), checkVersion()]);
     })();
   </script>
 </body>
